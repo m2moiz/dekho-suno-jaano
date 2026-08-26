@@ -74,6 +74,14 @@ parakeet = [
 mac = [
     "dsj[parakeet,whisper,diarize]",
 ]
+# The phone bundle. No diarizer: senko is CoreML and there is no Android path,
+# so transcripts there are unlabelled by design rather than by accident.
+sherpa = [
+    "sherpa-onnx>=1.13.6",
+]
+android = [
+    "dsj[sherpa]",
+]
 
 [dependency-groups]
 dev = [

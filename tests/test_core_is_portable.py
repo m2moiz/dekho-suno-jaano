@@ -24,7 +24,7 @@ PACKAGE = Path(__file__).resolve().parent.parent / "dsj"
 # The leaf modules allowed to import their one backend. diarize.py is an
 # engine in this sense -- senko is its backend -- even though it is not an ASR
 # engine behind dsj.asr.
-ENGINE_MODULES = {"parakeet.py", "whisper.py", "diarize.py"}
+ENGINE_MODULES = {"parakeet.py", "whisper.py", "sherpa.py", "diarize.py"}
 
 # Backend roots, present and future. Listing sherpa_onnx before sherpa.py
 # exists is deliberate: when that engine lands, this test already knows the

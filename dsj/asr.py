@@ -37,8 +37,10 @@ if TYPE_CHECKING:
 # The order is not alphabetical: parakeet is first because it is the default,
 # and it is the default because it is ~10x faster and does not hallucinate over
 # silence. whisper is what you reach for when the language is not in
-# parakeet's 25.
-ENGINES = ("parakeet", "whisper")
+# parakeet's 25. sherpa is the same parakeet weights off Apple Silicon -- it
+# runs the ONNX export where MLX has no wheels, which is what makes the phone
+# possible at all.
+ENGINES = ("parakeet", "whisper", "sherpa")
 
 
 class EngineUnavailable(RuntimeError):
@@ -95,6 +97,7 @@ class EngineSpec(NamedTuple):
 _REGISTRY = {
     "parakeet": EngineSpec("parakeet", "dsj.parakeet", "chunk"),
     "whisper": EngineSpec("whisper", "dsj.whisper", "file"),
+    "sherpa": EngineSpec("sherpa", "dsj.sherpa", "chunk"),
 }
 
 
