@@ -179,6 +179,10 @@ convention = "google"
 # scratch/*.py is tracked code (working probes, not shipped), so ruff lints it.
 # Fix the mechanical ones; ignore the classes that do not matter in a probe.
 "scratch/**" = ["ANN", "D", "ARG", "B905", "E501", "SIM115", "PTH123"]
+# Attribute expressions ARE the whitelist format vulture reads; B018 calls
+# each one a useless expression, which is precisely what they are to Python
+# and precisely not what they are to vulture.
+"vulture_whitelist.py" = ["B018"]
 
 [tool.mutmut]
 # Keys verified against mutmut 3.7.0's own configuration.py, not against a

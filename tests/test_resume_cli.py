@@ -117,7 +117,6 @@ def test_a_mov_resumes_even_though_its_audio_is_a_fresh_temp_wav_each_run(
     chunked_audio_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The failure a wav-only suite cannot see.

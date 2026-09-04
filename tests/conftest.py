@@ -313,7 +313,7 @@ def no_real_diarizer(fake_turns: Callable[..., list[Path]]) -> None:
 
 
 @pytest.fixture(scope="session")
-def chunked_audio_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def chunked_audio_path() -> Path:
     """A real clip long enough to cross several chunk boundaries."""
     if not SOURCE_AUDIO.exists():
         pytest.skip(f"{SOURCE_AUDIO} not present")

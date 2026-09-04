@@ -49,11 +49,15 @@ def available() -> str | None:
     anyway, which is the machine where that import was always going to happen.
     """
     import sys
+    from importlib import import_module
 
     if "sherpa_onnx" in sys.modules:
         return None
     try:
-        import sherpa_onnx  # noqa: F401
+        # import_module rather than an import statement: the module is the
+        # probe's result, not a name this function uses, and both linters
+        # agree once that is said in code instead of a suppression comment.
+        import_module("sherpa_onnx")
     except ImportError as exc:
         return (
             f"sherpa-onnx will not import here: {exc}. Install it with "
@@ -147,7 +151,7 @@ def wrap(recognizer: Any) -> _LoadedSherpa:
 
 def load(model_id: str = DEFAULT_MODEL) -> _LoadedSherpa:
     """Build the recognizer from a model DIRECTORY. The expensive call."""
-    import sherpa_onnx
+    import sherpa_onnx  # pyright: ignore[reportMissingImports]  # no stubs, and absent from the base env
 
     d = Path(model_id).expanduser()
     if not d.is_dir():
