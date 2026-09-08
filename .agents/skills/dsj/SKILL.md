@@ -7,6 +7,13 @@ description: >
   when a `dsj suno`, `dsj dekho` or `dsj dikhao` run needs polling, resuming, or
   reading after it failed. Also when a long recording must be made answerable without
   feeding the whole video to a vision model.
+metadata:
+  version: 0.1.0
+  tier: portable
+  owner: moiz
+  requires_bins: dsj, ffmpeg, jq, uv
+  provenance: written in-repo alongside the CLI it documents, m2moiz/dekho-suno-jaano
+  upstream: m2moiz/dekho-suno-jaano (.agents/skills/dsj)
 ---
 
 # dsj
