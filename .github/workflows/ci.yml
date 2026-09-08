@@ -143,7 +143,7 @@ jobs:
             exit 1
           fi
           passed=$(grep -oE '[0-9]+ passed' /tmp/summary | grep -oE '^[0-9]+')
-          if [ "${passed:-0}" -lt 221 ]; then
-            echo "::error::fast lane is ${passed:-no} passed, floor is 221 -- the suite shrank"
+          if [ "${passed:-0}" -lt 246 ]; then
+            echo "::error::fast lane is ${passed:-no} passed, floor is 246 -- the suite shrank"
             exit 1
           fi
