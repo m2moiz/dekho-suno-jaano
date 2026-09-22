@@ -154,6 +154,53 @@ def _make_chunk_callback(
     return chunk_callback
 
 
+def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
+    """`transcription` with its sentences earliest first, and `text` rebuilt to match.
+
+    Returned untouched when the sentences already run forwards, which is every
+    recording short enough to decode in one piece and every engine that makes
+    one pass over the file.
+
+    The disorder this repairs is made at a chunk seam. The overlap merge splices
+    two independently timed decodes of the same audio and checks no join
+    (dsj/alignment.py:242 and :336), so a word the earlier chunk timed can be
+    emitted after a word the later chunk timed. Measured on scratch/meeting.wav
+    by scratch/seam_probe.py, which captures every chunk the real engine decodes
+    and every list the merge returns: 31 backwards steps in 14,394 merged tokens,
+    reaching the transcript as 3 backwards sentences in 664. Reproduced against
+    the transcripts on disk by scratch/order_probe.py: 8 in 1038, 3 in 664, 4 in
+    480, 0 in every recording under one chunk.
+
+    This is a fix at the symptom, deliberately. The cause is the merge, and
+    tests/test_chunking.py holds that merge to the one dsj vendored from
+    parakeet-mlx, so repairing it there is a divergence from upstream rather
+    than a bug fix. Tightening the merge's own pairing tolerance, which is what
+    lets it splice a full stop onto a different full stop seconds away, does not
+    reach it either: scratch/seam_replay.py over the same capture counts 31
+    backwards steps at the shipped 7.5s, 7 at 1.0s and 2 at 0.1s. So the order
+    is put right here and the mistimed word is left mistimed: a sentence at a
+    seam sorts to where its earliest token claims it began, which is up to
+    5.72s before it was actually said.
+
+    Stable, so sentences sharing a start keep the order the engine gave them.
+
+    Args:
+        transcription: What an engine returned, in the order it returned it.
+        joiner: What `text` glues its sentences with. parakeet and sherpa carry
+            a leading space on every sentence and join with nothing; whisper
+            strips its segments (dsj.whisper._sentences_from) and joins them
+            with a space. Re-joining with the other one would leave `text`
+            disagreeing with the sentences it is made of.
+    """
+    starts = [cast("float", s["start"]) for s in transcription.sentences]
+    if starts == sorted(starts):
+        return transcription
+    ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
+    return Transcription(
+        text=joiner.join(str(s["text"]) for s in ordered).strip(), sentences=ordered
+    )
+
+
 def _with_speaker(sentence: Sentence, speaker: int) -> Sentence:
     """The same sentence with `speaker` inserted directly after `end`.
 
@@ -256,6 +303,7 @@ def transcribe(
     engine: str = "parakeet",
     language: str | None = None,
     prompt: str | None = None,
+    anchor_s: float | None = None,
 ) -> Payload:
     """Transcribe `media`, writing a sentence+token timestamped JSON to `out`.
 
@@ -374,12 +422,31 @@ def transcribe(
             # and a non-resumable one look identical until the run is killed.
             if resume:
                 logger.info("whisper writes no checkpoint; an interrupted run starts over")
-            # One report, at 0%, then nothing until the end. mlx-whisper takes
-            # no progress callback, and a bar that moved without evidence would
-            # be a bar that lies.
             report(Progress(0.0, stream.duration_s, 0.0), "running")
+            whisper_started = time.monotonic()
+
+            # The anchored path cuts the audio itself, so it can say where it
+            # has got to. Unanchored there is still one report at 0% and
+            # nothing until the end: mlx-whisper takes no progress callback,
+            # and a bar that moved without evidence would be a bar that lies.
+            whisper_progress: Callable[[float], None] | None = None
+            if anchor_s is not None and prompt is not None:
+
+                def _whisper_progress(done_s: float) -> None:
+                    report(
+                        Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
+                        "running",
+                    )
+
+                whisper_progress = _whisper_progress
+
             transcription = transcribe_whisper(
-                audio, model_id=model_id, language=language, prompt=prompt
+                audio,
+                model_id=model_id,
+                language=language,
+                prompt=prompt,
+                anchor_s=anchor_s,
+                on_progress=whisper_progress,
             )
         else:
             audio_data = loaded.load_audio(audio)
@@ -454,6 +521,13 @@ def transcribe(
                     for s in result.sentences
                 ],
             )
+
+        # Both engine branches meet here, which is why the ordering runs here
+        # and not in either of them: parakeet and sherpa reach it through the
+        # chunk loop above, whisper through its own window loop, and both can
+        # emit a sentence that starts before the one printed ahead of it.
+        # `spec.kind` stays the engine test, read once, as it is above.
+        transcription = _in_time_order(transcription, " " if spec.kind == "file" else "")
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is

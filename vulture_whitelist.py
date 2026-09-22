@@ -29,3 +29,14 @@ whitelist.no_real_diarizer  # tests/conftest.py
 # and the parameter names must match upstream's keyword API exactly.
 whitelist.chunk_duration  # tests/test_chunking.py
 whitelist.overlap_duration  # tests/test_chunking.py
+
+# typer registers these by decorator, `@app.command("suno")` and friends, so
+# the only caller is typer's own dispatch. `dsj --help` lists all three, which
+# is the check that they are wired: a genuinely dead command would not appear.
+whitelist.suno  # dsj/cli.py
+whitelist.dekho  # dsj/cli.py
+whitelist.dikhao  # dsj/cli.py
+
+# autouse fixture: pytest instantiates it for every test in the module without
+# any test naming it, so there is no call site here either.
+whitelist.no_real_senko  # tests/test_diarize.py

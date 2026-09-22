@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from conftest import FakeToken
 
+from dsj.alignment import AlignedResult, AlignedSentence, AlignedToken
 from dsj.checkpoint import checkpoint_path_for
 from dsj.diarize import DiarizationUnavailable
 from dsj.merge import Turn
@@ -705,3 +706,134 @@ def test_the_diarizer_is_handed_the_extracted_wav_not_the_source(
 
     assert calls == extracted
     assert calls[0] != fake_media
+
+
+# --- time order ----------------------------------------------------------
+
+
+def _seam_token(start: float, text: str) -> AlignedToken:
+    return AlignedToken(id=1, text=text, start=start, duration=0.08)
+
+
+def _seam_result() -> AlignedResult:
+    """What the overlap merge returns at a chunk seam, in the shape it returns it.
+
+    Copied from the real one rather than invented. At the 2535s seam of a
+    105-minute recording the merge emitted a full stop the earlier chunk had
+    timed at 2534.84 AFTER the words the later chunk timed at 2540, so the
+    sentence that full stop closes reports a start 5.72s before the two
+    sentences printed ahead of it. Captured by scratch/seam_probe.py against
+    scratch/meeting.wav, where the same fault produces 31 backwards steps in
+    14,394 merged tokens.
+
+    AlignedSentence sorts a sentence's own tokens, which is why the stray token
+    lands at the front and sets `start`, and why the tokens WITHIN a sentence
+    are in order here even though the sentences are not.
+    """
+    said = AlignedSentence(
+        text=" Structured SAP.",
+        tokens=[_seam_token(2538.4, " Structured"), _seam_token(2540.4, " SAP.")],
+    )
+    agreed = AlignedSentence(text=" Yeah.", tokens=[_seam_token(2540.56, " Yeah.")])
+    mistimed = AlignedSentence(
+        text=" First name.",
+        tokens=[_seam_token(2540.88, " First name"), _seam_token(2534.84, ".")],
+    )
+    sentences = [said, agreed, mistimed]
+    return AlignedResult(
+        text="".join(s.text for s in sentences), sentences=sentences
+    )
+
+
+def _merge_that_went_backwards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, returning a seam it stitched wrong.
+
+    The loop itself is proved against the real model in tests/test_chunking.py.
+    What is on trial here is what transcribe() does with a result whose
+    sentences do not run forwards, and driving that from real audio would need
+    105 minutes of it plus the weights.
+    """
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return _seam_result()
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def test_sentences_are_written_earliest_first(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The promise the whole index rests on: walk it down and time goes up.
+
+    A reader that stops at the first `start` past its window -- which is the
+    obvious way to answer "what was said between 40:00 and 41:00" -- silently
+    loses every sentence after the first backwards step.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_went_backwards(monkeypatch)
+    out = tmp_path / "out.json"
+
+    payload = transcribe(fake_media, out, diarize=False)
+
+    on_disk = json.loads(out.read_text())
+    assert on_disk == payload
+    starts = [s["start"] for s in on_disk["sentences"]]
+    assert starts == sorted(starts)
+    assert starts == [2534.84, 2538.4, 2540.56]
+    # The order promise reaches the tokens too, and for a different reason:
+    # merge.py bisects a sentence's token list to vote on who spoke it.
+    for sentence in on_disk["sentences"]:
+        times = [t["t"] for t in sentence["tokens"]]
+        assert times == sorted(times)
+
+
+def test_the_text_reads_in_the_order_the_sentences_are_written_in(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reordering one and not the other leaves the file disagreeing with itself.
+
+    `text` is the sentence texts glued together, and parakeet's carry their own
+    leading space, so the glue is the empty string.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_went_backwards(monkeypatch)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
+    assert payload["text"] == "First name. Structured SAP. Yeah."
+
+
+def test_speaker_turns_run_forwards_too(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Labels are applied to the written order, so ordering sentences orders turns.
+
+    Two speakers, split so that the out-of-order sentence belongs to the first
+    of them: left unordered the labels read 1, 1, 0 down the file, which is a
+    speaker taking the floor back before he gave it up.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_went_backwards(monkeypatch)
+    fake_turns(
+        turns=[Turn(2534.0, 2536.0, 0), Turn(2536.0, 2541.0, 1)],
+        labels=["SPEAKER_01", "SPEAKER_02"],
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json")
+
+    assert [s["speaker"] for s in payload["sentences"]] == [0, 1, 1]
+    turns = [(s["speaker"], s["start"]) for s in payload["sentences"]]
+    firsts = [start for i, (spk, start) in enumerate(turns) if i == 0 or turns[i - 1][0] != spk]
+    assert firsts == sorted(firsts)
