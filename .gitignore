@@ -49,3 +49,11 @@ mutants/
 .codegraph
 graphify-out/
 .audit/
+
+# Machine-local server state, not project code. config.yaml at the repo root
+# configures a Dolt server that is LIVE on port 3307 (PID confirmed listening
+# on 2026-09-22), so it must not be deleted -- but a port number is this
+# laptop's setting, not the project's. .beads.gate.lock is a zero-byte lock
+# written by a gate hook and referenced by nothing in this repository.
+/config.yaml
+.beads.gate.lock
