@@ -293,6 +293,16 @@ Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
 }
 ```
 
+**`sentences` runs earliest to latest, and so do the `tokens` inside each one.**
+A reader may walk the list from the top and stop at the first `start` past the
+window it cares about. That is a promise about *order*, not about *accuracy*: a
+recording longer than 120 s is transcribed in overlapping pieces and stitched,
+and the stitch can mistime a word at a seam by a few seconds, so the sentence
+that word belongs to sorts to where its earliest token claims it began. Measured
+on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
+order before the sort, the worst by 5.72 s. Recordings short enough to need no
+stitching were already in order.
+
 Two things about this shape are deliberate:
 
 - **`speaker` is an integer index, not a name.** It costs 1.7% of file size

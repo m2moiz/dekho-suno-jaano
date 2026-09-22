@@ -138,6 +138,12 @@ Re-running `suno` to find out what was said costs minutes and produces the same 
 jq -r '.sentences[] | select(.start >= 400 and .start <= 460) | "\(.start)  \(.text)"' transcript.json
 ```
 
+`.sentences` runs earliest to latest, and so do the `tokens` inside each one, so a reader
+may walk it from the top and stop at the first `start` past its window. The order is
+promised; the times are not exact. A recording over 120 s is transcribed in overlapping
+pieces, and a word at a seam can be mistimed by a few seconds — measured worst case
+5.72 s — which pulls its whole sentence that far earlier in the list.
+
 When a question is visual, find the mark, then pull the frame:
 
 ```bash

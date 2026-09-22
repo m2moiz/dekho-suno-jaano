@@ -234,3 +234,50 @@ def test_a_real_whisper_run_returns_words_with_times(tmp_path: Path) -> None:
     # Monotonic, because a token list out of order silently mislabels speakers:
     # merge.py bisects it.
     assert [t["t"] for t in tokens] == sorted(t["t"] for t in tokens)
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_segments_are_written_earliest_first(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper path can hand back backwards segments too, for its own reason.
+
+    `_anchored` decodes overlapping windows and keeps a segment by its midpoint,
+    so a segment whose midpoint clears the watermark is kept even when it starts
+    before the segment already written above it. Ordering lives in
+    dsj/suno.py:_in_time_order, which both engines pass through, so this is the
+    whisper half of the same promise tests/test_suno.py makes for parakeet.
+
+    The glue differs and that is the point of asserting `text` here: whisper
+    strips its segments, so the transcript joins them with a space where
+    parakeet's join with nothing.
+    """
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            text="Aap kaise hain? Mujhe maloom nahin.",
+            segments=[
+                {
+                    "start": 2.5,
+                    "end": 3.5,
+                    "text": " Aap kaise hain?",
+                    "words": [{"word": " Aap", "start": 2.5, "end": 3.5}],
+                },
+                {
+                    "start": 1.5,
+                    "end": 2.0,
+                    "text": " Mujhe maloom nahin.",
+                    "words": [{"word": " Mujhe", "start": 1.5, "end": 2.0}],
+                },
+            ],
+        ),
+    )
+    out = tmp_path / "out.json"
+
+    payload = transcribe(fake_media, out, engine="whisper", diarize=False)
+
+    on_disk = json.loads(out.read_text())
+    assert on_disk == payload
+    assert [s["start"] for s in on_disk["sentences"]] == [1.5, 2.5]
+    assert on_disk["text"] == " ".join(s["text"] for s in on_disk["sentences"])
+    assert on_disk["text"] == "Mujhe maloom nahin. Aap kaise hain?"

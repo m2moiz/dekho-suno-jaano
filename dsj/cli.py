@@ -126,7 +126,7 @@ def suno(
     from dsj.atomic import atomic_write_text
     from dsj.suno import Progress, clock, render_bar
     from dsj.suno import transcribe as run_transcribe
-    from dsj.whisper import ROMAN_URDU_PROMPT
+    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
 
     _stderr_logger("dsj.suno")
 
@@ -149,10 +149,15 @@ def suno(
     # sugar rather than as a mode so that an explicit --language or --prompt
     # beside it still wins. The prompt it sets is measured, not invented: see
     # dsj/whisper.py.
+    anchor_s = None
     if roman_urdu:
         engine = "whisper" if engine == "parakeet" else engine
         language = language or "ur"
         prompt = prompt or ROMAN_URDU_PROMPT
+        # The bias does not survive an hour on whisper's own window threading,
+        # so the flag that asks for it also pays for keeping it. Measured; see
+        # dsj/whisper.py.
+        anchor_s = ANCHOR_CHUNK_S
 
     # Resolved here, not in transcribe(): this file owns every default in the
     # project, and a default that lives in two places is a default that will
@@ -173,6 +178,7 @@ def suno(
             engine=engine,
             language=language,
             prompt=prompt,
+            anchor_s=anchor_s,
         )
     except Exception as exc:
         # Record and re-raise: a detached watcher polling the heartbeat has no
