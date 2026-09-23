@@ -297,9 +297,9 @@ def test_segments_are_written_earliest_first(
     makes for parakeet. `_anchored`'s own overlap/midpoint dedup is a different
     mechanism and is pinned separately, by the `test_anchored_*` tests below.
 
-    The glue differs and that is the point of asserting `text` here: whisper
-    strips its segments, so the transcript joins them with a space where
-    parakeet's join with nothing.
+    `text` is asserted too, because it is rebuilt from the reordered sentences.
+    Each one's text is its words joined, leading space kept, so the glue is the
+    empty string, as it is for parakeet.
     """
     _stub_mlx_whisper(
         monkeypatch,
@@ -310,13 +310,21 @@ def test_segments_are_written_earliest_first(
                     "start": 2.5,
                     "end": 3.5,
                     "text": " Aap kaise hain?",
-                    "words": [{"word": " Aap", "start": 2.5, "end": 3.5}],
+                    "words": [
+                        {"word": " Aap", "start": 2.5, "end": 2.8},
+                        {"word": " kaise", "start": 2.8, "end": 3.2},
+                        {"word": " hain?", "start": 3.2, "end": 3.5},
+                    ],
                 },
                 {
                     "start": 1.5,
                     "end": 2.0,
                     "text": " Mujhe maloom nahin.",
-                    "words": [{"word": " Mujhe", "start": 1.5, "end": 2.0}],
+                    "words": [
+                        {"word": " Mujhe", "start": 1.5, "end": 1.7},
+                        {"word": " maloom", "start": 1.7, "end": 1.9},
+                        {"word": " nahin.", "start": 1.9, "end": 2.0},
+                    ],
                 },
             ],
         ),
@@ -328,8 +336,29 @@ def test_segments_are_written_earliest_first(
     on_disk = json.loads(out.read_text())
     assert on_disk == payload
     assert [s["start"] for s in on_disk["sentences"]] == [1.5, 2.5]
-    assert on_disk["text"] == " ".join(s["text"] for s in on_disk["sentences"])
+    assert on_disk["text"] == "".join(s["text"] for s in on_disk["sentences"]).strip()
     assert on_disk["text"] == "Mujhe maloom nahin. Aap kaise hain?"
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentences_text_is_its_words_joined(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The leading space included, which whisper's own segment text had stripped.
+
+    Each word keeps its leading space, as parakeet's tokens do, so a stripped
+    `text` was one character short of the words joined in every sentence. A
+    reader mapping a click on the prose back to a word would be off by one.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    first = payload["sentences"][0]
+    assert first["text"] == " Mujhe maloom nahin."
+    for sentence in payload["sentences"]:
+        assert sentence["text"] == "".join(t["w"] for t in sentence["tokens"])
+    assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
 
 
 def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.MonkeyPatch) -> None:

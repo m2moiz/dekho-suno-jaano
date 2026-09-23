@@ -307,6 +307,13 @@ on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
 
+**A sentence's `text` is its `tokens` joined**: every `w` in that time order,
+leading space included, under every engine. The top-level `text` is the
+sentences joined. So a word the stitch mistimed reads out of place in the text
+too, instead of the text reading one order while a click plays another. On the
+same three recordings 32 of 1038, 23 of 664 and 16 of 480 sentences read this
+way, all at seams; most move only punctuation, and about 1 in 100 moves a word.
+
 Two things about this shape are deliberate:
 
 - **`speaker` is an integer index, not a name.** It costs 1.7% of file size

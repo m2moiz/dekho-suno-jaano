@@ -154,7 +154,42 @@ def _make_chunk_callback(
     return chunk_callback
 
 
-def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
+def _text_from_tokens(transcription: Transcription) -> Transcription:
+    """`transcription` with each sentence's `text` rebuilt as its tokens joined.
+
+    dsj writes every sentence twice, as `text` and as `tokens`, and at a chunk
+    seam the two disagreed. The vendored splitter glues `text` in the order the
+    merge emitted the words (dsj/alignment.py:149), then AlignedSentence sorts
+    the tokens by time (:76) and leaves `text` alone. Measured on three real
+    transcripts (#106): 16 of 480, 23 of 664 and 32 of 1038 sentences, every one
+    at a seam and every one the same words in another order. A reader saw one
+    order and a click on a word played the other.
+
+    The tokens win because they carry the times, and time order is what the
+    file promises everywhere else (see _in_time_order). The cost is that about
+    1% of sentences read slightly scrambled at a seam, which is what the
+    alignment says happened there. Done here rather than in alignment.py,
+    which tests/test_chunking.py holds to the upstream copy.
+
+    whisper passes through too. Its segment text was stripped while each word
+    kept its leading space (dsj/whisper.py:_sentences_from), so every whisper
+    sentence was one character short of its words joined; now it is not, and
+    the sentences of every engine glue with nothing. A segment with no words
+    gets an empty `text`, which is also what mlx-whisper leaves in the empty
+    and zero-length segments it clears (mlx_whisper/transcribe.py:506-514).
+
+    The top-level `text` is rebuilt from the sentences to match.
+    """
+    sentences = [
+        s | {"text": "".join(str(t["w"]) for t in s["tokens"])}
+        for s in transcription.sentences
+    ]
+    return Transcription(
+        text="".join(str(s["text"]) for s in sentences).strip(), sentences=sentences
+    )
+
+
+def _in_time_order(transcription: Transcription) -> Transcription:
     """`transcription` with its sentences earliest first, and `text` rebuilt to match.
 
     Returned untouched when the sentences already run forwards, which is every
@@ -184,20 +219,18 @@ def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
 
     Stable, so sentences sharing a start keep the order the engine gave them.
 
+    `text` is re-glued with nothing: after _text_from_tokens every sentence,
+    whatever the engine, carries its own leading space.
+
     Args:
         transcription: What an engine returned, in the order it returned it.
-        joiner: What `text` glues its sentences with. parakeet and sherpa carry
-            a leading space on every sentence and join with nothing; whisper
-            strips its segments (dsj.whisper._sentences_from) and joins them
-            with a space. Re-joining with the other one would leave `text`
-            disagreeing with the sentences it is made of.
     """
     starts = [cast("float", s["start"]) for s in transcription.sentences]
     if starts == sorted(starts):
         return transcription
     ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
     return Transcription(
-        text=joiner.join(str(s["text"]) for s in ordered).strip(), sentences=ordered
+        text="".join(str(s["text"]) for s in ordered).strip(), sentences=ordered
     )
 
 
@@ -548,12 +581,12 @@ def transcribe(
                 ],
             )
 
-        # Both engine branches meet here, which is why the ordering runs here
-        # and not in either of them: parakeet and sherpa reach it through the
-        # chunk loop above, whisper through its own window loop, and both can
-        # emit a sentence that starts before the one printed ahead of it.
-        # `spec.kind` stays the engine test, read once, as it is above.
-        transcription = _in_time_order(transcription, " " if spec.kind == "file" else "")
+        # Both engine branches meet here, which is why the text and the order
+        # are put right here and not in either of them: parakeet and sherpa
+        # reach it through the chunk loop above, whisper through its own window
+        # loop, and both can emit a sentence that starts before the one printed
+        # ahead of it. Text first, so the order is rebuilt from the final text.
+        transcription = _in_time_order(_text_from_tokens(transcription))
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is

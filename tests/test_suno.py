@@ -815,7 +815,56 @@ def test_the_text_reads_in_the_order_the_sentences_are_written_in(
     payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
 
     assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
-    assert payload["text"] == "First name. Structured SAP. Yeah."
+    # The mistimed full stop reads where its time puts it, ahead of the words it
+    # closed: a sentence's text is its tokens joined (#106), and at this seam
+    # the time is wrong by 5.72s. The text shows what the timing says.
+    assert payload["text"] == ". First name Structured SAP. Yeah."
+
+
+def _merge_that_reordered_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, returning one sentence whose words it re-sorted.
+
+    The overlap merge left a full stop timed before the word it follows, and
+    AlignedSentence sorted the tokens by time after its `text` had been glued
+    in arrival order (dsj/alignment.py:76). One sentence, so the sentence order
+    is already right and _in_time_order has nothing to do: the case that made
+    up most of the 16 of 480, 23 of 664 and 32 of 1038 measured on #106.
+    """
+    tokens = [
+        AlignedToken(id=1, text=" hello", start=10.0, duration=0.4),
+        AlignedToken(id=2, text=".", start=9.0, duration=0.1),
+    ]
+    sentence = AlignedSentence(text="".join(t.text for t in tokens), tokens=tokens)
+    assert sentence.text == " hello."  # precondition: the two copies disagree
+    assert "".join(t.text for t in sentence.tokens) == ". hello"
+
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text=sentence.text, sentences=[sentence])
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def test_a_sentences_text_is_its_tokens_joined(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two copies of a sentence are one: `text` is `w` joined, in time order.
+
+    Left as the merge built it, a reader sees " hello." and a click on the
+    first word plays the full stop. The tokens win because they carry the
+    times, and times are what the order of everything in the file promises.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_reordered_a_sentence(monkeypatch)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [t["w"] for t in sentence["tokens"]] == [".", " hello"]
+    assert sentence["text"] == ". hello"
+    assert payload["text"] == ". hello"
 
 
 def test_speaker_turns_run_forwards_too(

@@ -40,7 +40,7 @@ Four keys, always, in this order:
 |---|---|---|
 | `audio` | string | The path you passed, verbatim. Not resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. |
 | `model` | string | The resolved model id. There is no separate `engine` key; the model id names the engine. |
-| `text` | string | Whole transcript, one string. |
+| `text` | string | Whole transcript, one string: every sentence's `text` joined, outer whitespace stripped. |
 | `sentences` | array | Can be `[]` for silent media. That is a valid transcript, not a failure. |
 
 Inside a sentence:
@@ -48,7 +48,7 @@ Inside a sentence:
 | Field | Type | Notes |
 |---|---|---|
 | `start`, `end` | float seconds | |
-| `text` | string | Keeps the engine's leading space under parakeet and sherpa. Whisper strips it. |
+| `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
 Inside a token:
@@ -56,7 +56,7 @@ Inside a token:
 | Field | Type | Notes |
 |---|---|---|
 | `t` | float seconds | When the token starts. Always present. |
-| `w` | string | The token's text. Keeps its leading space, so `"".join(t.w)` rebuilds the sentence. Always present. |
+| `w` | string | The token's text, leading space kept. `"".join(t.w)` over a sentence's tokens is exactly its `text`. Always present. |
 | `e` | float seconds | When the token ends, as the decoder timed it. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. |
 | `c` | float, 0 to 1 | The decoder's confidence in the token: one minus the normalised entropy of its distribution at that step. Rounded to 3 places, so about half of parakeet's tokens read `1.0`. |
 

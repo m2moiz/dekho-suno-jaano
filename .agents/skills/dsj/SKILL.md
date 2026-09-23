@@ -144,6 +144,12 @@ promised; the times are not exact. A recording over 120 s is transcribed in over
 pieces, and a word at a seam can be mistimed by a few seconds — measured worst case
 5.72 s — which pulls its whole sentence that far earlier in the list.
 
+A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
+space, under every engine, and the top-level `text` is the sentences joined. So at a seam
+a mistimed word reads out of place in the text as well: about 1 sentence in 100 moves a
+word, and about 2 more move only punctuation. What the text shows and what a click on it
+plays always agree.
+
 When a question is visual, find the mark, then pull the frame:
 
 ```bash
