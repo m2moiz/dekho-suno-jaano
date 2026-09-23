@@ -236,10 +236,11 @@ Path is `--out` plus `.ckpt`, so `-o transcript.json` gives `transcript.json.ckp
 a sibling of the output because a later process has nothing else to find it by.
 
 ```json
-{"fingerprint": {"schema": 1, "media": "/recordings/golden.m4a", "media_size": 48213977,
-                 "media_mtime_ns": 1755087412000000000, "total_samples": 71424000,
-                 "model_id": "mlx-community/parakeet-tdt-0.6b-v3",
-                 "parakeet_version": "0.5.2", "chunk_s": 120.0, "overlap_s": 15.0},
+{"media": "/recordings/golden.m4a",
+ "fingerprint": {"schema": 2,
+                 "content_id": "48213977-23b1481c23935d480d899ec7fdf8f6074570e4bfce9b729e770c7de22d39a65a",
+                 "total_samples": 71424000, "model_id": "mlx-community/parakeet-tdt-0.6b-v3",
+                 "chunk_s": 120.0, "overlap_s": 15.0, "parakeet_version": "0.5.2"},
  "next_start": 1680000,
  "tokens": [{"id": 0, "text": " the", "start": 0.08, "duration": 0.24, "confidence": 1.0}]}
 ```
@@ -255,14 +256,28 @@ through the end of the audio, so a run interrupted then resumes past the last ch
 transcribes nothing, and goes straight back to labelling.
 
 Every field of the fingerprint must match for the checkpoint to be used. Any of these
-invalidates it, silently and correctly, and the run starts over: moving or renaming the
-source, editing it, touching it, a different `--model`, an upgraded engine package, a
-schema bump, or an ffmpeg upgrade that decodes the same untouched file to a different
-number of samples. A mismatch is not an error. The stored tokens simply describe
-something else.
+invalidates it, and the run starts over: editing the source, a different `--model`, an
+upgraded engine package, a schema bump, or an ffmpeg upgrade that decodes the same
+untouched file to a different number of samples. A mismatch is not an error. The stored
+tokens simply describe something else.
 
-There is no content hash. Invalidation is resolved path, size, mtime in nanoseconds, and
-decoded sample count.
+It is not silent either. A checkpoint that exists and is not used prints one line on
+stderr naming the field that failed, which is how it differs from having no checkpoint:
+
+```
+checkpoint ignored, transcribing from the start: the recording's contents changed (content_id)
+```
+
+`content_id` names the recording by its contents: its size in bytes, a dash, then a
+SHA-256 of its first and last MiB. Renaming, moving or copying the recording between two
+runs changes none of that, so the run resumes. `media` is the resolved path the run read,
+kept beside the fingerprint for a person and never compared. There is no mtime: a plain
+`cp` changes it, and the content id already catches an edit. The one edit it cannot see
+is a change confined to the middle of the file that keeps its size exactly.
+
+Checkpoints written before `content_id` existed are schema 1, keyed on path, size and
+mtime. They cannot match, so a run interrupted on an older dsj starts over once, and says
+`it was written by another version of dsj, checkpoint schema 1 where this one reads 2`.
 
 `sherpa` contributes `sherpa_onnx_version` where parakeet contributes `parakeet_version`,
 so a checkpoint cannot cross engines even if every shared value matched.

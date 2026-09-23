@@ -12,7 +12,10 @@ the real ones from dsj/chunking.py.
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
+import shutil
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -411,6 +414,104 @@ def test_an_interrupted_run_leaves_a_checkpoint_and_no_transcript(
     assert not out.exists(), "a partial transcript was written as if complete"
     banked = json.loads(checkpoint_path_for(out).read_text())
     assert banked["next_start"] == int(210.0 * RATE)
+
+
+def _interrupt_after_two_chunks(media: Path, out: Path) -> None:
+    """Run on 360 s of fake audio and stop it with the checkpoint at 210 s."""
+
+    class Interrupt(Exception):
+        pass
+
+    seen = 0
+
+    def die_after_two(_p: Progress, state: str) -> None:
+        nonlocal seen
+        if state != "running":
+            return
+        seen += 1
+        if seen == 2:
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        transcribe(media, out, on_progress=die_after_two)
+    assert json.loads(checkpoint_path_for(out).read_text())["next_start"] == int(210.0 * RATE)
+
+
+def _where_the_rerun_started(media: Path, out: Path) -> float:
+    """Finish the run on `media`, and return the audio second it resumed from."""
+    done: list[Progress] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        if state == "done":
+            done.append(p)
+
+    transcribe(media, out, on_progress=capture)
+    return done[0].resumed_from_s
+
+
+def _renamed(media: Path) -> Path:
+    return media.rename(media.with_name("renamed.wav"))
+
+
+def _moved(media: Path) -> Path:
+    folder = media.parent / "elsewhere"
+    folder.mkdir()
+    return media.rename(folder / media.name)
+
+
+def _copied(media: Path) -> Path:
+    """A plain `cp`, which gives the copy a new mtime; utime makes that certain."""
+    copy = media.with_name("copy.wav")
+    shutil.copyfile(media, copy)
+    os.utime(copy, ns=(1, 1))
+    return copy
+
+
+@pytest.mark.parametrize(
+    "relocate", [_renamed, _moved, _copied], ids=["renamed", "moved", "copied"]
+)
+def test_a_recording_resumes_under_another_name_folder_or_mtime(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    relocate: Callable[[Path], Path],
+) -> None:
+    """Renaming, moving or copying a recording between two runs keeps its resume (#118).
+
+    The fingerprint used to hold the path and the mtime, so each of these threw
+    away an interrupted run and started it again from zero, with no message.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    _interrupt_after_two_chunks(fake_media, out)
+
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    assert _where_the_rerun_started(relocate(fake_media), out) == 210.0
+    assert "resuming from 3:30" in caplog.text
+    assert "checkpoint ignored" not in caplog.text
+
+
+def test_an_edited_recording_does_not_resume_and_says_why(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """New contents are a different recording, and the rerun names what failed (#118)."""
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    _interrupt_after_two_chunks(fake_media, out)
+
+    fake_media.write_bytes(b"RIFX")
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    assert _where_the_rerun_started(fake_media, out) == 0.0
+    assert "resuming from" not in caplog.text
+    assert (
+        "checkpoint ignored, transcribing from the start: "
+        "the recording's contents changed (content_id)"
+    ) in caplog.text
 
 
 def test_no_resume_removes_a_checkpoint_it_will_not_use(

@@ -230,9 +230,13 @@ child rather than replacing itself with it, so `$!` is the wrapper. `kill` still
 because the signal reaches the child through it and the run exits 143. `kill -INT` on that
 wrapper pid does nothing at all, which is the same dead end from the other direction.
 
-A changed model, a moved or edited source file, or an upgraded engine invalidates the
-checkpoint automatically, and the run starts over rather than reusing tokens that
-describe something else. That is silent and correct, not an error.
+The checkpoint knows the recording by its contents, not its name, so renaming, moving or
+copying the file between the two runs still resumes. An edited recording, a changed
+model or an upgraded engine invalidates it, and the run starts over rather than reusing
+tokens that describe something else. That is correct, not an error, and it is not
+silent: stderr says `checkpoint ignored, transcribing from the start:` and names the part
+that changed. A checkpoint written by a dsj from before this rule is ignored the same
+way, once.
 
 `--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
 none at all, so an interrupted whisper run always starts over.

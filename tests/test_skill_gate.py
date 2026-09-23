@@ -361,7 +361,7 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
         assert time.monotonic() < deadline, "no checkpoint within 300s"
         time.sleep(0.05)
     banked = json.loads(ckpt.read_text())
-    assert set(banked) == {"fingerprint", "next_start", "tokens"}
+    assert set(banked) == {"media", "fingerprint", "next_start", "tokens"}
     assert banked["next_start"] > 0
 
     first.send_signal(signal.SIGINT)

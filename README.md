@@ -220,9 +220,11 @@ jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
 `error`. The file is written atomically, so a reader never sees half of one.
 
 **Interruptions are cheap.** A checkpoint is written beside the output every
-chunk. Re-running the same command resumes from it; a changed model, source
-file, or chunk geometry invalidates it automatically and the run starts over
-rather than reusing tokens that describe something else.
+chunk. Re-running the same command resumes from it, even if the recording was
+renamed, moved or copied in between: the checkpoint knows it by its contents,
+not its path. An edited recording, a changed model, or a different chunk
+geometry invalidates it, and the run starts over rather than reusing tokens
+that describe something else, saying on stderr which of those it was.
 
 ### Dekho — change marks
 
@@ -581,6 +583,7 @@ dsj/            the package
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
   chunking.py      the chunk loop parakeet-mlx does not provide
   checkpoint.py    resume, and the validated boundary that reads it
+  identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
   asr.py           the one shape both ASR engines return
   whisper.py       the whisper engine, and why Roman Urdu is a prompt

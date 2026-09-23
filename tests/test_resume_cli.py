@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from dsj.checkpoint import checkpoint_path_for
+from dsj.identity import content_id
 
 if TYPE_CHECKING:
     from dsj.alignment import AlignedResult
@@ -158,9 +159,10 @@ def test_a_mov_resumes_even_though_its_audio_is_a_fresh_temp_wav_each_run(
 
     ckpt = checkpoint_path_for(out)
     banked = json.loads(ckpt.read_text())
-    assert banked["fingerprint"]["media"] == str(mov.resolve()), (
-        "the checkpoint is keyed to the temp wav, so it can never match again"
+    assert banked["fingerprint"]["content_id"] == content_id(mov), (
+        "the checkpoint is keyed to the temp wav, not the recording"
     )
+    assert banked["media"] == str(mov.resolve())
     first_next_start = banked["next_start"]
     assert first_next_start > 0
 

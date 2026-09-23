@@ -519,9 +519,9 @@ def transcribe(
 
             ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
-            # differ, and `audio` is a temp wav with a fresh path and mtime on
-            # every run, so a checkpoint keyed to it could never match a second
-            # time.
+            # differ, and `audio` is a temp wav made fresh on every run, so a
+            # checkpoint keyed to it would name ffmpeg's output rather than the
+            # recording the user handed us.
             fp = fingerprint(
                 media, len(audio_data), model_id, CHUNK_S, OVERLAP_S,
                 engine_fields=cast("dict[str, str]", eng_mod.fingerprint_fields()),
@@ -530,7 +530,16 @@ def transcribe(
             start_tokens: list[AlignedToken] = []
             skip_before = 0
             if resume:
-                found = read_checkpoint(ckpt_path, fp)
+                # A warning, not silence: a checkpoint that exists and is not
+                # used costs the whole run, and before #118 a rename did exactly
+                # that with nothing on stderr to say so.
+                found = read_checkpoint(
+                    ckpt_path,
+                    fp,
+                    on_reject=lambda why: logger.warning(
+                        "checkpoint ignored, transcribing from the start: %s", why
+                    ),
+                )
                 if found is not None:
                     skip_before, start_tokens = found
                     logger.info(

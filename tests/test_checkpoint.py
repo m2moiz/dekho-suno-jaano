@@ -23,17 +23,17 @@ from dsj.checkpoint import (
     read_checkpoint,
     write_checkpoint,
 )
+from dsj.identity import content_id
 
 FP = Fingerprint(
-    schema=1,
-    media="/x/meeting.mov",
-    media_size=141664974,
-    media_mtime_ns=1_700_000_000_000_000_000,
+    schema=SCHEMA,
+    content_id="141664974-" + "ab" * 32,
     total_samples=70_832_448,
     model_id="mlx-community/parakeet-tdt-0.6b-v3",
     chunk_s=120.0,
     overlap_s=15.0,
     engine_fields={"parakeet_version": "0.5.2"},
+    media="/x/meeting.mov",
 )
 
 TOKENS = [
@@ -93,10 +93,8 @@ def test_every_fingerprint_field_invalidates(tmp_path: Path) -> None:
     write_checkpoint(p, FP, next_start=1_680_000, tokens=TOKENS)
 
     changed = {
-        "schema": 2,
-        "media": "/x/other.mov",
-        "media_size": 1,
-        "media_mtime_ns": 1,
+        "schema": SCHEMA + 1,
+        "content_id": "1-" + "cd" * 32,
         "total_samples": 1,
         "model_id": "mlx-community/parakeet-tdt-0.6b-v2",
         "chunk_s": 60.0,
@@ -105,7 +103,7 @@ def test_every_fingerprint_field_invalidates(tmp_path: Path) -> None:
         # entirely -- the KEY SET differing is what blocks cross-engine reuse.
         "engine_fields": {"parakeet_version": "0.6.0"},
     }
-    assert set(changed) == {f.name for f in dataclasses.fields(Fingerprint)}, (
+    assert set(changed) == {f.name for f in dataclasses.fields(Fingerprint) if f.compare}, (
         "a field was added to Fingerprint without a case here"
     )
 
@@ -147,13 +145,35 @@ def test_the_fingerprint_describes_the_source_media_not_a_temp_wav(tmp_path: Pat
                      chunk_s=120.0, overlap_s=15.0,
                      engine_fields={"parakeet_version": "0.5.2"})
 
+    assert fp.content_id == content_id(source)
     assert fp.media == str(source.resolve())
-    assert fp.media_size == source.stat().st_size
-    assert fp.media_mtime_ns == source.stat().st_mtime_ns
 
     # Taken twice, with a different extraction in between, it is the same.
     assert fingerprint(source, 70_832_448, "m", 120.0, 15.0,
                        engine_fields={"parakeet_version": "0.5.2"}) == fp
+
+
+def test_the_media_path_is_a_note_and_not_part_of_the_match(tmp_path: Path) -> None:
+    """A renamed, moved or copied recording is the same recording (#118).
+
+    The path is written into the checkpoint so a person can tell which recording
+    a stray .ckpt belongs to, and nothing reads it back.
+    """
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, FP, next_start=1_680_000, tokens=TOKENS)
+    assert json.loads(p.read_text())["media"] == "/x/meeting.mov"
+
+    elsewhere = dataclasses.replace(FP, media="/y/renamed copy.mov")
+    assert elsewhere == FP
+    assert read_checkpoint(p, elsewhere) is not None
+
+
+def test_the_fingerprint_holds_no_path_and_no_mtime(tmp_path: Path) -> None:
+    """The two fields that cost a resume on every rename, move and plain `cp` (#118)."""
+    source = tmp_path / "recording.mov"
+    source.write_bytes(b"x")
+    stored = fingerprint(source, 1, "m", 120.0, 15.0, engine_fields={}).to_dict()
+    assert not {"media", "media_size", "media_mtime_ns"} & set(stored)
 
 
 def test_a_re_encoded_source_invalidates(tmp_path: Path) -> None:
@@ -168,6 +188,92 @@ def test_a_re_encoded_source_invalidates(tmp_path: Path) -> None:
     after = fingerprint(source, 100, "m", 120.0, 15.0, engine_fields={})
 
     assert read_checkpoint(p, after) is None
+
+
+# --- a checkpoint that is not used says why ----------------------------------
+#
+# read_checkpoint returns None for "no checkpoint" and for "a checkpoint this run
+# cannot use" alike. Until #118 nothing told the two apart, so a rename threw away
+# an interrupted hour with no message at all.
+
+
+def _reasons(path: Path, fp: Fingerprint) -> list[str]:
+    reasons: list[str] = []
+    assert read_checkpoint(path, fp, on_reject=reasons.append) is None
+    return reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("content_id", "1-" + "cd" * 32, "the recording's contents changed (content_id)"),
+        ("model_id", "other", "the model changed (model_id)"),
+        ("total_samples", 1, "the audio decoded to a different length (total_samples)"),
+        ("chunk_s", 60.0, "the chunk length changed (chunk_s)"),
+        ("overlap_s", 5.0, "the chunk overlap changed (overlap_s)"),
+        ("engine_fields", {"parakeet_version": "0.6.0"},
+         "the engine or its version changed (parakeet_version)"),
+    ],
+)
+def test_a_rejected_checkpoint_names_the_field_that_failed(
+    tmp_path: Path, field: str, value: object, reason: str
+) -> None:
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, FP, next_start=1_680_000, tokens=TOKENS)
+    assert _reasons(p, dataclasses.replace(FP, **{field: value})) == [reason]
+
+
+def test_a_checkpoint_from_another_engine_names_every_engine_key(tmp_path: Path) -> None:
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, FP, next_start=0, tokens=TOKENS)
+    sherpa = dataclasses.replace(
+        FP, engine_fields={"sherpa_onnx_version": "1.13.7", "token_times": "measured"}
+    )
+    # This run's keys first, then the ones only the stored checkpoint has.
+    assert _reasons(p, sherpa) == [
+        "the engine or its version changed "
+        "(sherpa_onnx_version, token_times, parakeet_version)"
+    ]
+
+
+def test_a_checkpoint_in_an_older_format_says_so_and_nothing_else(tmp_path: Path) -> None:
+    """Every other key differs too, and listing them would bury the one fact that matters."""
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, FP, next_start=0, tokens=TOKENS)
+    newer = dataclasses.replace(FP, schema=SCHEMA + 1, content_id="1-" + "cd" * 32)
+    assert _reasons(p, newer) == [
+        f"it was written by another version of dsj, checkpoint schema {SCHEMA} "
+        f"where this one reads {SCHEMA + 1} (schema)"
+    ]
+
+
+def test_no_checkpoint_at_all_is_not_a_rejection(tmp_path: Path) -> None:
+    assert _reasons(tmp_path / "absent.ckpt", FP) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"fingerprint": {"schema": 1,', "[]", '{"next_start": 0}'],
+    ids=["truncated", "not an object", "no fingerprint"],
+)
+def test_a_checkpoint_dsj_cannot_read_says_so(tmp_path: Path, text: str) -> None:
+    p = tmp_path / "out.json.ckpt"
+    p.write_text(text)
+    assert _reasons(p, FP) == ["the file is not a checkpoint this dsj can read"]
+
+
+def test_a_matching_checkpoint_of_the_wrong_shape_says_so(tmp_path: Path) -> None:
+    p = tmp_path / "out.json.ckpt"
+    p.write_text(json.dumps({"fingerprint": FP.to_dict(), "tokens": "nope"}))
+    assert _reasons(p, FP) == ["the file is not a checkpoint this dsj can read"]
+
+
+def test_a_used_checkpoint_is_not_a_rejection(tmp_path: Path) -> None:
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, FP, next_start=0, tokens=TOKENS)
+    reasons: list[str] = []
+    assert read_checkpoint(p, FP, on_reject=reasons.append) is not None
+    assert reasons == []
 
 
 # --- the validated boundary -------------------------------------------------

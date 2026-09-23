@@ -182,8 +182,8 @@ def fake_media(tmp_path: Path) -> Path:
     """A real file to stand in as the source media for a faked run.
 
     It needs to exist even though load_audio is stubbed and never opens it:
-    transcribe() fingerprints the source by size and mtime, and stat() on a
-    path that is not there raises.
+    transcribe() fingerprints the source by its contents (dsj/identity.py),
+    and reading a path that is not there raises.
     """
     p = tmp_path / "in.wav"
     p.write_bytes(b"RIFF")
