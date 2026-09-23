@@ -19,8 +19,13 @@ Two things it does not measure, so read the output with them in mind:
 
 1. The denominator is seconds *covered by sentences*, not the recording's
    length. Silence and dropped audio are in neither side.
-2. A hallucination loop written in Latin ("ho ho ho ho ...") counts as Latin,
-   so a run that loops more reads as MORE Roman. See #140.
+2. Repetition loops count as speech, in whichever script they are written.
+   A Latin loop ("ho ho ho ho ...") reads as more Roman; a loop of one Urdu
+   letter repeated reads as more Urdu. On recording-20260922-171500 that
+   second kind is 671 of the file's 1,684 seconds: the share is 56% with the
+   loops in and 15% with them out, so that file's number is mostly loops,
+   not drift. On the three Sunday files removing loops moves the share by
+   one to three points. Separate the two before reading this as drift (#140).
 
     uv run python scratch/urdu_script_share.py path/to/recording-*.json
 
@@ -45,15 +50,23 @@ ARABIC_BLOCK = ("؀", "ۿ")
 THRESHOLD = 0.3
 
 
+def is_urdu(text: str) -> bool:
+    """Whether more than THRESHOLD of `text`'s characters are in the Arabic block.
+
+    The one definition of "this sentence came back in Urdu script". Imported by
+    scratch/real_bench.py so its numbers and this file's cannot drift apart.
+    """
+    arabic = sum(1 for c in text if ARABIC_BLOCK[0] <= c <= ARABIC_BLOCK[1])
+    return arabic > len(text) * THRESHOLD
+
+
 def urdu_share(path: Path) -> tuple[float, float]:
     """Seconds in Urdu-script sentences, and seconds in all sentences."""
     sentences = json.loads(path.read_text())["sentences"]
     urdu = latin = 0.0
     for sentence in sentences:
-        text = sentence.get("text") or ""
         seconds = sentence["end"] - sentence["start"]
-        arabic = sum(1 for c in text if ARABIC_BLOCK[0] <= c <= ARABIC_BLOCK[1])
-        if arabic > len(text) * THRESHOLD:
+        if is_urdu(sentence.get("text") or ""):
             urdu += seconds
         else:
             latin += seconds
