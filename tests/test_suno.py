@@ -578,31 +578,83 @@ def test_the_transcript_is_written_before_diarization_runs(
     assert "speaker" not in seen[0]["sentences"][0]
 
 
-def test_the_checkpoint_is_gone_before_diarization_runs(
+def test_the_checkpoint_outlives_the_labelling_pass(
     fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     fake_turns: Callable[..., list[Path]],
 ) -> None:
-    """The checkpoint protects ASR, and ASR is banked once `out` exists.
+    """Present while labelling runs, gone once it is over (#101).
 
-    Left in place across this pass, a diarization crash would strand it, and
-    the next run would resume audio it has already transcribed.
+    The unlabelled transcript on disk carries no fingerprint, so a rerun cannot
+    tell it is finished; the checkpoint can, and by now it banks every token
+    through the end of the audio. Deleted before this pass, as it used to be,
+    an interrupt here cost the whole transcription.
     """
     fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
     out = tmp_path / "out.json"
     ckpt = checkpoint_path_for(out)
-    seen: list[bool] = []
+    seen: list[int] = []
 
     # def, not lambda: an annotated lambda parameter is not expressible.
     def record(wav: Path) -> None:
-        seen.append(ckpt.exists())
+        seen.append(json.loads(ckpt.read_text())["next_start"])
 
     fake_turns(**_one_speaker(then=record))
 
     transcribe(fake_media, out)
 
-    assert seen == [False]
+    assert seen == [360 * RATE], "labelling ran without a complete checkpoint beside it"
+    assert not ckpt.exists()
+
+
+def test_an_interrupt_while_labelling_does_not_transcribe_again(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Stopped during speaker labelling, the rerun goes straight back to labelling (#101).
+
+    Reproduced on 2026-09-22 with both `kill` and `kill -9`: the rerun redid
+    the whole transcription from 0:00, although the complete unlabelled
+    transcript was on disk. On an hour of audio that is most of an hour.
+    KeyboardInterrupt stands in for the signal; it is what Ctrl-C raises, and
+    like a kill it lets none of transcribe()'s own clean-up run.
+
+    The fake model counts its decodes, so "the ASR pass did not re-execute" is
+    asserted directly: one decode across both runs.
+    """
+    model = fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+
+    def interrupt(wav: Path) -> None:
+        raise KeyboardInterrupt
+
+    fake_turns(**_one_speaker(then=interrupt))
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out)
+    unlabelled = json.loads(out.read_text())
+    assert "speakers" not in unlabelled
+    assert len(model.mels) == 1
+
+    fake_turns(**_one_speaker())
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, out, on_progress=capture)
+
+    assert len(model.mels) == 1, "the rerun transcribed the audio again"
+    assert "running" not in states, "the rerun reported transcription progress again"
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert [s["speaker"] for s in payload["sentences"]] == [0]
+    assert [s["tokens"] for s in payload["sentences"]] == [
+        s["tokens"] for s in unlabelled["sentences"]
+    ]
+    assert not checkpoint_path_for(out).exists()
 
 
 def test_the_diarizing_state_is_reported_between_running_and_done(

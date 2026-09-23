@@ -199,7 +199,9 @@ audio, fsynced, and through a temporary file so an interrupt can only leave a wh
 `-o transcript.json` gives `transcript.json.ckpt`.
 
 **Re-running the same command resumes.** It prints `resuming from 1:45 (841 tokens
-banked)` on stderr and picks up there.
+banked)` on stderr and picks up there. That holds during speaker labelling too: the
+checkpoint is kept until labelling is over, so a run stopped in the `diarizing` state
+transcribes nothing on the rerun and goes straight back to labelling.
 
 Interrupting a run **you are watching in a terminal** is Ctrl-C. It exits 130.
 

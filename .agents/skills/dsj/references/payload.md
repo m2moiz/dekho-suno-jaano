@@ -248,7 +248,10 @@ read it as a time. That rate comes from the loaded model rather than from a cons
 is 16000 for the parakeet and sherpa defaults, so `1680000` there is 105 seconds.
 
 Written once per chunk, fsynced, and always through a temporary file plus a rename, so an
-interrupt can only ever leave a whole one. It is removed once the transcript is on disk.
+interrupt can only ever leave a whole one. It is removed once the transcript is on disk
+**and** speaker labelling is over, not before. While labelling runs it holds every token
+through the end of the audio, so a run interrupted then resumes past the last chunk,
+transcribes nothing, and goes straight back to labelling.
 
 Every field of the fingerprint must match for the checkpoint to be used. Any of these
 invalidates it, silently and correctly, and the run starts over: moving or renaming the

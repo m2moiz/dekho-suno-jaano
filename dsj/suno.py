@@ -373,8 +373,10 @@ def transcribe(
     both phases so a detached run stays observable.
 
     An interrupted run leaves a checkpoint beside `out`, and the next run
-    continues from its last completed chunk. `resume=False` ignores and removes
-    any checkpoint and transcribes the whole file.
+    continues from its last completed chunk. The checkpoint stays until speaker
+    labelling is over, so a run interrupted while labelling resumes past the
+    last chunk and goes straight back to labelling. `resume=False` ignores and
+    removes any checkpoint and transcribes the whole file.
 
     Sentences are then labelled with who spoke them, which is a pass over an
     output that is already correct without it: any failure degrades to the
@@ -606,17 +608,6 @@ def transcribe(
         # announce itself -- it merely looks short.
         atomic_write_text(out, json.dumps(payload))
 
-        # The transcript is on disk, so the checkpoint has nothing left to
-        # protect. Removed after the write, not before: a crash between the two
-        # costs one redundant resume rather than the whole run.
-        if ckpt_path is not None:
-            ckpt_path.unlink(missing_ok=True)
-
-        # After the unlink, not before: the checkpoint protects ASR work, that
-        # work is banked the moment the transcript is on disk, and a
-        # diarization crash holding a stale checkpoint open would make the next
-        # run resume audio it has already transcribed.
-        #
         # `audio` and not `media`: media.py has already produced the 16 kHz
         # mono pcm_s16le wav senko wants, and it only exists until this `with`
         # block ends. A .mov handed straight to the diarizer is a second
@@ -625,6 +616,24 @@ def transcribe(
             payload = _label_speakers(
                 payload, audio, out, stream.duration_s, report, require_diarize
             )
+
+        # Removed once labelling is over, not as soon as `out` is written
+        # (#101). The unlabelled transcript carries no fingerprint, so the next
+        # run cannot tell it is finished, or for this media and model; only the
+        # checkpoint can. It used to go first, on the reasoning that a crash in
+        # labelling would strand a stale checkpoint and the next run would
+        # resume audio it had already transcribed. It is not stale: by now it
+        # banks every token through the end of the audio (next_start is the
+        # total), so resuming it skips every chunk, decodes nothing, rebuilds
+        # this same transcript from the banked tokens and goes straight to
+        # labelling. Deleting it early is what cost the whole transcription:
+        # reproduced with `kill` and `kill -9` during labelling, the rerun
+        # started again from 0:00.
+        #
+        # After the write, not before, for the same reason: a crash between
+        # the two costs one redundant resume rather than the whole run.
+        if ckpt_path is not None:
+            ckpt_path.unlink(missing_ok=True)
 
         elapsed = time.monotonic() - started
         total = transcription.sentences[-1]["end"] if transcription.sentences else 0.0
