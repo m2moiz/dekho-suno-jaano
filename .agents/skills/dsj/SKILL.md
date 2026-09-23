@@ -24,7 +24,8 @@ that one frame. A 74-minute recording is about 444,000 tokens on a native-video 
 against about 10,000 for its transcript.
 
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
-(show me).
+(show me). A fourth, `likho` (write), turns a finished transcript into subtitles or text
+for tools that are not dsj.
 
 ## Before the first command
 
@@ -133,6 +134,41 @@ open "$(dsj dikhao recording.mov 431.5 -o /tmp/f.jpg)"
 
 The 1500 px default is a measured ceiling: a full 2940 px frame is about 776 KB as a
 JPEG, more than most vision APIs want, and legibility stopped improving well below that.
+
+### likho
+
+Export a transcript as SRT, WebVTT or plain text. It reads the JSON `suno` wrote and
+runs no model, so it takes a moment, not minutes. Never write your own converter.
+
+```bash
+dsj likho transcript.json -o transcript.srt
+dsj likho transcript.json -o captions.vtt
+dsj likho transcript.json -o notes.txt
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | **required.** Where the file goes. Its suffix picks the format |
+| `--format FORMAT` | `srt`, `vtt` or `txt`, when the suffix does not say. Wins over it |
+
+Any other suffix and no `--format` is a usage error, exit 2, and nothing is written.
+
+- **SRT** is one cue per sentence, with the speaker's label ahead of the words, as
+  `SPEAKER_01: ...`, when labelling ran.
+- **VTT** is the same cues, voiced with `<v SPEAKER_01>`, and a timestamp tag ahead of
+  every word that starts later than the one before it. It is the only one of the three
+  that carries word timing.
+- **TXT** is for a person: one block per speaker turn, headed `[1:02] SPEAKER_01`, or
+  one `[1:02] ...` line per sentence when labelling did not run.
+
+Cues run in time order and **never overlap**: each one ends no later than the next
+begins, and nothing else about the times changes. A seam can leave a sentence ending
+after the next one starts, and a player or muxer that keeps one cue at a time would
+rewrite it. Measured on a 480-sentence transcript: the exported SRT muxed into its
+recording and back with 0 of 480 cues changed, where 22 moved before.
+
+Writes nothing to stdout. Transcripts from older builds, with no speakers, no token
+ends or sentences out of order, export too.
 
 ## The transcript is the index
 
@@ -253,7 +289,7 @@ none at all, so an interrupted whisper run always starts over.
 |---|---|
 | 0 | Success |
 | 1 | An uncaught exception, printed as a traceback on stderr |
-| 2 | A usage error. Run `dsj <verb> --help` |
+| 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
 | 130 | Interrupted. For `suno` on parakeet or sherpa, re-run to resume |
 
 **Read the last line of stderr, not the first.** A failure is a traceback, and when

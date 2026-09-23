@@ -1,13 +1,15 @@
-"""The `dsj` command -- one Typer app, three verbs.
+"""The `dsj` command -- one Typer app, four verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
+    dsj likho  transcript.json -o captions.srt     # write
 
-Urdu imperatives, and they are not decoration: they name the three things the
-tool does in the order it does them. Suno gives you what was said, dekho gives
-you when the picture changed, dikhao gives you the picture itself. Jaano -- know
--- is what you get from all three, which is why it is the command.
+Urdu imperatives, and they are not decoration: the first three name the things
+the tool does in the order it does them. Suno gives you what was said, dekho
+gives you when the picture changed, dikhao gives you the picture itself. Jaano
+-- know -- is what you get from all three, which is why it is the command.
+Likho writes what suno heard out for the tools that are not dsj.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
 and `dsj.dekho.main` are thin shims onto the commands below, so
@@ -326,6 +328,30 @@ def dikhao(
     # program, and a path on stdout composes:
     #     open "$(dsj frame rec.mov 431.5 -o /tmp/f.jpg)"
     print(dest)
+    return 0
+
+
+@app.command("likho")
+def likho(
+    transcript: Annotated[Path, typer.Argument(help="a transcript suno wrote")],
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="where the file goes: .srt, .vtt or .txt")
+    ],
+    fmt: Annotated[
+        str | None,
+        typer.Option("--format", help="srt, vtt or txt; read from the --out suffix if omitted"),
+    ] = None,
+) -> int:
+    """Write: export a transcript as SRT, WebVTT or plain text."""
+    from dsj.atomic import atomic_write_text
+    from dsj.likho import EXPORTERS
+
+    chosen = (fmt or out.suffix.removeprefix(".")).lower()
+    if chosen not in EXPORTERS:
+        # A usage error, before anything is read or written: a guessed format is
+        # a file of the wrong kind under the name the caller asked for.
+        raise typer.BadParameter(f"must be srt, vtt or txt, not {chosen!r}", param_hint="--format")
+    atomic_write_text(out, EXPORTERS[chosen](json.loads(transcript.read_text())))
     return 0
 
 

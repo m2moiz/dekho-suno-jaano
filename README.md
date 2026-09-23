@@ -77,6 +77,7 @@ the interesting part.
 | **Suno — transcript** | working. Chunked ASR, resume, optional speaker labels, ~13× realtime |
 | **Dekho — change marks** | working. [Validated on 834 recordings and five hour-long lectures](docs/generalisation.md) — though [worth little on their own](docs/do-marks-help.md) for answering questions |
 | **Dikhao — frame retrieval** | working. The step that actually makes a recording answerable |
+| **Likho: export** | working. SRT, WebVTT and plain text from a finished transcript |
 | **Frame description** | **not built**, blocked on a *measured* finding rather than a guess. See [Roadmap](#roadmap) |
 
 ---
@@ -268,6 +269,36 @@ want, and legibility stopped improving well below that — 700px to 1600px moved
 recall by one string in fifteen ([docs/vlm-legibility.md](docs/vlm-legibility.md)).
 
 Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
+
+### Likho: exporting a transcript
+
+The transcript is JSON, which nothing but dsj and `jq` reads. `likho` (write)
+turns a finished one into SRT, WebVTT or plain text, running no model:
+
+```bash
+dsj likho transcript.json -o transcript.srt [--format srt|vtt|txt]
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | where the file goes; its suffix picks the format |
+| `--format FORMAT` | `srt`, `vtt` or `txt`, when the suffix does not say; wins over it |
+
+SRT is one cue per sentence, prefixed `SPEAKER_01: ` when speaker labelling
+ran. VTT is the same cues voiced with `<v SPEAKER_01>`, with a timestamp tag
+ahead of every word that starts later than the one before it, the only word
+timing a subtitle format has room for. TXT is for reading: a block per speaker
+turn headed by its start time, or a timestamped line per sentence when there
+are no labels.
+
+The cues never overlap. A chunk seam can leave a sentence ending after the next
+one starts, and MP4 timed text, like most players, keeps one cue at a time, so
+exporting an early transcript and muxing it into its recording moved 22 of 480
+cues. Each cue now ends no later than the next begins, and the same transcript
+exported by `likho` muxes into the same recording and back with 0 of 480
+changed (measured 2026-09-23).
+
+Also available as `dsj.likho.to_srt(payload)`, `to_vtt` and `to_txt`.
 
 ## Output
 
@@ -577,11 +608,12 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao
+  cli.py           the `dsj` command: suno | dekho | dikhao | likho
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
   chunking.py      the chunk loop parakeet-mlx does not provide
+  likho.py         likho  -- a transcript out as SRT, WebVTT or text
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
