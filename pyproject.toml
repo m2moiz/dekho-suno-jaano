@@ -78,6 +78,14 @@ mac = [
 # so transcripts there are unlabelled by design rather than by accident.
 sherpa = [
     "sherpa-onnx>=1.13.6",
+    # Listed by hand because uv's lock cannot see it (#165). sherpa-onnx's own
+    # Mac and aarch64 wheels require it, and it is where libonnxruntime lives,
+    # yet `uv lock` records no dependencies for sherpa-onnx at all, so without
+    # this line the extra installs a package that cannot import. Keep the two
+    # locked at the same version: sherpa-onnx pins core with `==`, and a plain
+    # `uv lock` will happily pick a newer core. tests/test_engines_available.py
+    # fails when they do not load together.
+    "sherpa-onnx-core>=1.13.6",
 ]
 android = [
     "dsj[sherpa]",
