@@ -6,7 +6,8 @@ description: >
   moment in a recording; when a frame has to be pulled out of a video by timestamp; or
   when a `dsj suno`, `dsj dekho` or `dsj dikhao` run needs polling, resuming, or
   reading after it failed. Also when a long recording must be made answerable without
-  feeding the whole video to a vision model.
+  feeding the whole video to a vision model, when a transcript has to become SRT, VTT
+  or text, or when an existing caption file has to stand in for a transcript.
 metadata:
   version: 0.1.0
   tier: portable
@@ -24,8 +25,9 @@ that one frame. A 74-minute recording is about 444,000 tokens on a native-video 
 against about 10,000 for its transcript.
 
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
-(show me). A fourth, `likho` (write), turns a finished transcript into subtitles or text
-for tools that are not dsj.
+(show me). Two more work on the transcript alone: `likho` (write) turns a finished one
+into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
+file those tools made into a transcript, in place of `suno`.
 
 ## Before the first command
 
@@ -169,6 +171,35 @@ recording and back with 0 of 480 cues changed, where 22 moved before.
 
 Writes nothing to stdout. Transcripts from older builds, with no speakers, no token
 ends or sentences out of order, export too.
+
+### parho
+
+Import a transcript instead of running ASR: a YouTube VTT, a subtitle track, a file
+`likho` wrote, or a dsj transcript JSON. The result is the same JSON `suno` writes, so
+`dekho`, `dikhao` and `likho` take it as they take a native one.
+
+```bash
+dsj parho recording.mov captions.vtt -o transcript.json
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | **required.** Where the transcript JSON goes |
+
+The recording comes first, as for every verb that indexes one, and must exist; it is
+named in `audio`, not opened. The format is read from the content, never the suffix.
+
+What the file could not hold, the transcript does not claim. `model` says where the
+times came from, `import:srt` or `import:vtt`, and no imported token has a `c`:
+
+- **SRT**: one token per sentence, spanning the cue, `t` its start and `e` its end.
+- **VTT**: a cue with word timestamp tags splits into word tokens with a `t` each and
+  no `e`, because a tag marks a start only. An untagged cue is one token, as for SRT.
+- **JSON** must be a dsj transcript. It passes through unchanged but for `audio`.
+
+Speakers come back from VTT voice tags, and from SRT only in the form `likho` writes,
+`SPEAKER_01: ` ahead of the words. A file with no labels imports with no `speakers` and
+no `diarization`, exactly like a transcript that was never labelled.
 
 ## The transcript is the index
 

@@ -70,10 +70,18 @@ confidences are:
 | parakeet | a hub id, `mlx-community/parakeet-tdt-0.6b-v3` by default | **Measured.** The decoder emits each token at an encoder frame, with a duration of whole 0.08 s frames. | One minus the normalised entropy of the decoder's whole distribution at that step. About half its tokens read `1.0`. |
 | sherpa | a local model directory, `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` by default | **Measured**, the same way: the same TDT model and the same duration head. | The probability the decoder gave the token it emitted, exp of its log-probability. sherpa exposes only that, not the distribution parakeet's entropy is taken over. |
 | whisper | a hub id naming whisper, `mlx-community/whisper-large-v3-turbo` by default | **Inferred.** whisper times each word after decoding it, by aligning its cross-attention to the audio, then shortens words it judges too long. How far that lands from the real boundary is not yet measured here, so pad a cut rather than trusting it to the frame. | The mean of the probabilities the model gave the word's sub-word tokens. |
+| `dsj parho`, from SRT | `import:srt` | **The file's.** One token per sentence, spanning the cue: `t` and `e` are the cue's start and end, and nothing finer is known. | **Absent.** Nothing measured it. |
+| `dsj parho`, from WebVTT | `import:vtt` | **The file's.** A cue with timestamp tags splits into word tokens, `t` from each tag, and **no `e`**: a tag marks where a word starts, not where it ends. An untagged cue is one token with `t` and `e`, as for SRT. | **Absent.** |
 
 Test for the key, never assume it. `e` and `c` are absent from every transcript written
-before they existed: parakeet's before #56, sherpa's and whisper's before #77. `t` and `w`
-are in all of them.
+before they existed: parakeet's before #56, sherpa's and whisper's before #77. An import
+never has `c`, and has `e` only on a token that spans its whole cue. `t` and `w` are in
+all of them.
+
+An imported transcript that names speakers (VTT voice tags, or SRT's `SPEAKER_01: `
+prefix) carries `speakers` and a `speaker` per sentence like a labelled one, with
+`diarization` set to the same `import:vtt` or `import:srt` as `model`. A JSON import is a
+dsj transcript and keeps its own `model`: only `audio` changes.
 
 `tokens` is the load-bearing half. Speaker labelling votes tokens against the diarizer's
 turns, so an engine that could only give sentence boundaries could be transcribed but not

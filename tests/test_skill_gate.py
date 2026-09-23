@@ -54,7 +54,7 @@ OPTION = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
 
 # `dsj suno ...`, with or without a `uv run` prefix, found anywhere on the line so that
 # `open "$(dsj dikhao ...)"` is read too.
-INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao|likho)\b(?P<rest>.*)")
+INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao|likho|parho)\b(?P<rest>.*)")
 
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 

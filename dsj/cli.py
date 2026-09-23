@@ -1,15 +1,17 @@
-"""The `dsj` command -- one Typer app, four verbs.
+"""The `dsj` command -- one Typer app, five verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
     dsj likho  transcript.json -o captions.srt     # write
+    dsj parho  recording.mov captions.vtt -o transcript.json    # read
 
 Urdu imperatives, and they are not decoration: the first three name the things
 the tool does in the order it does them. Suno gives you what was said, dekho
 gives you when the picture changed, dikhao gives you the picture itself. Jaano
 -- know -- is what you get from all three, which is why it is the command.
-Likho writes what suno heard out for the tools that are not dsj.
+Likho writes what suno heard out for the tools that are not dsj, and parho reads
+a transcript those tools made back in, in place of suno.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
 and `dsj.dekho.main` are thin shims onto the commands below, so
@@ -352,6 +354,29 @@ def likho(
         # a file of the wrong kind under the name the caller asked for.
         raise typer.BadParameter(f"must be srt, vtt or txt, not {chosen!r}", param_hint="--format")
     atomic_write_text(out, EXPORTERS[chosen](json.loads(transcript.read_text())))
+    return 0
+
+
+@app.command("parho")
+def parho(
+    media: Annotated[Path, typer.Argument(help="the recording the transcript indexes")],
+    source: Annotated[
+        Path, typer.Argument(help="an SRT, WebVTT or dsj JSON transcript; the content decides")
+    ],
+    out: Annotated[Path, typer.Option("--out", "-o", help="where the transcript JSON goes")],
+) -> int:
+    """Read: import an SRT, WebVTT or JSON transcript instead of running ASR."""
+    from dsj.atomic import atomic_write_text
+    from dsj.parho import parse
+
+    # The recording is never opened, only named, but a transcript naming one
+    # that is not there is an index into nothing; dekho would fail on it later
+    # and further from the typo.
+    if not media.exists():
+        raise FileNotFoundError(media)
+    # utf-8-sig: caption files from Windows tools often open with a BOM.
+    payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
+    atomic_write_text(out, json.dumps(payload))
     return 0
 
 

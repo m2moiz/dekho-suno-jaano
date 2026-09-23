@@ -42,6 +42,7 @@ whitelist.suno  # dsj/cli.py
 whitelist.dekho  # dsj/cli.py
 whitelist.dikhao  # dsj/cli.py
 whitelist.likho  # dsj/cli.py
+whitelist.parho  # dsj/cli.py
 # The same for the group callback, `@app.callback()`, which exists to carry
 # --version. `dsj --version` printing the version is the check that it is wired.
 whitelist.root  # dsj/cli.py

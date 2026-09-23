@@ -78,6 +78,7 @@ the interesting part.
 | **Dekho — change marks** | working. [Validated on 834 recordings and five hour-long lectures](docs/generalisation.md) — though [worth little on their own](docs/do-marks-help.md) for answering questions |
 | **Dikhao — frame retrieval** | working. The step that actually makes a recording answerable |
 | **Likho: export** | working. SRT, WebVTT and plain text from a finished transcript |
+| **Parho: import** | working. An SRT, WebVTT or dsj JSON transcript in place of ASR |
 | **Frame description** | **not built**, blocked on a *measured* finding rather than a guess. See [Roadmap](#roadmap) |
 
 ---
@@ -299,6 +300,28 @@ exported by `likho` muxes into the same recording and back with 0 of 480
 changed (measured 2026-09-23).
 
 Also available as `dsj.likho.to_srt(payload)`, `to_vtt` and `to_txt`.
+
+### Parho: importing a transcript
+
+When a caption file already exists (a YouTube VTT, a subtitle track, something
+`likho` wrote), `parho` (read) makes it a transcript without running ASR, so
+`dekho`, `dikhao` and `likho` work on it:
+
+```bash
+dsj parho recording.mov captions.vtt -o transcript.json
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | where the transcript JSON goes (required) |
+
+The format, SRT, WebVTT or a dsj transcript JSON, is read from the content,
+not the file name. The recording must exist and is named in `audio`, not
+opened. What the file cannot hold is not invented: `model` is `import:srt` or
+`import:vtt`, an SRT sentence is one token spanning its cue, a VTT cue with
+word timestamp tags becomes word tokens with starts but no ends, and no
+imported token has a confidence. Speakers come back from VTT voice tags and
+from the `SPEAKER_01: ` prefix `likho` writes into SRT.
 
 ## Output
 
@@ -608,12 +631,13 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao | likho
+  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
   chunking.py      the chunk loop parakeet-mlx does not provide
   likho.py         likho  -- a transcript out as SRT, WebVTT or text
+  parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
