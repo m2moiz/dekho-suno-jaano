@@ -251,10 +251,19 @@ def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
     float noise of `start + duration`, which 784 of the 2,902 ends carry. On
     `c` a thousandth is far finer than any tint threshold, though about half of
     parakeet's tokens then read 1.0 (1,413 of the 2,902).
+
+    `t` is rounded the same way, and `e` is never written below it (#174). With
+    only `e` rounded, a zero-length token whose start carried float noise wrote
+    `"t": 107.60000000000001, "e": 107.6`: 1 of 806 parakeet tokens and 6 of 745
+    sherpa ones on a 3-minute clip, each a negative length to anything that
+    takes `e - t`. Rounding is monotonic, so the tokens, already sorted by their
+    unrounded starts, stay in order; two that were a hair apart can now share
+    a `t`, which the stable sorts downstream leave as they were.
     """
-    out: dict[str, Any] = {"t": token.start, "w": token.text}
+    t = round(token.start, 3)
+    out: dict[str, Any] = {"t": t, "w": token.text}
     if measured:
-        out["e"] = round(token.end, 3)
+        out["e"] = max(round(token.end, 3), t)
         out["c"] = round(token.confidence, 3)
     return out
 

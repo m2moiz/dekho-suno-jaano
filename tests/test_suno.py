@@ -1205,6 +1205,51 @@ def test_parakeet_tokens_carry_the_decoders_end_and_confidence(
     ]
 
 
+def test_no_written_token_ends_before_it_starts(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """`t` is rounded to the millisecond like `e`, so a zero-length token cannot go negative (#174).
+
+    parakeet emits zero-length tokens for some subword continuations, 8 of 806
+    on a 3-minute clip. `e` was rounded to 3 places and `t` was not, so a start
+    carrying float noise wrote `"t": 107.60000000000001, "e": 107.6`, and a
+    bleep span computed as `e - t` came out negative. 0.1 + 0.2 is the same
+    noise in a smaller number. Read back from the file, the way a consumer
+    reads it.
+    """
+    noisy = 0.1 + 0.2
+    fake_parakeet(
+        tokens=[
+            FakeToken(0.0, noisy, " see"),
+            FakeToken(noisy, noisy, "s"),
+            FakeToken(0.5, 1.0, " here."),
+        ]
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, diarize=False)
+
+    tokens = [t for s in json.loads(out.read_text())["sentences"] for t in s["tokens"]]
+    assert [(t["t"], t["e"]) for t in tokens] == [(0.0, 0.3), (0.3, 0.3), (0.5, 1.0)]
+    assert all(t["e"] >= t["t"] for t in tokens)
+    assert [t["w"] for t in tokens] == [" see", "s", " here."]
+    assert [t["charOffset"] for t in tokens] == [0, 4, 5]
+
+
+def test_an_end_the_decoder_put_before_the_start_is_written_at_the_start() -> None:
+    """`e >= t` holds for any token, not only for the float noise #174 found.
+
+    A negative duration has not been seen from either chunk engine; the guard
+    costs a max() and makes the promise payload.md states true by construction.
+    """
+    from dsj.suno import _token  # pyright: ignore[reportPrivateUsage]
+
+    backwards = AlignedToken(id=1, text=" x", start=2.0, duration=-0.25, confidence=1.0)
+    assert _token(backwards, measured=True) == {"t": 2.0, "w": " x", "e": 2.0, "c": 1.0}
+
+
 class _SherpaStream:
     """What sherpa-onnx hands back for one stream: the four per-token lists dsj reads.
 

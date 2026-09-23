@@ -157,6 +157,58 @@ def test_words_carry_whispers_end_and_probability_shifted_with_the_window() -> N
     assert token["e"] > token["t"]
 
 
+@pytest.mark.usefixtures("already_extracted_media")
+def test_no_written_whisper_word_ends_before_it_starts(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #174: `t` rounded like `e`, so `e >= t` on every word.
+
+    whisper gives zero-length words often, 159 of 686 on a 3-minute clip. One
+    whose start carries float noise wrote an `e` below its own `t` once `e` was
+    rounded and `t` was not.
+    """
+    noisy = 0.1 + 0.2
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": " a b c",
+                    "words": [
+                        {"word": " a", "start": 0.0, "end": noisy, "probability": 0.9},
+                        {"word": " b", "start": noisy, "end": noisy, "probability": 0.9},
+                        {"word": " c", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, engine="whisper", diarize=False)
+
+    [sentence] = json.loads(out.read_text())["sentences"]
+    tokens = sentence["tokens"]
+    assert [(t["t"], t["e"]) for t in tokens] == [(0.0, 0.3), (0.3, 0.3), (0.5, 1.0)]
+    assert all(t["e"] >= t["t"] for t in tokens)
+    assert [t["w"] for t in tokens] == [" a", " b", " c"]
+
+
+def test_a_whisper_word_ending_before_it_starts_is_written_at_its_start() -> None:
+    """`e >= t` by construction, whatever the alignment hands back (#174)."""
+    segment = {
+        "start": 1.0,
+        "end": 1.5,
+        "text": " x",
+        "words": [{"word": " x", "start": 1.0, "end": 0.75, "probability": 1.0}],
+    }
+    [sentence] = whisper_mod._sentences_from([segment], 0.0)  # pyright: ignore[reportPrivateUsage]
+    [token] = sentence["tokens"]
+    assert (token["t"], token["e"]) == (1.0, 1.0)
+
+
 def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> None:
     """Word times arrive as np.float64, which json.dumps refuses.
 

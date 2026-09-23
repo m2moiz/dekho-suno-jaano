@@ -141,6 +141,11 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     AlignedSentence's sort does for parakeet. It has to come first: the
     sentence's `text` is these words joined (#106), and `charOffset` indexes
     that text. Stable, so words sharing a start keep whisper's order.
+
+    `t` is rounded to 3 places as `e` is, and `e` is never written below it
+    (#174): with only `e` rounded, a zero-length word whose shifted start
+    carried float noise ended before it began. Rounding after the sort cannot
+    reorder the words, because it never moves one start past another.
     """
     out: list[dict[str, Any]] = []
     for segment in segments:
@@ -148,22 +153,23 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
             cast("list[dict[str, Any]]", segment.get("words") or []),
             key=lambda w: float(w["start"]),
         )
+        tokens: list[dict[str, Any]] = []
+        for w in words:
+            t = round(float(w["start"]) + offset, 3)
+            tokens.append(
+                {
+                    "t": t,
+                    "w": str(w["word"]),
+                    "e": max(round(float(w["end"]) + offset, 3), t),
+                    "c": round(float(w["probability"]), 3),
+                }
+            )
         out.append(
             {
                 "start": float(segment["start"]) + offset,
                 "end": float(segment["end"]) + offset,
                 "text": str(segment["text"]).strip(),
-                "tokens": with_char_offsets(
-                    [
-                        {
-                            "t": float(w["start"]) + offset,
-                            "w": str(w["word"]),
-                            "e": round(float(w["end"]) + offset, 3),
-                            "c": round(float(w["probability"]), 3),
-                        }
-                        for w in words
-                    ]
-                ),
+                "tokens": with_char_offsets(tokens),
             }
         )
     return out

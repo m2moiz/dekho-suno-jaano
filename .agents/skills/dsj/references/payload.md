@@ -55,9 +55,9 @@ Inside a token:
 
 | Field | Type | Notes |
 |---|---|---|
-| `t` | float seconds | When the token starts. Always present. |
+| `t` | float seconds | When the token starts, in whole milliseconds: rounded to 3 places, as `e` is. Always present. |
 | `w` | string | The token's text, leading space kept. `"".join(t.w)` over a sentence's tokens is exactly its `text`. Always present. |
-| `e` | float seconds | When the token ends. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. Measured by the decoder or inferred after it, depending on the engine: see below. |
+| `e` | float seconds | When the token ends. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. In whole milliseconds like `t`, and never less than it, so `e - t` is a length and can be `0`. Measured by the decoder or inferred after it, depending on the engine: see below. |
 | `c` | float, 0 to 1 | How sure the model was of the token; higher is surer. Rounded to 3 places. What it is computed from depends on the engine, below, so a threshold tuned on one engine does not carry to another. |
 | `charOffset` | int | Where `w` starts in the sentence's `text`, so `text[charOffset:charOffset + len(w)]` is `w`. It maps a click or a selection on rendered text back to a token. Counted in code points, as Python's `len` counts; JavaScript counts UTF-16 units, and the two differ for any character outside the Basic Multilingual Plane, such as an emoji. Written under every engine, and absent from transcripts written before it existed. |
 
@@ -77,6 +77,14 @@ Test for the key, never assume it. `e` and `c` are absent from every transcript 
 before they existed: parakeet's before #56, sherpa's and whisper's before #77. An import
 never has `c`, and has `e` only on a token that spans its whole cue. `t` and `w` are in
 all of them.
+
+Transcripts written before #174 have an unrounded `t`, `107.60000000000001` for instance,
+and on a zero-length token that can sit a hair above its rounded `e`. Clamp `e - t` at
+zero when reading one of those.
+
+Zero-length tokens are real, not an error: parakeet emits them for some subword
+continuations, and whisper times nearly one word in four that way on mixed English and
+Urdu (159 of 686 on a 3-minute clip). A zero-length word cannot be muted by its own span.
 
 An imported transcript that names speakers (VTT voice tags, or SRT's `SPEAKER_01: `
 prefix) carries `speakers` and a `speaker` per sentence like a labelled one, with
