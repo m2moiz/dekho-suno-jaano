@@ -29,7 +29,8 @@ Four keys, always, in this order:
       "start": 12.34,
       "end": 15.02,
       "text": " See this column here.",
-      "tokens": [{"t": 12.34, "w": " See"}, {"t": 12.51, "w": " this"}]
+      "tokens": [{"t": 12.34, "w": " See", "e": 12.43, "c": 0.998},
+                 {"t": 12.51, "w": " this", "e": 12.67, "c": 0.941}]
     }
   ]
 }
@@ -48,7 +49,22 @@ Inside a sentence:
 |---|---|---|
 | `start`, `end` | float seconds | |
 | `text` | string | Keeps the engine's leading space under parakeet and sherpa. Whisper strips it. |
-| `tokens` | array of `{"t": float, "w": string}` | `t` is an absolute second, `w` keeps its leading space, so `"".join(t.w)` rebuilds the sentence. Can be `[]` for a whisper segment with no words. |
+| `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
+
+Inside a token:
+
+| Field | Type | Notes |
+|---|---|---|
+| `t` | float seconds | When the token starts. Always present. |
+| `w` | string | The token's text. Keeps its leading space, so `"".join(t.w)` rebuilds the sentence. Always present. |
+| `e` | float seconds | When the token ends, as the decoder timed it. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. |
+| `c` | float, 0 to 1 | The decoder's confidence in the token: one minus the normalised entropy of its distribution at that step. Rounded to 3 places, so about half of parakeet's tokens read `1.0`. |
+
+**`e` and `c` are parakeet's only.** Test for the key, never assume it. They are absent
+under sherpa, whose end is the next token's start and whose confidence is a default, so
+writing either would present a guess as a measurement. They are absent under whisper,
+which does not carry them through yet. And they are absent from every transcript written
+before they existed. `t` and `w` are in all of them.
 
 `tokens` is the load-bearing half. Speaker labelling votes tokens against the diarizer's
 turns, so an engine that could only give sentence boundaries could be transcribed but not

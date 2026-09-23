@@ -16,7 +16,14 @@ function-local imports pick the patches up.
 
 from __future__ import annotations
 
-__all__ = ["DEFAULT_MODEL", "available", "fingerprint_fields", "load", "wrap"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "MEASURES_END_AND_CONFIDENCE",
+    "available",
+    "fingerprint_fields",
+    "load",
+    "wrap",
+]
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -29,6 +36,13 @@ if TYPE_CHECKING:
     from parakeet_mlx.alignment import AlignedResult as UpstreamResult
 
 DEFAULT_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
+
+# Whether a token's `end` and `confidence` are the decoder's own, and so worth
+# writing into the transcript (dsj/suno.py reads this). They are here: TDT
+# decodes frame by frame, so a token's duration is the frames it was emitted
+# over, and its confidence is one minus the normalised entropy of the
+# decoder's distribution at that step (parakeet_mlx/parakeet.py:579-584).
+MEASURES_END_AND_CONFIDENCE = True
 
 
 def available() -> str | None:

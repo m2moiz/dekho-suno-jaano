@@ -127,8 +127,8 @@ class Transcription(NamedTuple):
     """What an engine hands back to `suno.transcribe`.
 
     `sentences` are already in the payload's shape -- `{start, end, text,
-    tokens: [{t, w}]}` -- so the caller writes them out rather than converting
-    them.
+    tokens: [{t, w}]}`, each token also carrying `e` and `c` when the engine
+    measured them -- so the caller writes them out rather than converting them.
     """
 
     text: str

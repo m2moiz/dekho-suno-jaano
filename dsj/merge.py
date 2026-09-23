@@ -111,10 +111,12 @@ def _distance(turn: Turn, t: float) -> float:
 def label_sentence(sentence: Mapping[str, Any], index: TurnIndex) -> int:
     """The speaker index for one sentence, by majority of its tokens.
 
-    `sentence` is the dict transcribe() writes: a "start" and a "tokens" list of
-    {"t": seconds, "w": text}. Token end times are not in the transcript -- they
-    were dropped for file size -- so each token votes once by its start, not
-    weighted by how long it took to say.
+    `sentence` is the dict transcribe() writes: a "start" and a "tokens" list
+    whose every entry has "t", its start in seconds. Each token votes once, by
+    that start, not weighted by how long it took to say. Only parakeet writes a
+    token's end ("e"); whisper and sherpa do not yet (#77), so a vote weighted
+    by duration would count the same speech differently depending on the
+    engine that transcribed it.
     """
     votes: Counter[int] = Counter()
     first_vote: dict[int, float] = {}

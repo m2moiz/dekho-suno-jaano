@@ -201,6 +201,29 @@ def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
     )
 
 
+def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
+    """One token as the transcript writes it: `t` and `w`, and `e` and `c` if measured.
+
+    `measured` is the engine's MEASURES_END_AND_CONFIDENCE. parakeet's decoder
+    times each token and scores it. sherpa's end is the next token's start and
+    its confidence a default, and neither is written as though it were measured.
+
+    Both new values are rounded to 3 places, for file size, which is also what
+    parakeet-mlx's own JSON writer does (parakeet_mlx/cli.py:143-150). Measured
+    on the 2,902 real parakeet tokens in scratch/gate_resumed.json.ckpt, the two
+    keys grow the sentences 121% unrounded and 70% rounded. Nothing is lost on
+    `e`: every start and end there sits on a 10 ms grid, so what goes is the
+    float noise of `start + duration`, which 784 of the 2,902 ends carry. On
+    `c` a thousandth is far finer than any tint threshold, though about half of
+    parakeet's tokens then read 1.0 (1,413 of the 2,902).
+    """
+    out: dict[str, Any] = {"t": token.start, "w": token.text}
+    if measured:
+        out["e"] = round(token.end, 3)
+        out["c"] = round(token.confidence, 3)
+    return out
+
+
 def _with_speaker(sentence: Sentence, speaker: int) -> Sentence:
     """The same sentence with `speaker` inserted directly after `end`.
 
@@ -509,6 +532,9 @@ def transcribe(
                 skip_before=skip_before,
                 on_chunk=on_chunk,
             )
+            # Read off the engine module, like everything engine-specific here:
+            # parakeet and sherpa share this branch and differ on exactly this.
+            measured = cast("bool", eng_mod.MEASURES_END_AND_CONFIDENCE)
             transcription = Transcription(
                 text=result.text,
                 sentences=[
@@ -516,7 +542,7 @@ def transcribe(
                         "start": s.start,
                         "end": s.end,
                         "text": s.text,
-                        "tokens": [{"t": t.start, "w": t.text} for t in s.tokens],
+                        "tokens": [_token(t, measured) for t in s.tokens],
                     }
                     for s in result.sentences
                 ],

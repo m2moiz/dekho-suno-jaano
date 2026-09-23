@@ -16,7 +16,14 @@ return empty about a fifth of the time (sherpa-onnx#3267).
 
 from __future__ import annotations
 
-__all__ = ["DEFAULT_MODEL", "available", "fingerprint_fields", "load", "wrap"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "MEASURES_END_AND_CONFIDENCE",
+    "available",
+    "fingerprint_fields",
+    "load",
+    "wrap",
+]
 
 import subprocess
 from dataclasses import dataclass
@@ -34,6 +41,13 @@ SAMPLE_RATE = 16000
 # sherpa reports token START times only, so a token's duration is the gap to the
 # next one. The last token has no next, and this is what it gets instead.
 _LAST_TOKEN_S = 0.08
+
+# False, which keeps both out of the transcript (dsj/suno.py reads this). The
+# `end` decode() builds is the next token's start, so a pause is absorbed into
+# the word before it, and `confidence` is never passed, so it is
+# AlignedToken's default 1.0. Written out, both would read as measurements.
+# #77 is where sherpa gets numbers worth writing.
+MEASURES_END_AND_CONFIDENCE = False
 
 
 def available() -> str | None:

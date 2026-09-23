@@ -282,7 +282,9 @@ Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
       "end": 15.02,
       "speaker": 0,                     // index into `speakers`
       "text": " See this column here.",
-      "tokens": [{"t": 12.34, "w": " See"}, {"t": 12.51, "w": " this"}]
+      // e = token end, c = confidence: parakeet only, see payload.md
+      "tokens": [{"t": 12.34, "w": " See", "e": 12.43, "c": 0.998},
+                 {"t": 12.51, "w": " this", "e": 12.67, "c": 0.941}]
     }
   ],
 

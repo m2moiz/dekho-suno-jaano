@@ -70,6 +70,10 @@ class FakeToken:
     start: float
     end: float
     text: str
+    # AlignedToken's own default. A test that asserts the transcript carries
+    # the decoder's confidence sets something else, or a serializer writing a
+    # constant 1.0 would pass it.
+    confidence: float = 1.0
 
 
 class FakeModel:
@@ -124,7 +128,13 @@ class FakeModel:
 
         self.mels.append(mel)
         decoded = [
-            AlignedToken(id=i, text=t.text, start=t.start, duration=t.end - t.start)
+            AlignedToken(
+                id=i,
+                text=t.text,
+                start=t.start,
+                duration=t.end - t.start,
+                confidence=t.confidence,
+            )
             for i, t in enumerate(self.tokens)
         ]
         cfg: Any = (decoding_config.sentence if decoding_config else None) or SentenceConfig()

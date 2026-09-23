@@ -12,9 +12,12 @@ the real ones from dsj/chunking.py.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 from conftest import FakeToken
 
@@ -39,9 +42,13 @@ RATE = 16_000
 
 
 def _tokens() -> list[FakeToken]:
-    """One sentence ending at 750.0s -- the trailing '.' is what closes it."""
+    """One sentence ending at 750.0s -- the trailing '.' is what closes it.
+
+    The first token's confidence is not the default 1.0, so the pinned token
+    shape below can tell the decoder's number from a constant.
+    """
     return [
-        FakeToken(0.0, 0.4, "see"),
+        FakeToken(0.0, 0.4, "see", confidence=0.5),
         FakeToken(0.5, 1.0, " this"),
         FakeToken(1.1, 1.6, " column"),
         FakeToken(1.7, 750.0, " here."),
@@ -133,7 +140,7 @@ def test_transcribe_writes_the_timestamped_index(
     assert on_disk["sentences"][0]["start"] == 0.0
     assert on_disk["sentences"][0]["end"] == 750.0
     assert on_disk["sentences"][0]["text"] == "see this column here."
-    assert on_disk["sentences"][0]["tokens"][0] == {"t": 0.0, "w": "see"}
+    assert on_disk["sentences"][0]["tokens"][0] == {"t": 0.0, "w": "see", "e": 0.4, "c": 0.5}
     assert on_disk["audio"] == str(fake_media)
 
 
@@ -837,3 +844,103 @@ def test_speaker_turns_run_forwards_too(
     turns = [(s["speaker"], s["start"]) for s in payload["sentences"]]
     firsts = [start for i, (spk, start) in enumerate(turns) if i == 0 or turns[i - 1][0] != spk]
     assert firsts == sorted(firsts)
+
+
+# --- what a token carries ------------------------------------------------
+
+
+def test_parakeet_tokens_carry_the_decoders_end_and_confidence(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """`e` is the token's own end, not the next token's start, and `c` is the decoder's.
+
+    The gap after "see" is the case that matters. A bleep cut to the next start
+    would run 0.1s into the pause here, and seconds across a real one. Dropping
+    either key again, or writing a constant in place of the decoder's number,
+    fails this.
+    """
+    fake_parakeet(
+        tokens=[
+            FakeToken(0.0, 0.4, "see", confidence=0.5),
+            FakeToken(0.5, 1.0, " this", confidence=0.12345678),
+            FakeToken(3.0, 3.5, " here."),
+        ]
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    tokens = payload["sentences"][0]["tokens"]
+    # Rounded to 3 places on the way out: the second confidence is written as
+    # 0.123. The third is AlignedToken's default and parakeet does report it.
+    assert [(t["t"], t["e"], t["c"]) for t in tokens] == [
+        (0.0, 0.4, 0.5),
+        (0.5, 1.0, 0.123),
+        (3.0, 3.5, 1.0),
+    ]
+
+
+class _SherpaStream:
+    """What sherpa-onnx hands back for one stream: token texts and start times, nothing else."""
+
+    def __init__(self, tokens: list[str], timestamps: list[float]) -> None:
+        self.result = SimpleNamespace(tokens=tokens, timestamps=timestamps)
+
+    def accept_waveform(self, sample_rate: int, samples: Any) -> None:
+        """Take the audio and ignore it; the result is fixed."""
+
+
+class _SherpaRecognizer:
+    """Stands in for sherpa_onnx.OfflineRecognizer, which dsj.sherpa.wrap accepts."""
+
+    def __init__(self, tokens: list[str], timestamps: list[float]) -> None:
+        self.tokens = tokens
+        self.timestamps = timestamps
+
+    def create_stream(self) -> _SherpaStream:
+        return _SherpaStream(self.tokens, self.timestamps)
+
+    def decode_stream(self, stream: _SherpaStream) -> None:
+        """Nothing to decode: the stream already holds its result."""
+
+
+def test_sherpa_tokens_leave_out_the_end_and_confidence_nobody_measured(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sherpa engine reports token starts only; dsj/sherpa.py makes up the rest.
+
+    Its end is the next token's start, which swallows the three-second pause
+    after " see" below, and its confidence is AlignedToken's default 1.0.
+    Writing either would present a guess as a measurement, so the transcript
+    leaves both out until #77 gives sherpa numbers worth writing.
+
+    The real sherpa decode runs here; only the recognizer under it is faked.
+    """
+    import dsj.sherpa as sherpa_mod
+
+    loaded = sherpa_mod.wrap(_SherpaRecognizer([" see", " this."], [0.0, 3.0]))
+
+    def load_audio(path: Path) -> Any:
+        return np.zeros(10 * RATE, dtype=np.float32)
+
+    def load(model_id: str) -> Any:
+        return loaded
+
+    def fingerprint_fields() -> dict[str, str]:
+        return {"sherpa_onnx_version": "0.0.0-fake"}
+
+    # A stand-in module, so available() says yes without loading the native
+    # library, which is absent wherever the sherpa extra is.
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", ModuleType("sherpa_onnx"))
+    monkeypatch.setattr(loaded, "load_audio", load_audio)
+    monkeypatch.setattr(sherpa_mod, "load", load)
+    monkeypatch.setattr(sherpa_mod, "fingerprint_fields", fingerprint_fields)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="sherpa", diarize=False)
+
+    tokens = [t for s in payload["sentences"] for t in s["tokens"]]
+    assert [(t["t"], t["w"]) for t in tokens] == [(0.0, " see"), (3.0, " this.")]
+    assert [set(t) for t in tokens] == [{"t", "w"}, {"t", "w"}]
