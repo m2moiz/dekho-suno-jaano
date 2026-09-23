@@ -27,7 +27,6 @@ dependencies = [
     # that imports it is a module that depends on it, and an indirect
     # dependency can vanish under an upstream release with no warning.
     "numpy>=2.0",
-    "parakeet-mlx>=0.5.2",
     "pydantic>=2.13.4",
     # Already present transitively via parakeet-mlx, which is exactly why it
     # gets declared: a transitive dependency can vanish under an upstream
@@ -59,6 +58,29 @@ whisper = [
 ]
 diarize = [
     "senko>=0.1.0,<0.2",
+]
+# The default engine, an extra since the Android port: MLX has no wheels off
+# Apple Silicon, and a hard dependency on it is why the base package could not
+# even install elsewhere. No environment markers on purpose -- asking for this
+# extra on the wrong machine must fail loudly at resolve time, not succeed
+# while installing nothing.
+parakeet = [
+    "parakeet-mlx>=0.5.2",
+]
+# The documented bundles. Installing dsj means choosing one -- a bare install
+# is a core with no engine, which transcribes nothing and says so. mac carries
+# both engines and the diarizer because that is the working Mac setup; android
+# arrives with the sherpa engine.
+mac = [
+    "dsj[parakeet,whisper,diarize]",
+]
+# The phone bundle. No diarizer: senko is CoreML and there is no Android path,
+# so transcripts there are unlabelled by design rather than by accident.
+sherpa = [
+    "sherpa-onnx>=1.13.6",
+]
+android = [
+    "dsj[sherpa]",
 ]
 
 [dependency-groups]
@@ -147,9 +169,20 @@ convention = "google"
 # strict, which demands the same annotations. Doing that work twice, against two
 # tools, would be incoherent -- so the ANN batch is deferred to 3b and done once.
 "tests/**" = ["D1", "ARG"]
+# Vendored verbatim from parakeet-mlx (see its module docstring). Docstring
+# rules would force edits to upstream code whose value is being byte-faithful;
+# the module docstring carries the documentation for the whole file.
+# RUF001 is the load-bearing one: the fullwidth 。？！ are CJK sentence
+# enders the splitter checks for -- "fixing" them to ASCII would be a
+# silent behaviour change, exactly what a vendored file must not do.
+"dsj/alignment.py" = ["D101", "D102", "D103", "D105", "C413", "RUF001", "SIM212", "RET505"]
 # scratch/*.py is tracked code (working probes, not shipped), so ruff lints it.
 # Fix the mechanical ones; ignore the classes that do not matter in a probe.
 "scratch/**" = ["ANN", "D", "ARG", "B905", "E501", "SIM115", "PTH123"]
+# Attribute expressions ARE the whitelist format vulture reads; B018 calls
+# each one a useless expression, which is precisely what they are to Python
+# and precisely not what they are to vulture.
+"vulture_whitelist.py" = ["B018"]
 
 [tool.mutmut]
 # Keys verified against mutmut 3.7.0's own configuration.py, not against a

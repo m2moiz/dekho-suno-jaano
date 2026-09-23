@@ -83,9 +83,11 @@ the interesting part.
 
 ## Requirements
 
-- **macOS on Apple Silicon.** ASR runs through [`parakeet-mlx`][pmlx], and the
-  whisper engine through `mlx-whisper`. Both are Metal-backed; there is no CPU
-  or CUDA path.
+- **A platform with an engine bundle.** The core is portable Python, but the
+  speech engines are not: on macOS both ASR engines run through Metal
+  ([`parakeet-mlx`][pmlx] and `mlx-whisper`), which is Apple Silicon only.
+  Installing dsj means choosing a bundle -- there is deliberately no default,
+  because a dsj with no engine transcribes nothing.
 - **Python 3.12 or 3.13.** Capped deliberately. The diarize extra reaches
   coremltools, which publishes no wheel above 3.13 and no `requires-python` of
   its own; on 3.14 it builds from source into a pure-Python wheel with the
@@ -100,15 +102,15 @@ the interesting part.
 
 ## Install
 
-```bash
-uv tool install git+https://github.com/m2moiz/dekho-suno-jaano
-```
-
-That puts `dsj` on your `PATH`. With speaker labels (see the caveats below):
+Pick the bundle for your machine. On a Mac:
 
 ```bash
-uv tool install "dsj[diarize] @ git+https://github.com/m2moiz/dekho-suno-jaano"
+uv tool install "dsj[mac] @ git+https://github.com/m2moiz/dekho-suno-jaano"
 ```
+
+That puts `dsj` on your `PATH` with both engines and the diarizer. There is no
+bare install line on purpose: `uv tool install dsj` succeeds but carries no
+engine, and the first `dsj suno` tells you which extra to add.
 
 Model weights (~2.4 GB) download on first run and are cached by
 `huggingface_hub`.
@@ -179,11 +181,13 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 
 Roman Urdu is a **prompt**, not a setting. whisper writes Urdu in Urdu script by
 default; seeding the decoder with a Roman Urdu example makes it emit Latin, and
-whisper's own condition-on-previous-text carries that across windows. Measured
-on 116s of Urdu speech: **275 of 277 words came back in Latin**, English words
-left in English where they were spoken in English — which is the point, for
-speech that switches mid-sentence. `--roman-urdu` is that prompt plus
-`--language ur`; `--prompt` takes your own.
+whisper's own condition-on-previous-text carries that across windows, for as
+long as the prompt survives (it does not on long recordings, see below).
+**UNVERIFIED, no reproducing script in this repo (m2moiz/dekho-suno-jaano#100):**
+measured on 116s of Urdu speech, 275 of 277 words were claimed to come back in
+Latin, English words left in English where they were spoken in English, which
+is the point, for speech that switches mid-sentence. `--roman-urdu` is that
+prompt plus `--language ur`; `--prompt` takes your own.
 
 The model matters more than it looks. The full `whisper-large-v3` ignores the
 prompt outright — 280 of 280 words in Urdu script, and 218s rather than 85s for
@@ -197,7 +201,8 @@ from. It runs at ~1.4x realtime against parakeet's ~13x. All three are fine for
 a voice note and wrong for an hour of lecture, which is why parakeet stays the
 default.
 
-It is an extra, because mlx-whisper pulls torch (~250 MB):
+It is part of the `mac` bundle; standalone installs can pick it alone
+(mlx-whisper pulls torch, ~250 MB):
 
 ```bash
 uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"
@@ -289,6 +294,16 @@ Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
                  "grid": [128, 84], "frames_sampled": 1997, "source": "..."}
 }
 ```
+
+**`sentences` runs earliest to latest, and so do the `tokens` inside each one.**
+A reader may walk the list from the top and stop at the first `start` past the
+window it cares about. That is a promise about *order*, not about *accuracy*: a
+recording longer than 120 s is transcribed in overlapping pieces and stitched,
+and the stitch can mistime a word at a seam by a few seconds, so the sentence
+that word belongs to sorts to where its earliest token claims it began. Measured
+on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
+order before the sort, the worst by 5.72 s. Recordings short enough to need no
+stitching were already in order.
 
 Two things about this shape are deliberate:
 

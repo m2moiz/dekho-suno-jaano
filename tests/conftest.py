@@ -61,9 +61,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 class FakeToken:
     """A token spec, converted to a real AlignedToken on every generate() call.
 
-    Fresh objects per call, deliberately: transcribe_chunked mutates
-    token.start in place to apply the chunk offset, so a shared instance would
-    accumulate offsets across chunks.
+    Fresh objects per call, a habit kept from when transcribe_chunked mutated
+    token.start in place; today the loop constructs new dsj tokens at the
+    decode boundary, but sharing instances across calls would still couple
+    chunks through object identity for no benefit.
     """
 
     start: float
@@ -160,7 +161,7 @@ def fake_parakeet(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeModel]:
 
         monkeypatch.setattr("parakeet_mlx.from_pretrained", from_pretrained)
         monkeypatch.setattr("parakeet_mlx.audio.load_audio", load_audio)
-        monkeypatch.setattr("dsj.chunking.get_logmel", get_logmel)
+        monkeypatch.setattr("parakeet_mlx.audio.get_logmel", get_logmel)
         return model
 
     return install
@@ -312,7 +313,7 @@ def no_real_diarizer(fake_turns: Callable[..., list[Path]]) -> None:
 
 
 @pytest.fixture(scope="session")
-def chunked_audio_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def chunked_audio_path() -> Path:
     """A real clip long enough to cross several chunk boundaries."""
     if not SOURCE_AUDIO.exists():
         pytest.skip(f"{SOURCE_AUDIO} not present")

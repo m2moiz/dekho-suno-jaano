@@ -1,17 +1,18 @@
-"""Re-drive parakeet-mlx's chunk loop so a run can be resumed.
+"""The resumable chunk loop, generic over any engine that decodes statelessly.
 
-BaseParakeet.transcribe accumulates merged tokens in a function-local, and its
-chunk_callback both fires before the chunk is decoded and receives only sample
-counts. Neither seeding nor observing that accumulation is possible from
-outside, so the loop is reproduced here.
+Born as a re-drive of parakeet-mlx's own loop (its transcribe() accumulates
+merged tokens in a function-local that can be neither seeded nor observed, so
+resume required reproducing it). Since the extraction it is engine-free: the
+loop's real job -- boundaries, offsets, overlap merging, checkpoint hooks --
+was never speech recognition, and any ChunkEngine (dsj.asr) can drive it. The
+engine's contract is one method: decode a slice of samples into dsj tokens
+timed from the slice's own start.
 
-The overlap merge is NOT reproduced. This module calls the library's own
-merge_longest_contiguous and merge_longest_common_subsequence, in the same
-order and with the same arguments, so the hard part stays upstream. What that
-buys in correctness it costs in coupling: this loop mirrors parakeet-mlx 0.5.2
-(parakeet.py:164-221) and will drift silently if upstream changes. The
-equivalence test in tests/test_chunking.py is what makes that drift loud, and
-pyproject pins the version rather than floating it.
+The overlap merge is dsj's own (dsj.alignment, vendored verbatim from
+parakeet-mlx 0.5.2). The equivalence test in tests/test_chunking.py proves the
+whole loop faithful against upstream's transcribe() while parakeet-mlx is
+installed; tests/test_alignment.py exercises the merge math directly with no
+model at all.
 """
 
 from __future__ import annotations
@@ -22,43 +23,20 @@ __all__ = [
 ]
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any
 
-from parakeet_mlx import DecodingConfig
-from parakeet_mlx.alignment import (
+from dsj.alignment import (
     AlignedResult,
     AlignedToken,
+    SentenceConfig,
     merge_longest_common_subsequence,
     merge_longest_contiguous,
     sentences_to_result,
     tokens_to_sentences,
 )
-from parakeet_mlx.audio import (
-    get_logmel as _get_logmel_untyped,  # pyright: ignore[reportUnknownVariableType]  # mlx's core is a compiled extension with no stubs, so mx.array -- and this signature with it -- is Unknown at the import itself
-)
 
 if TYPE_CHECKING:
-    from parakeet_mlx import BaseParakeet
-    from parakeet_mlx.audio import PreprocessArgs
-
-# The log mel is an mx.array, which has no stub, so it is Any to a type checker
-# no matter what. Naming that boundary once here keeps the Unknown from
-# spreading into every expression the chunk loop derives from it.
-get_logmel = cast("Callable[[Any, PreprocessArgs], Any]", _get_logmel_untyped)
-
-
-class _Generates(Protocol):
-    """The one method this module calls on a model.
-
-    BaseParakeet.generate is annotated upstream, but its `mel: mx.array`
-    parameter resolves to Unknown for the reason above, which makes every call
-    through it partially unknown. Restating the signature with the mel as Any
-    keeps the useful half -- the list[AlignedResult] return -- typed.
-    """
-
-    def generate(
-        self, mel: Any, *, decoding_config: DecodingConfig = ...
-    ) -> list[AlignedResult]: ...
+    from dsj.asr import ChunkEngine
 
 
 def chunk_starts(total_samples: int, chunk_samples: int, overlap_samples: int) -> list[int]:
@@ -71,7 +49,7 @@ def chunk_starts(total_samples: int, chunk_samples: int, overlap_samples: int) -
 
 
 def transcribe_chunked(
-    model: BaseParakeet,
+    engine: ChunkEngine,
     audio_data: Any,
     *,
     chunk_s: float,
@@ -79,7 +57,7 @@ def transcribe_chunked(
     start_tokens: list[AlignedToken] | None = None,
     skip_before: int = 0,
     on_chunk: Callable[[int, int, int, list[AlignedToken]], None] | None = None,
-    decoding_config: DecodingConfig | None = None,
+    sentence: SentenceConfig | None = None,
 ) -> AlignedResult:
     """Transcribe already-loaded audio, chunk by chunk, resumably.
 
@@ -92,10 +70,9 @@ def transcribe_chunked(
     chunks overlap: a chunk's end is past the following chunk's start, so
     resuming from an end would skip one whole chunk.
     """
-    cfg = decoding_config or DecodingConfig()
-    rate = model.preprocessor_config.sample_rate
+    rate = engine.sample_rate
 
-    # Computed exactly as the library does, so int() truncation lands the same
+    # Computed exactly as parakeet-mlx does, so int() truncation lands the same
     # way on geometries that are not a whole number of samples.
     chunk_samples = int(chunk_s * rate)
     overlap_samples = int(overlap_s * rate)
@@ -107,46 +84,47 @@ def transcribe_chunked(
     for i, start in enumerate(starts):
         end = min(start + chunk_samples, total)
 
-        if end - start < model.preprocessor_config.hop_length:
-            break  # upstream's guard against a zero-length log mel
+        if end - start < engine.min_chunk_samples:
+            break  # the engine's guard against a zero-length feature window
 
         if start < skip_before:
             continue  # already merged into start_tokens by an earlier run
 
-        chunk_mel = get_logmel(audio_data[start:end], model.preprocessor_config)
-        chunk_result = cast(_Generates, model).generate(chunk_mel, decoding_config=cfg)[0]
-
-        # generate() decodes each chunk from a fresh decoder state -- it passes
-        # neither last_token nor hidden_state -- so a chunk's tokens depend on
+        # A ChunkEngine decodes each chunk from a fresh decoder state -- no
+        # hidden state crosses this call -- so a chunk's tokens depend on
         # nothing but its own audio. That is what makes resuming mid-file give
-        # the same answer as never having stopped.
+        # the same answer as never having stopped, and it is the property the
+        # protocol's docstring demands of every implementation.
+        #
+        # The engine times tokens from the chunk's own start; the offset is
+        # applied here, in construction. Same float arithmetic as the original
+        # in-place walk: __post_init__ computes end = (start + offset) +
+        # duration, which is what `token.start += offset; token.end =
+        # token.start + duration` did. The golden checkpoint holds this to the
+        # byte.
         offset = start / rate
-        for sentence in chunk_result.sentences:
-            for token in sentence.tokens:
-                token.start += offset
-                token.end = token.start + token.duration
+        chunk_tokens = [
+            AlignedToken(
+                id=token.id,
+                text=token.text,
+                start=token.start + offset,
+                duration=token.duration,
+                confidence=token.confidence,
+            )
+            for token in engine.decode(audio_data[start:end])
+        ]
 
         if all_tokens:
-            # Both merges are unannotated upstream and build their result in a
-            # bare list, so their inferred return carries an Unknown element.
-            # The elements are AlignedToken by construction -- every branch
-            # returns slices of the two lists passed in.
             try:
-                all_tokens = cast(
-                    "list[AlignedToken]",
-                    merge_longest_contiguous(
-                        all_tokens, chunk_result.tokens, overlap_duration=overlap_s
-                    ),
+                all_tokens = merge_longest_contiguous(
+                    all_tokens, chunk_tokens, overlap_duration=overlap_s
                 )
             except RuntimeError:
-                all_tokens = cast(
-                    "list[AlignedToken]",
-                    merge_longest_common_subsequence(
-                        all_tokens, chunk_result.tokens, overlap_duration=overlap_s
-                    ),
+                all_tokens = merge_longest_common_subsequence(
+                    all_tokens, chunk_tokens, overlap_duration=overlap_s
                 )
         else:
-            all_tokens = chunk_result.tokens
+            all_tokens = chunk_tokens
 
         if on_chunk is not None:
             # The following boundary, or the end of the audio if this was the
@@ -154,4 +132,4 @@ def transcribe_chunked(
             next_start = starts[i + 1] if i + 1 < len(starts) else total
             on_chunk(end, next_start, total, all_tokens)
 
-    return sentences_to_result(tokens_to_sentences(all_tokens, cfg.sentence))
+    return sentences_to_result(tokens_to_sentences(all_tokens, sentence))

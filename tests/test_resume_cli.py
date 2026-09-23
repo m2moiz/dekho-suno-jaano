@@ -19,9 +19,8 @@ import pytest
 from dsj.checkpoint import checkpoint_path_for
 
 if TYPE_CHECKING:
-    from parakeet_mlx import BaseParakeet
-    from parakeet_mlx.alignment import AlignedResult
-
+    from dsj.alignment import AlignedResult
+    from dsj.asr import ChunkEngine
     from dsj.suno import Progress
 
 pytestmark = pytest.mark.slow
@@ -118,7 +117,6 @@ def test_a_mov_resumes_even_though_its_audio_is_a_fresh_temp_wav_each_run(
     chunked_audio_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The failure a wav-only suite cannot see.
@@ -177,10 +175,10 @@ def test_a_mov_resumes_even_though_its_audio_is_a_fresh_temp_wav_each_run(
     # audio_data and the kwargs are Any at the source too: the decoded samples
     # are an mlx array, a compiled extension with no stubs, so transcribe_chunked
     # itself types that parameter Any.
-    def spy(model: BaseParakeet, audio_data: Any, **kwargs: Any) -> AlignedResult:
+    def spy(engine: ChunkEngine, audio_data: Any, **kwargs: Any) -> AlignedResult:
         skip_before: int = kwargs.get("skip_before", 0)
         resumed_from.append(skip_before)
-        return original(model, audio_data, **kwargs)
+        return original(engine, audio_data, **kwargs)
 
     monkeypatch.setattr(chunking, "transcribe_chunked", spy)
     caplog.set_level(logging.INFO, logger="dsj.suno")

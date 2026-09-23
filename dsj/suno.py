@@ -36,18 +36,18 @@ from typing import TYPE_CHECKING, Any, cast
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
 from dsj import media as media_mod
-from dsj.asr import ENGINES, Transcription
+from dsj.asr import ENGINES, Transcription, get_engine
 from dsj.atomic import atomic_write_text
 
-# Names only -- dsj/whisper.py imports mlx-whisper lazily inside its one
-# function, so pulling these two in costs nothing to a run that never asks for
-# the engine, and it keeps `--help` able to print the default.
+# Names only -- both engine modules keep their backends lazy, so pulling
+# these in costs nothing to a run that never asks for the engine, and it
+# keeps `--help` able to print the defaults.
+from dsj.parakeet import DEFAULT_MODEL
 from dsj.whisper import DEFAULT_WHISPER_MODEL
 from dsj.whisper import SAMPLE_RATE as WHISPER_SAMPLE_RATE
 
 if TYPE_CHECKING:
-    from parakeet_mlx import BaseParakeet
-    from parakeet_mlx.alignment import AlignedToken
+    from dsj.alignment import AlignedToken
 
 # The transcript is JSON, so its two nested shapes are plain dicts rather than
 # dataclasses -- json.dumps is the only consumer here, and a schema class would
@@ -62,8 +62,6 @@ type Payload = dict[str, Any]
 # library that cannot be embedded. main() attaches the stderr handler, so the
 # CLI behaves exactly as before.
 logger = logging.getLogger("dsj.suno")
-
-DEFAULT_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 
 # parakeet-mlx defaults chunk_duration to None, which feeds the whole file to
 # Metal in one buffer. An hour of audio asks for ~14.5GB against a ~9.5GB max
@@ -154,6 +152,53 @@ def _make_chunk_callback(
         emit(Progress(current / rate, full / rate, clock(), resumed_from_s))
 
     return chunk_callback
+
+
+def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
+    """`transcription` with its sentences earliest first, and `text` rebuilt to match.
+
+    Returned untouched when the sentences already run forwards, which is every
+    recording short enough to decode in one piece and every engine that makes
+    one pass over the file.
+
+    The disorder this repairs is made at a chunk seam. The overlap merge splices
+    two independently timed decodes of the same audio and checks no join
+    (dsj/alignment.py:242 and :336), so a word the earlier chunk timed can be
+    emitted after a word the later chunk timed. Measured on scratch/meeting.wav
+    by scratch/seam_probe.py, which captures every chunk the real engine decodes
+    and every list the merge returns: 31 backwards steps in 14,394 merged tokens,
+    reaching the transcript as 3 backwards sentences in 664. Reproduced against
+    the transcripts on disk by scratch/order_probe.py: 8 in 1038, 3 in 664, 4 in
+    480, 0 in every recording under one chunk.
+
+    This is a fix at the symptom, deliberately. The cause is the merge, and
+    tests/test_chunking.py holds that merge to the one dsj vendored from
+    parakeet-mlx, so repairing it there is a divergence from upstream rather
+    than a bug fix. Tightening the merge's own pairing tolerance, which is what
+    lets it splice a full stop onto a different full stop seconds away, does not
+    reach it either: scratch/seam_replay.py over the same capture counts 31
+    backwards steps at the shipped 7.5s, 7 at 1.0s and 2 at 0.1s. So the order
+    is put right here and the mistimed word is left mistimed: a sentence at a
+    seam sorts to where its earliest token claims it began, which is up to
+    5.72s before it was actually said.
+
+    Stable, so sentences sharing a start keep the order the engine gave them.
+
+    Args:
+        transcription: What an engine returned, in the order it returned it.
+        joiner: What `text` glues its sentences with. parakeet and sherpa carry
+            a leading space on every sentence and join with nothing; whisper
+            strips its segments (dsj.whisper._sentences_from) and joins them
+            with a space. Re-joining with the other one would leave `text`
+            disagreeing with the sentences it is made of.
+    """
+    starts = [cast("float", s["start"]) for s in transcription.sentences]
+    if starts == sorted(starts):
+        return transcription
+    ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
+    return Transcription(
+        text=joiner.join(str(s["text"]) for s in ordered).strip(), sentences=ordered
+    )
 
 
 def _with_speaker(sentence: Sentence, speaker: int) -> Sentence:
@@ -258,6 +303,7 @@ def transcribe(
     engine: str = "parakeet",
     language: str | None = None,
     prompt: str | None = None,
+    anchor_s: float | None = None,
 ) -> Payload:
     """Transcribe `media`, writing a sentence+token timestamped JSON to `out`.
 
@@ -294,24 +340,11 @@ def transcribe(
             "--language and --prompt are whisper's; parakeet takes neither. "
             "Add --engine whisper, or drop them."
         )
-    # Both upstream signatures default a `dtype` to an mx scalar, and mx ships
-    # no stubs, so each callable resolves partially unknown at the import
-    # itself -- there is no expression to annotate, which is why these two
-    # lines are suppressed rather than fixed. The casts below restate the
-    # two-argument form dsj actually calls, which stops the Unknown at this
-    # boundary instead of letting it spread through every value derived from
-    # the model and the audio. The audio itself stays Any: it is an mx.array.
-    from parakeet_mlx import (
-        # Suppression is unavoidable here -- parakeet-mlx is untyped where it
-        # touches mx, and an import binding has no expression to annotate.
-        from_pretrained as _from_pretrained,  # pyright: ignore[reportUnknownVariableType]
-    )
-    from parakeet_mlx.audio import (
-        load_audio as _load_audio,  # pyright: ignore[reportUnknownVariableType]
-    )
-
-    from_pretrained = cast("Callable[[str], BaseParakeet]", _from_pretrained)
-    load_audio = cast("Callable[[Path, int], Any]", _load_audio)
+    # Resolves the engine module and raises EngineUnavailable with the remedy
+    # if its backend cannot import here. After this call, everything
+    # engine-specific is an attribute of `eng_mod` -- this function never
+    # imports a backend itself, which is what the AST boundary test enforces.
+    spec, eng_mod = get_engine(engine)
 
     from dsj.checkpoint import (
         checkpoint_path_for,
@@ -322,18 +355,22 @@ def transcribe(
     from dsj.chunking import transcribe_chunked
 
     started = time.monotonic()
-    # Load first: the extraction target rate is a property of this model's
-    # preprocessor, not a constant we get to assume. The whisper engine skips
-    # this entirely -- its rate is fixed and its model loads inside its own
+    # Load first: the extraction target rate is a property of the loaded
+    # engine, not a constant we get to assume. The whisper engine skips the
+    # load entirely -- its rate is fixed and its model loads inside its own
     # call, so an engine the user did not ask for never costs a model load.
-    if engine == "whisper":
+    #
+    # `spec.kind` IS the engine test from here down, read once: the chunk
+    # branch below cannot run without `loaded`, and reading the engine string
+    # a second time would let the two disagree.
+    loaded: Any = None
+    if spec.kind == "file":
         model_id = model_id or DEFAULT_WHISPER_MODEL
-        model = None
         rate = WHISPER_SAMPLE_RATE
     else:
-        model_id = model_id or DEFAULT_MODEL
-        model = from_pretrained(model_id)
-        rate = model.preprocessor_config.sample_rate
+        model_id = model_id or cast("str", eng_mod.DEFAULT_MODEL)
+        loaded = eng_mod.load(model_id)
+        rate = int(loaded.sample_rate)
 
     def write_status(p: Progress, state: str) -> None:
         if status_path is None:
@@ -374,12 +411,9 @@ def transcribe(
         else:
             audio = media
 
-        # `model is None` IS the engine test, not a shorthand for one: the
-        # parakeet branch below cannot run without a loaded model, and reading
-        # the engine string a second time would let the two disagree.
         ckpt_path: Path | None = None
         resumed_from_s = 0.0
-        if model is None:
+        if spec.kind == "file":
             from dsj.whisper import transcribe_whisper
 
             # No checkpoint, and so no resume: whisper owns its window loop and
@@ -388,22 +422,44 @@ def transcribe(
             # and a non-resumable one look identical until the run is killed.
             if resume:
                 logger.info("whisper writes no checkpoint; an interrupted run starts over")
-            # One report, at 0%, then nothing until the end. mlx-whisper takes
-            # no progress callback, and a bar that moved without evidence would
-            # be a bar that lies.
             report(Progress(0.0, stream.duration_s, 0.0), "running")
+            whisper_started = time.monotonic()
+
+            # The anchored path cuts the audio itself, so it can say where it
+            # has got to. Unanchored there is still one report at 0% and
+            # nothing until the end: mlx-whisper takes no progress callback,
+            # and a bar that moved without evidence would be a bar that lies.
+            whisper_progress: Callable[[float], None] | None = None
+            if anchor_s is not None and prompt is not None:
+
+                def _whisper_progress(done_s: float) -> None:
+                    report(
+                        Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
+                        "running",
+                    )
+
+                whisper_progress = _whisper_progress
+
             transcription = transcribe_whisper(
-                audio, model_id=model_id, language=language, prompt=prompt
+                audio,
+                model_id=model_id,
+                language=language,
+                prompt=prompt,
+                anchor_s=anchor_s,
+                on_progress=whisper_progress,
             )
         else:
-            audio_data = load_audio(audio, rate)
+            audio_data = loaded.load_audio(audio)
 
             ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
             # differ, and `audio` is a temp wav with a fresh path and mtime on
             # every run, so a checkpoint keyed to it could never match a second
             # time.
-            fp = fingerprint(media, len(audio_data), model_id, CHUNK_S, OVERLAP_S)
+            fp = fingerprint(
+                media, len(audio_data), model_id, CHUNK_S, OVERLAP_S,
+                engine_fields=cast("dict[str, str]", eng_mod.fingerprint_fields()),
+            )
 
             start_tokens: list[AlignedToken] = []
             skip_before = 0
@@ -445,7 +501,7 @@ def transcribe(
                 chunk_callback(done_through, total)
 
             result = transcribe_chunked(
-                model,
+                loaded,
                 audio_data,
                 chunk_s=CHUNK_S,
                 overlap_s=OVERLAP_S,
@@ -465,6 +521,13 @@ def transcribe(
                     for s in result.sentences
                 ],
             )
+
+        # Both engine branches meet here, which is why the ordering runs here
+        # and not in either of them: parakeet and sherpa reach it through the
+        # chunk loop above, whisper through its own window loop, and both can
+        # emit a sentence that starts before the one printed ahead of it.
+        # `spec.kind` stays the engine test, read once, as it is above.
+        transcription = _in_time_order(transcription, " " if spec.kind == "file" else "")
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
