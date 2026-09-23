@@ -127,9 +127,9 @@ def test_segments_become_the_payloads_sentences(monkeypatch: pytest.MonkeyPatch)
     # The token list is what merge.py votes over, and `t` is the only field it
     # reads. The word text keeps its leading space, as parakeet's tokens do.
     assert got.sentences[0]["tokens"] == [
-        {"t": 0.0, "w": " Mujhe"},
-        {"t": 0.5, "w": " maloom"},
-        {"t": 1.0, "w": " nahin."},
+        {"t": 0.0, "w": " Mujhe", "charOffset": 0},
+        {"t": 0.5, "w": " maloom", "charOffset": 6},
+        {"t": 1.0, "w": " nahin.", "charOffset": 13},
     ]
 
 
@@ -207,7 +207,11 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     assert set(payload) == {"audio", "model", "text", "sentences"}
     assert payload["model"] == whisper_mod.DEFAULT_WHISPER_MODEL
-    assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {"t": 0.0, "w": " Mujhe"}
+    assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
+        "t": 0.0,
+        "w": " Mujhe",
+        "charOffset": 0,
+    }
     assert list(tmp_path.glob("*.checkpoint*")) == []
 
 
@@ -359,6 +363,29 @@ def test_a_whisper_sentences_text_is_its_words_joined(
     for sentence in payload["sentences"]:
         assert sentence["text"] == "".join(t["w"] for t in sentence["tokens"])
     assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_whisper_token_charoffset_indexes_the_sentence_text(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #126: same key, same meaning, as parakeet's.
+
+    whisper builds its own sentence dicts and never reaches the chunk path's
+    serializer, so a field added only there would pass every parakeet test and
+    be missing here. Asserted against the written `text`, whose leading space
+    whisper's own segment text did not have: an offset off by that one
+    character would fail on every token.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [t["charOffset"] for t in sentence["tokens"]] == [0, 6, 13]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
 
 
 def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.MonkeyPatch) -> None:

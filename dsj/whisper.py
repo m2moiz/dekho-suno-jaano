@@ -57,7 +57,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-from dsj.asr import Transcription
+from dsj.asr import Transcription, with_char_offsets
 
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -120,8 +120,9 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     """Turn whisper's segments into payload sentences, shifted by `offset` seconds.
 
     The word text is kept exactly as whisper emits it, leading space and all,
-    which is how parakeet's tokens arrive too. A reader joining tokens gets the
-    sentence back either way.
+    which is how parakeet's tokens arrive too. `text` here is whisper's own,
+    stripped; dsj/suno.py rebuilds it from the words (#106), and `charOffset`
+    is counted over those same words, so it indexes the text that is written.
     """
     out: list[dict[str, Any]] = []
     for segment in segments:
@@ -131,9 +132,9 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
                 "start": float(segment["start"]) + offset,
                 "end": float(segment["end"]) + offset,
                 "text": str(segment["text"]).strip(),
-                "tokens": [
-                    {"t": float(w["start"]) + offset, "w": str(w["word"])} for w in words
-                ],
+                "tokens": with_char_offsets(
+                    [{"t": float(w["start"]) + offset, "w": str(w["word"])} for w in words]
+                ),
             }
         )
     return out

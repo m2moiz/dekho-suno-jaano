@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
 from dsj import media as media_mod
-from dsj.asr import ENGINES, Transcription, get_engine
+from dsj.asr import ENGINES, Transcription, get_engine, with_char_offsets
 from dsj.atomic import atomic_write_text
 
 # Names only -- both engine modules keep their backends lazy, so pulling
@@ -575,7 +575,7 @@ def transcribe(
                         "start": s.start,
                         "end": s.end,
                         "text": s.text,
-                        "tokens": [_token(t, measured) for t in s.tokens],
+                        "tokens": with_char_offsets([_token(t, measured) for t in s.tokens]),
                     }
                     for s in result.sentences
                 ],

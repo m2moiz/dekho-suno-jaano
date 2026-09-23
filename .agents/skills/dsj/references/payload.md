@@ -29,8 +29,8 @@ Four keys, always, in this order:
       "start": 12.34,
       "end": 15.02,
       "text": " See this column here.",
-      "tokens": [{"t": 12.34, "w": " See", "e": 12.43, "c": 0.998},
-                 {"t": 12.51, "w": " this", "e": 12.67, "c": 0.941}]
+      "tokens": [{"t": 12.34, "w": " See", "e": 12.43, "c": 0.998, "charOffset": 0},
+                 {"t": 12.51, "w": " this", "e": 12.67, "c": 0.941, "charOffset": 4}]
     }
   ]
 }
@@ -59,6 +59,7 @@ Inside a token:
 | `w` | string | The token's text, leading space kept. `"".join(t.w)` over a sentence's tokens is exactly its `text`. Always present. |
 | `e` | float seconds | When the token ends, as the decoder timed it. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. |
 | `c` | float, 0 to 1 | The decoder's confidence in the token: one minus the normalised entropy of its distribution at that step. Rounded to 3 places, so about half of parakeet's tokens read `1.0`. |
+| `charOffset` | int | Where `w` starts in the sentence's `text`, so `text[charOffset:charOffset + len(w)]` is `w`. It maps a click or a selection on rendered text back to a token. Counted in code points, as Python's `len` counts; JavaScript counts UTF-16 units, and the two differ for any character outside the Basic Multilingual Plane, such as an emoji. Written under every engine, and absent from transcripts written before it existed. |
 
 **`e` and `c` are parakeet's only.** Test for the key, never assume it. They are absent
 under sherpa, whose end is the next token's start and whose confidence is a default, so

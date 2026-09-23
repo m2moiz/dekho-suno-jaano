@@ -25,6 +25,7 @@ __all__ = [
     "EngineUnavailable",
     "Transcription",
     "get_engine",
+    "with_char_offsets",
 ]
 
 from importlib import import_module
@@ -127,9 +128,34 @@ class Transcription(NamedTuple):
     """What an engine hands back to `suno.transcribe`.
 
     `sentences` are already in the payload's shape -- `{start, end, text,
-    tokens: [{t, w}]}`, each token also carrying `e` and `c` when the engine
-    measured them -- so the caller writes them out rather than converting them.
+    tokens: [{t, w, charOffset}]}`, each token also carrying `e` and `c` when
+    the engine measured them -- so the caller writes them out rather than
+    converting them.
     """
 
     text: str
     sentences: list[dict[str, Any]]
+
+
+def with_char_offsets(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`tokens`, each with `charOffset`: where its `w` starts in the tokens joined.
+
+    The tokens joined is exactly a sentence's written `text` (suno's
+    _text_from_tokens makes it so), so a reader rendering `text` can turn a
+    click or a selection back into a token index with a bisect over these,
+    rather than re-deriving the join and landing on the mismatch #106 fixed.
+
+    One definition for both serializers, the chunk path's in dsj/suno.py and
+    whisper's in dsj/whisper.py, because they build their token dicts apart
+    and a field added to only one passes every test of the other.
+
+    Counted by `len`, so in code points, which is what Python slicing wants.
+    JavaScript indexes UTF-16 units, and the two differ by one for every
+    character outside the Basic Multilingual Plane, an emoji for instance.
+    """
+    out: list[dict[str, Any]] = []
+    offset = 0
+    for token in tokens:
+        out.append(token | {"charOffset": offset})
+        offset += len(str(token["w"]))
+    return out

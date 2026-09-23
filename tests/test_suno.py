@@ -140,7 +140,13 @@ def test_transcribe_writes_the_timestamped_index(
     assert on_disk["sentences"][0]["start"] == 0.0
     assert on_disk["sentences"][0]["end"] == 750.0
     assert on_disk["sentences"][0]["text"] == "see this column here."
-    assert on_disk["sentences"][0]["tokens"][0] == {"t": 0.0, "w": "see", "e": 0.4, "c": 0.5}
+    assert on_disk["sentences"][0]["tokens"][0] == {
+        "t": 0.0,
+        "w": "see",
+        "e": 0.4,
+        "c": 0.5,
+        "charOffset": 0,
+    }
     assert on_disk["audio"] == str(fake_media)
 
 
@@ -992,4 +998,50 @@ def test_sherpa_tokens_leave_out_the_end_and_confidence_nobody_measured(
 
     tokens = [t for s in payload["sentences"] for t in s["tokens"]]
     assert [(t["t"], t["w"]) for t in tokens] == [(0.0, " see"), (3.0, " this.")]
-    assert [set(t) for t in tokens] == [{"t", "w"}, {"t", "w"}]
+    assert [set(t) for t in tokens] == [{"t", "w", "charOffset"}, {"t", "w", "charOffset"}]
+
+
+def test_parakeet_token_charoffset_indexes_the_sentence_text(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """A click on rendered prose maps back to a word through `charOffset` (#126).
+
+    Each token's offset is where its `w` starts in the sentence's `text`, so a
+    reader rendering `text` can turn a character position into a token index
+    without re-deriving the join, which is where the #106 mismatch came from.
+    """
+    fake_parakeet(tokens=_tokens())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    text = sentence["text"]
+    assert [t["charOffset"] for t in sentence["tokens"]] == [0, 3, 8, 15]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert text[start : start + len(token["w"])] == token["w"]
+
+
+def test_charoffset_indexes_the_text_a_seam_rebuilt(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At a seam the offsets point into the text as it is written, not as the merge glued it.
+
+    The merge glued " hello." and the tokens run ". hello". Offsets taken from
+    the glued string would put the full stop at 6; in the written text it is at 0.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_reordered_a_sentence(monkeypatch)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [(t["w"], t["charOffset"]) for t in sentence["tokens"]] == [(".", 0), (" hello", 1)]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
