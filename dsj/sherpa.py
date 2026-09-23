@@ -75,10 +75,16 @@ def available() -> str | None:
         # agree once that is said in code instead of a suppression comment.
         import_module("sherpa_onnx")
     except ImportError as exc:
+        # The extra, not the bare package: sherpa-onnx alone cannot import,
+        # because libonnxruntime ships in sherpa-onnx-core, which only the
+        # extra pins (#165). And no "manylinux only": sherpa-onnx publishes
+        # macOS wheels too, and runs on a Mac (#168). The proot sentence is
+        # the part that is Android's alone.
         return (
             f"sherpa-onnx will not import here: {exc}. Install it with "
-            "`pip install sherpa-onnx` (manylinux wheels only -- inside a "
-            "proot/glibc container on Android, not Termux itself)."
+            '`uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano"` '
+            "(or `uv sync --extra sherpa` from a clone). On Android that install "
+            "goes inside a proot glibc container, not Termux itself, which is bionic."
         )
     return None
 

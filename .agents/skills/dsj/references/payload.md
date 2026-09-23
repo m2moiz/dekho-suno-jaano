@@ -167,10 +167,12 @@ jq -r 'if has("speakers") then [.sentences[].speaker] | group_by(.) | map({s: .[
 jq -r '.text' t.json
 ```
 
-**Do not assume `sentences` is sorted.** It is very nearly in ascending `start` order and
-never guaranteed to be: 4 of 480 consecutive pairs came back out of order in a real
-multi-chunk transcript, at chunk boundaries. Filter the whole list rather than scanning
-until the first `start` past your window, or `sort_by(.start)` first if order matters.
+**`sentences` runs earliest first, and so do the `tokens` inside each one**, under every
+engine: sentences by `start`, tokens by `t`. A reader may walk the list from the top and
+stop at the first `start` past its window; there is nothing to re-sort. The order is
+promised; the times are not exact. A recording over 120 s is transcribed in overlapping
+pieces, and a word at a seam can be mistimed by a few seconds, measured worst case 5.72 s,
+which pulls its whole sentence that far earlier in the list.
 
 ## The status heartbeat, written by `--status`
 

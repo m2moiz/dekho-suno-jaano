@@ -76,7 +76,7 @@ carries the remedy:
 |---|---|
 | parakeet | `parakeet-mlx is not installed. It requires Apple Silicon and Metal; this machine is <machine> <system>.` Install the mac bundle, or pick another engine. |
 | whisper | `mlx-whisper is not installed. Install it with uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano" (or uv sync --extra whisper from a clone).` |
-| sherpa | `sherpa-onnx will not import here: <import error>. Install it with pip install sherpa-onnx (manylinux wheels only, inside a proot/glibc container on Android, not Termux itself).` |
+| sherpa | `sherpa-onnx will not import here: <import error>. Install it with uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano" (or uv sync --extra sherpa from a clone). On Android that install goes inside a proot glibc container, not Termux itself, which is bionic.` |
 
 A bare install carries no engine at all, on purpose, so that the package can install on a
 phone. The first `suno` then names the extra to add. See `engines.md`.

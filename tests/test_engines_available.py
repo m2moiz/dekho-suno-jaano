@@ -39,3 +39,37 @@ def test_an_installed_engine_starts(engine: str) -> None:
         assert not os.environ.get("CI"), f"{BACKEND[engine]} is not installed in CI"
         pytest.skip(f"{BACKEND[engine]} is not installed here")
     get_engine(engine)
+
+
+def test_a_sherpa_that_will_not_import_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal's remedy is dsj's own extra, and nothing in it is false on a Mac (#168).
+
+    It used to say `pip install sherpa-onnx` and "manylinux wheels only".
+    sherpa-onnx publishes macOS wheels too (uv.lock carries macosx_11_0_arm64),
+    and after #165 it runs on a Mac, so that hint sent a Mac reader the wrong
+    way. It also named the bare package, which is the install #165 found
+    broken: libonnxruntime ships in sherpa-onnx-core, which the extra pins.
+
+    The import is made to fail rather than the module removed, because
+    available() imports for real, and a failed native load is the case it
+    reports.
+    """
+    import importlib
+    import sys
+
+    from dsj import sherpa as sherpa_mod
+
+    def refuse(name: str) -> None:
+        raise ImportError("dlopen failed: libonnxruntime.dylib not found")
+
+    monkeypatch.delitem(sys.modules, "sherpa_onnx", raising=False)
+    monkeypatch.setattr(importlib, "import_module", refuse)
+
+    reason = sherpa_mod.available()
+
+    assert reason is not None
+    assert "libonnxruntime.dylib" in reason
+    assert "dsj[sherpa]" in reason
+    assert "uv sync --extra sherpa" in reason
+    assert "manylinux" not in reason
+    assert "pip install" not in reason
