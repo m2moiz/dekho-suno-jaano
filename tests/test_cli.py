@@ -58,7 +58,9 @@ def test_instantaneous_run_still_prints_a_summary(
     assert code == 0
     assert out.exists()
     assert json.loads(out.read_text())["sentences"][0]["end"] == 12.0
-    assert "0:12 audio" in capsys.readouterr().err
+    # The fake's 100 seconds of audio, not its one sentence's 12 (#52). The
+    # `done:` prefix matters: the bar's own "1:40/1:40 audio" would match without it.
+    assert "done: 1:40 audio" in capsys.readouterr().err
 
 
 def test_empty_transcript_still_prints_a_summary(
@@ -68,7 +70,11 @@ def test_empty_transcript_still_prints_a_summary(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No sentences means total == 0.0; the summary must say so, not crash."""
+    """The summary reports the length of the audio whether or not anyone spoke (#52).
+
+    It used to print `0:00 audio` here, for 100 seconds of audio with no
+    sentences in it, because it rebuilt the total from the last sentence.
+    """
     fake_parakeet(tokens=[])
     frozen_clock([1000.0, 1002.0])
     out = tmp_path / "out.json"
@@ -77,7 +83,7 @@ def test_empty_transcript_still_prints_a_summary(
 
     assert code == 0
     assert out.exists()
-    assert "0:00 audio" in capsys.readouterr().err
+    assert "done: 1:40 audio" in capsys.readouterr().err
 
 
 def test_summary_reports_both_durations_and_no_multiple(
@@ -87,7 +93,7 @@ def test_summary_reports_both_durations_and_no_multiple(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """12s of audio in 2s of wall clock.
+    """100s of audio in 2s of wall clock.
 
     It does NOT say 6.0x. On a resumed run that figure would describe this
     process's clock against the whole file, most of which an earlier run
@@ -101,7 +107,7 @@ def test_summary_reports_both_durations_and_no_multiple(
     main([str(fake_media), "-o", str(out)])
 
     err = capsys.readouterr().err
-    assert "done: 0:12 audio in 0:02 ->" in err
+    assert "done: 1:40 audio in 0:02 ->" in err
     assert "realtime" not in err
 
 
@@ -207,4 +213,4 @@ def test_the_summary_counts_speakers_only_when_there_are_some(
     main([str(fake_media), "-o", str(tmp_path / "plain.json"), "--no-diarize"])
     err = capsys.readouterr().err
     assert "speakers" not in err
-    assert "0:12 audio" in err
+    assert "done: 1:40 audio" in err

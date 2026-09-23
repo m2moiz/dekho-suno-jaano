@@ -195,11 +195,12 @@ sees half of one. It is not a log and not JSONL.
 | `speed` | float | Realtime multiple over this run's own work only. |
 | `eta_s` | float or **null** | `null` whenever `speed` is 0, which includes the first frame of every run. |
 
-**Poll `state`. Do not use `fraction` to detect completion.** On the final `done` frame,
-`audio_done_s` and `audio_total_s` are rebuilt from the end of the last sentence rather
-than the duration of the audio, so `fraction` is `1.0` when the transcript has sentences
-and `0.0` when it has none. Both mean finished. A four-minute recording with no speech
-ends with `{"state": "done", "fraction": 0.0}`.
+**Poll `state`. Do not use `fraction` to detect completion.** `fraction` reaches `1.0`
+when the audio is decoded, which is before the speaker labels exist, then starts over at
+`0.0` for the `diarizing` frames. The final `done` frame reports the length of the audio
+as both `audio_done_s` and `audio_total_s`, the same total the `running` frames used, so
+it ends at `1.0` whether or not anyone spoke: a four-minute recording with no speech ends
+with `{"audio_done_s": 240.0, "audio_total_s": 240.0, "state": "done", "fraction": 1.0}`.
 
 **The failure document is a different shape.** Two keys, and none of the progress fields:
 

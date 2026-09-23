@@ -473,6 +473,11 @@ def transcribe(
 
         ckpt_path: Path | None = None
         resumed_from_s = 0.0
+        # The recording's length as this run's transcription frames report it,
+        # kept so the done frame can report the same number (#52). whisper's
+        # frames take ffprobe's duration; the chunk branch below replaces it
+        # with the decoded length, which is what its running frames divide by.
+        audio_total_s = stream.duration_s
         if spec.kind == "file":
             from dsj.whisper import transcribe_whisper
 
@@ -510,6 +515,7 @@ def transcribe(
             )
         else:
             audio_data = loaded.load_audio(audio)
+            audio_total_s = len(audio_data) / rate
 
             ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
@@ -636,8 +642,16 @@ def transcribe(
             ckpt_path.unlink(missing_ok=True)
 
         elapsed = time.monotonic() - started
-        total = transcription.sentences[-1]["end"] if transcription.sentences else 0.0
-        report(Progress(total, total, elapsed, resumed_from_s), "done")
+        # The length of the recording, the total every running frame reported,
+        # so the field keeps one meaning to the last frame (#52). It used to be
+        # the end of the last sentence, a different fact: a 240 s recording
+        # with no speech finished at 0.0 s and 0%, and a resumed run's speed
+        # went negative (-3.71 measured), because `resumed_from_s` kept the
+        # real position. The decoded length on the chunk path rather than
+        # ffprobe's for the same reason: `resumed_from_s` is counted in decoded
+        # samples, so a run resumed from a finished checkpoint (#101) ends at
+        # exactly 0.0x, not a hair below it.
+        report(Progress(audio_total_s, audio_total_s, elapsed, resumed_from_s), "done")
         return payload
 
 

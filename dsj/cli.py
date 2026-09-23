@@ -135,14 +135,16 @@ def suno(
     # enormous line of control characters.
     tty = sys.stderr.isatty()
     last_state = ""
+    last_total = 0.0
 
     def show(p: Progress, state: str) -> None:
         # A phase change ends the rewritten line, so the finished extraction bar
         # stays on screen instead of being overwritten by transcription's 0%.
-        nonlocal last_state
+        nonlocal last_state, last_total
         if tty and last_state and state != last_state:
             print(file=sys.stderr)
         last_state = state
+        last_total = p.audio_total_s
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
     # --roman-urdu is sugar over the two flags under it, and it is spelled as
@@ -195,7 +197,11 @@ def suno(
     if tty:
         print(file=sys.stderr)
     elapsed = time.monotonic() - started
-    total = result["sentences"][-1]["end"] if result["sentences"] else 0.0
+    # The done frame's total, read off the frame rather than recomputed, so
+    # this line and the status file cannot name two lengths for one run (#52).
+    # It used to be rebuilt from the last sentence: `done: 0:00 audio` for
+    # four minutes of audio with no speech in it.
+    total = last_total
     # A count, not a rate. `total / elapsed` would credit a resumed run with
     # work a previous process paid for -- an hour finished in two minutes reads
     # as 30x. Guarded on the key because a degraded run has no speakers.

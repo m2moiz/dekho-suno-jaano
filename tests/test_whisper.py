@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
-from dsj.suno import transcribe
+from dsj.suno import Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
 
 
@@ -247,6 +247,30 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
         "charOffset": 0,
     }
     assert list(tmp_path.glob("*.checkpoint*")) == []
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_run_ends_at_the_length_its_running_frame_reported(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #52: the done frame's total is the recording's, not a sentence's.
+
+    whisper's frames take their total from the probe, 4427.028 s under the stub,
+    and its last sentence here ends at 2.5 s. The done frame used to say 2.5.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+    frames: list[tuple[str, float, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        frames.append((state, p.audio_done_s, p.audio_total_s))
+
+    transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", diarize=False, on_progress=capture
+    )
+
+    assert frames[0] == ("running", 0.0, 4427.028)
+    assert frames[-1] == ("done", 4427.028, 4427.028)
 
 
 def test_an_unknown_engine_is_refused_by_name(fake_media: Path, tmp_path: Path) -> None:

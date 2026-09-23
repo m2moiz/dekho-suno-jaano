@@ -380,12 +380,14 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
     assert set(payload) == {"audio", "model", "text", "sentences"}
     assert payload["audio"] == str(tone)
 
-    # 3. The heartbeat ends in a terminal state. `state`, never `fraction`: the done
-    #    frame rebuilds its totals from the last sentence, so a transcript with no
-    #    sentences ends at fraction 0.0. Issue #52.
+    # 3. The heartbeat ends in a terminal state. `state`, never `fraction`: fraction
+    #    reaches 1.0 before labelling starts and drops to 0.0 for the diarizing frames.
+    #    The done frame reports the length of the audio (#52), so the tone, which has
+    #    no speech in it, still ends at its full 240 s rather than at 0.0.
     heartbeat = json.loads(status.read_text())
     assert heartbeat["state"] == "done", heartbeat
     assert set(heartbeat) >= {"state", "fraction", "speed", "eta_s", "audio_done_s"}
+    assert heartbeat["audio_total_s"] == pytest.approx(240.0)
 
     # 4. dekho merges marks into the transcript it is given.
     marked = tmp_path / "marked.json"

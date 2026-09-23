@@ -180,13 +180,11 @@ sees half of one.
 
 Two things will break a poller that assumes otherwise:
 
-- **Branch on `state`, never on `fraction`.** `fraction` is not monotonic and does not
-  end at 1.0. It reaches 1.0 when the audio is decoded, drops back to 0.0 for the
-  `diarizing` frames, and on the final frame the totals are rebuilt from the end of the
-  last sentence rather than the length of the audio, so a recording with no speech
-  finishes at 0.0. Observed across three separate runs: a poller that stops at
-  `fraction == 1` calls it done before the speaker labels exist, and one that waits for
-  1.0 can wait forever.
+- **Branch on `state`, never on `fraction`.** `fraction` is not monotonic. It reaches
+  1.0 when the audio is decoded, drops back to 0.0 for the `diarizing` frames, and is 1.0
+  again on the final frame, whose totals are the length of the audio. Observed across
+  three separate runs: a poller that stops at `fraction == 1` calls it done before the
+  speaker labels exist.
 - **The failure document is a different shape**, two keys and no progress fields:
   `{"state": "failed", "error": "FileNotFoundError: /nope.mov"}`. Read `state` first.
 

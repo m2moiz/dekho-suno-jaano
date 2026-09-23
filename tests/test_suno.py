@@ -196,6 +196,12 @@ def test_status_file_ends_in_the_done_state(
     fake_media: Path,
     tmp_path: Path,
 ) -> None:
+    """The done frame reports the length of the audio, as the running frames did (#52).
+
+    The fake decodes 100 seconds and its one sentence claims to end at 750.0,
+    which a real run cannot produce but which shows what the number is built
+    from: this frame used to repeat the last sentence's end.
+    """
     fake_parakeet(sample_rate=RATE, tokens=_tokens())
     status = tmp_path / "status.json"
 
@@ -203,8 +209,117 @@ def test_status_file_ends_in_the_done_state(
 
     final = json.loads(status.read_text())
     assert final["state"] == "done"
-    assert final["audio_done_s"] == pytest.approx(750.0)
+    assert final["audio_done_s"] == pytest.approx(100.0)
+    assert final["audio_total_s"] == pytest.approx(100.0)
     assert final["fraction"] == 1.0
+
+
+def test_a_recording_with_no_speech_ends_at_its_own_length(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Four minutes with no sentences finish at 240 s and 100%, not at 0 s and 0% (#52).
+
+    Measured on a real 240 s tone on 2026-09-05: the final frame read 0.0,
+    0.0, fraction 0.0 and speed 0.0, because both totals came from the end of
+    the last sentence and there was none. The case the bug hinges on, so the
+    with-speech test above cannot stand in for it. Also held: the done frame's
+    total is the one every running frame reported, so a bar does not jump on
+    the last frame.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=240.0)
+    status = tmp_path / "status.json"
+    totals: list[tuple[str, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        totals.append((state, p.audio_total_s))
+
+    transcribe(fake_media, tmp_path / "out.json", status_path=status, on_progress=capture)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["audio_done_s"] == pytest.approx(240.0)
+    assert final["audio_total_s"] == pytest.approx(240.0)
+    assert final["fraction"] == 1.0
+    assert final["speed"] > 0
+    assert {total for state, total in totals if state in ("running", "done")} == {240.0}
+
+
+def test_a_resumed_run_ends_at_a_positive_speed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Speed is audio done minus audio resumed from, so both must be the audio's (#52).
+
+    With the done frame's total taken from the last sentence (none here) and
+    `resumed_from_s` kept at the real 210 s, the subtraction went negative:
+    reproduced at -3.71 on a real 240 s tone on 2026-09-05.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    class Interrupt(Exception):
+        pass
+
+    seen = 0
+
+    def die_after_two(_p: Progress, state: str) -> None:
+        nonlocal seen
+        if state != "running":
+            return
+        seen += 1
+        if seen == 2:
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        transcribe(fake_media, out, on_progress=die_after_two)
+
+    transcribe(fake_media, out, status_path=status)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["resumed_from_s"] == pytest.approx(210.0)
+    assert final["audio_total_s"] == pytest.approx(360.0)
+    assert final["speed"] > 0
+
+
+def test_a_run_resumed_from_a_finished_checkpoint_ends_at_zero_speed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Resumed past its last chunk, a run transcribed nothing, and says 0.0x, never less.
+
+    Since #101 an interrupt during labelling leaves a checkpoint banked through
+    the end of the audio, so `resumed_from_s` is the whole decoded length. The
+    done frame's total is that same decoded length, not ffprobe's (4427.028 s
+    under this module's stub), so the subtraction in `speed` is exactly zero.
+    """
+    fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    def interrupt(wav: Path) -> None:
+        raise KeyboardInterrupt
+
+    fake_turns(**_one_speaker(then=interrupt))
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out)
+
+    fake_turns(**_one_speaker())
+    transcribe(fake_media, out, status_path=status)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["resumed_from_s"] == pytest.approx(100.0)
+    assert final["audio_total_s"] == pytest.approx(100.0)
+    assert final["fraction"] == 1.0
+    assert final["speed"] == 0.0
 
 
 def test_no_status_path_writes_nothing(
