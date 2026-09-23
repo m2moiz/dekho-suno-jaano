@@ -422,6 +422,52 @@ def test_whisper_token_charoffset_indexes_the_sentence_text(
         assert sentence["text"][start : start + len(token["w"])] == token["w"]
 
 
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentences_words_are_written_earliest_first(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The time order the README promises, held by a sort rather than by whisper's habit (#167).
+
+    whisper decodes left to right, so its word times normally rise, and no
+    transcript has been seen breaking that. But nothing enforced it, and since
+    #106 a sentence's `text` is its words joined, so one word out of order
+    would scramble the prose as well as the times. The segment below hands
+    `_sentences_from` its last two words swapped; what is written must run
+    earliest first, read in that order, and keep every `charOffset` pointing
+    at its own word.
+    """
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.5,
+                    "text": " Mujhe maloom nahin.",
+                    "words": [
+                        {"word": " Mujhe", "start": 0.0, "end": 0.5, "probability": 0.9},
+                        {"word": " nahin.", "start": 1.0, "end": 1.5, "probability": 0.9},
+                        {"word": " maloom", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    [sentence] = payload["sentences"]
+    assert [(t["t"], t["w"]) for t in sentence["tokens"]] == [
+        (0.0, " Mujhe"),
+        (0.5, " maloom"),
+        (1.0, " nahin."),
+    ]
+    assert sentence["text"] == " Mujhe maloom nahin."
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
+
+
 def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 16s clip at anchor_s=10 (overlap fixed at ANCHOR_OVERLAP_S=6) makes three calls.
 

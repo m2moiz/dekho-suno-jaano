@@ -133,10 +133,21 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     inferred. The probability is the mean, over the word's sub-word tokens, of
     the probability the model gave each one (:173-176). payload.md says which
     engine measures and which infers.
+
+    The words are sorted by start before anything is built from them (#167).
+    whisper decodes left to right, so they normally arrive in order already
+    and no transcript has been seen otherwise; the sort is what makes the
+    README's time-order promise hold here by code rather than by habit, as
+    AlignedSentence's sort does for parakeet. It has to come first: the
+    sentence's `text` is these words joined (#106), and `charOffset` indexes
+    that text. Stable, so words sharing a start keep whisper's order.
     """
     out: list[dict[str, Any]] = []
     for segment in segments:
-        words = cast("list[dict[str, Any]]", segment.get("words") or [])
+        words = sorted(
+            cast("list[dict[str, Any]]", segment.get("words") or []),
+            key=lambda w: float(w["start"]),
+        )
         out.append(
             {
                 "start": float(segment["start"]) + offset,
