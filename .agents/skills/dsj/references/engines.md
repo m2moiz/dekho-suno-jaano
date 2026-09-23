@@ -71,7 +71,7 @@ fallback: if the chosen engine cannot run, nothing is transcribed and the run ex
 
 | | parakeet | whisper | sherpa |
 |---|---|---|---|
-| Speed | About 13x realtime | About 1.4x realtime | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
+| Speed | About 13x realtime | 3.2x on code-switched Urdu with `--roman-urdu`, 6.4x on English. Commands and memory state in `dsj/whisper.py` | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
 | Platform | Apple Silicon, Metal | Apple Silicon, Metal | Anywhere sherpa-onnx has wheels |
 | Languages | 25, all European. No Urdu | Whatever whisper reads, including Urdu | Same weights as parakeet |
 | Checkpoint and resume | Yes | **No.** An interrupted run starts over | Yes |

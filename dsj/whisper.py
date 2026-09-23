@@ -5,16 +5,29 @@
 Urdu -- its 25 languages are European, and `ur` is not among the model card's
 tags. A voice note that mixes Urdu and English comes back as nothing usable.
 
-whisper-large-v3-turbo does read it, at a cost: measured on 116s of Urdu speech
-it took 84.7s (~1.4x realtime) against parakeet's ~13x. That is fine for a voice
-note and would not be for an hour of lecture, which is why this is a flag and
-not a replacement.
+whisper-large-v3-turbo does read it, at a cost. Its speed, each figure with the
+command that reproduces it and the machine state it was measured in, because
+memory pressure alone has moved it threefold on this Mac (#139):
+
+- 3.22x realtime on code-switched Urdu with `--roman-urdu`: #148's public
+  fixture, 853.7s of audio in 265.4s wall clock, model load included, no
+  diarization, 72% memory free, on commit 372d10e's decode path.
+  `just urdu-fixture`, then
+  `dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize -o roman.json`.
+- 6.37x on English with no prompt and so no anchoring: the owner's control
+  recording (#149), 16.7 minutes in 157s including model load, extraction and
+  speaker labelling, 68% memory free with 15.9 of 17.4 GB swap in use, commit
+  3f6d659 (label `before-fixes`). A fresh label re-measures it:
+  `scratch/real_bench.py run --label <new> --only 153458`.
+
+parakeet runs at ~13x. That gap, and whisper's habit of inventing words, is why
+this is a flag and not a replacement.
 
 ROMAN URDU IS A PROMPT, NOT A SETTING. whisper transcribes Urdu in Urdu script
 by default. Seeding the decoder with a Roman Urdu `initial_prompt` makes it emit
 Roman instead, and it carries across windows through whisper's own
 condition-on-previous-text. UNVERIFIED -- no reproducing script in this repo,
-see #100: over the same 116s, 275 of 277 words were claimed to come back in
+see #100: over a 116s Urdu clip, 275 of 277 words were claimed to come back in
 Latin, the two exceptions single words inside otherwise-Roman sentences.
 
 THAT ONLY HOLDS FOR SHORT AUDIO, and not because the seed reaches only the

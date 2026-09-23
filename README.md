@@ -199,8 +199,10 @@ re-measuring.
 Two things the whisper engine does not do: it writes **no checkpoint**, so an
 interrupted run starts over, and it reports **no progress** between start and
 finish — it owns its own window loop and exposes no hook to bank or count one
-from. It runs at ~1.4x realtime against parakeet's ~13x. All three are fine for
-a voice note and wrong for an hour of lecture, which is why parakeet stays the
+from. It runs at 3.2x realtime on code-switched Urdu with `--roman-urdu` and
+6.4x on English, against parakeet's ~13x; the commands that reproduce both, and
+the memory state each was measured in, are in `dsj/whisper.py`'s docstring. All
+three cost more the longer the recording, which is why parakeet stays the
 default.
 
 It is part of the `mac` bundle; standalone installs can pick it alone

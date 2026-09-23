@@ -80,7 +80,8 @@ Progress renders on stderr. **Nothing goes to stdout**, so empty stdout says not
 about whether it worked.
 
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
-anything else outside that set, use whisper, which is about 1.4x realtime, writes no
+anything else outside that set, use whisper, which is about 3x realtime on Urdu with
+`--roman-urdu` and about 6x on English (measured, see `dsj/whisper.py`), writes no
 checkpoint, and reports no progress between start and finish:
 
 ```bash
