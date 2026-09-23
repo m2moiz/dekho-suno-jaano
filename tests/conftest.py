@@ -163,7 +163,7 @@ def fake_parakeet(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeModel]:
         def from_pretrained(model_id: str) -> FakeModel:
             return model
 
-        def load_audio(path: Path, rate: int, *a: Any, **k: Any) -> range:
+        def load_audio(path: Path, rate: int, *_a: Any, **_k: Any) -> range:
             return range(model.total_samples)
 
         def get_logmel(audio: Any, cfg: Any) -> Any:

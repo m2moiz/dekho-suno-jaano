@@ -511,7 +511,7 @@ def test_the_failure_status_is_written_through_the_atomic_writer(
     status = tmp_path / "status.json"
     seen = _spy_on_atomic_write(monkeypatch)
 
-    def boom(*args: Any, **kwargs: Any) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("model exploded")
 
     monkeypatch.setattr(transcribe_mod, "transcribe", boom)
@@ -871,7 +871,7 @@ def test_the_diarizer_is_handed_the_extracted_wav_not_the_source(
     monkeypatch.setattr(media, "needs_conversion", always_convert)
 
     def fake_extract(
-        source: Path,
+        _source: Path,
         dest: Path,
         rate: int,
         on_progress: Callable[[float], None] | None = None,
