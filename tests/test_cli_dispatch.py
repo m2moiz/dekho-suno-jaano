@@ -12,6 +12,7 @@ two minutes of wall clock.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tomllib
@@ -107,14 +108,23 @@ def test_help_lists_the_version_flag(capsys: pytest.CaptureFixture[str]) -> None
     assert "--version" in capsys.readouterr().out
 
 
-def test_the_two_copies_of_the_version_agree() -> None:
-    """pyproject.toml and dsj/__init__.py each hold the number; nothing else did compare them.
+def test_every_copy_of_the_version_agrees() -> None:
+    """pyproject.toml, dsj/__init__.py and the skill's header each hold the number.
 
-    Bump one on a release and forget the other, and `dsj --version` names a
-    build that `pip show dsj` disagrees with.
+    Bump one on a release and forget another, and `dsj --version` names a build
+    that `pip show dsj` disagrees with. The skill's `metadata.version` is the
+    third copy: SKILL.md tells an agent to compare it with `dsj --version` to
+    learn whether the flags it documents exist in the build in front of it, so
+    a skill left behind on a release sends that agent the wrong way.
     """
-    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
-    assert tomllib.loads(pyproject.read_text())["project"]["version"] == dsj.__version__
+    repo = Path(__file__).resolve().parent.parent
+    pyproject = tomllib.loads((repo / "pyproject.toml").read_text())["project"]["version"]
+    skill = (repo / ".agents" / "skills" / "dsj" / "SKILL.md").read_text()
+    header = re.search(r"^---\n(.*?)^---", skill, re.MULTILINE | re.DOTALL)
+    assert header is not None
+    skill_version = re.search(r"^\s+version:\s*(\S+)\s*$", header.group(1), re.MULTILINE)
+    assert skill_version is not None
+    assert pyproject == dsj.__version__ == skill_version.group(1)
 
 
 def test_an_unknown_verb_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:

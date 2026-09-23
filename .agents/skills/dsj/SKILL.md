@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -41,7 +41,7 @@ was written against the `version` in its own header above. If the two differ, a 
 named below may not exist in that build, and using one fails as `No such option`, which
 reads like a typo and is not one.
 
-`dsj --help` lists the three verbs. There is no `dsj doctor`, and no way to ask the tool
+`dsj --help` lists the five verbs. There is no `dsj doctor`, and no way to ask the tool
 which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
@@ -51,7 +51,7 @@ missing command means a missing install.
 
 `ffmpeg` must be on `PATH` for anything that is not already a 16 kHz mono wav.
 
-## The three verbs
+## The five verbs
 
 ### suno
 

@@ -45,7 +45,7 @@ REPO = Path(__file__).resolve().parent.parent
 SKILL_DIR = REPO / ".agents" / "skills" / "dsj"
 SKILL = SKILL_DIR / "SKILL.md"
 
-# The three verbs each get a level-3 section in SKILL.md whose body carries the flag
+# Every verb gets a level-3 section in SKILL.md whose body carries the flag
 # table this gate reads. The heading text is load-bearing, not decoration.
 VERB_HEADING = re.compile(r"^###\s+(\w+)\s*$", re.MULTILINE)
 
