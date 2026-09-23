@@ -103,9 +103,16 @@ def test_version_wins_over_a_verb_after_it(capsys: pytest.CaptureFixture[str]) -
     assert capsys.readouterr().out == f"dsj {dsj.__version__}\n"
 
 
+# Rich colours help when it sees GITHUB_ACTIONS or FORCE_COLOR, and then styles the
+# two dashes and the name of an option separately, so the plain text `--version` is
+# not in the raw output at all. Reproduced locally with GITHUB_ACTIONS=true.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def test_help_lists_the_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """`--version` is in the help a person reads, coloured or not."""
     assert main(["--help"]) == 0
-    assert "--version" in capsys.readouterr().out
+    assert "--version" in ANSI.sub("", capsys.readouterr().out)
 
 
 def test_every_copy_of_the_version_agrees() -> None:
