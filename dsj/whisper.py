@@ -13,15 +13,25 @@ not a replacement.
 ROMAN URDU IS A PROMPT, NOT A SETTING. whisper transcribes Urdu in Urdu script
 by default. Seeding the decoder with a Roman Urdu `initial_prompt` makes it emit
 Roman instead, and it carries across windows through whisper's own
-condition-on-previous-text: over the same 116s, 275 of 277 words came back in
-Latin. The two that did not were single words inside otherwise-Roman sentences.
+condition-on-previous-text. UNVERIFIED -- no reproducing script in this repo,
+see #100: over the same 116s, 275 of 277 words were claimed to come back in
+Latin, the two exceptions single words inside otherwise-Roman sentences.
 
-THAT ONLY HOLDS FOR SHORT AUDIO. The same threading that carries the bias
-forward carries drift forward too, and an `initial_prompt` reaches the first
-window only. Over four recordings on 20 Sep 2026 -- 13 to 86 minutes -- the
-share returned in Urdu script despite the prompt was 41%, 80%, 97% and 99%,
-worst on the longest. `anchor_s` re-seeds the prompt per window and bounds it;
-`--roman-urdu` sets it. See `_anchored`.
+THAT ONLY HOLDS FOR SHORT AUDIO, and not because the seed reaches only the
+first window and nothing past it. `initial_prompt` is folded into an
+accumulated buffer that condition-on-previous-text threads into every later
+window; decoding.py:501-503 keeps only the last `n_ctx // 2 - 1` tokens of
+that buffer, so the seed at its front rides along for as many windows as real
+speech takes to fill the budget, then is evicted whole and oldest-first, not
+faded gradually. A low-confidence window can also force an earlier reset
+(transcribe.py's `prompt_reset_since`), dropping the seed sooner than the
+token budget alone would -- confirmed against the installed library, see
+#100. Over four recordings on 20 Sep 2026, 13 to 86 minutes, the share
+returned in Urdu script despite the prompt was 41%, 80%, 97% and 99%, worst on
+the longest; scratch/urdu_script_share.py reproduces the first three, and the
+fourth file's transcript no longer exists (#137). `anchor_s` re-seeds the
+prompt per window and bounds how far this can drift; `--roman-urdu` sets it.
+See `_anchored`.
 
 That trick is model-specific, and the difference is not subtle. The full
 whisper-large-v3 ignores the prompt completely -- 280 of 280 words in Urdu
@@ -57,10 +67,12 @@ DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16000
 
 # The window the Roman Urdu prompt is re-seeded at, and how much of it is
-# decoded twice. 120s because the bias was measured to survive 116s unaided,
-# and shortening it buys anchoring at the price of the continuity whisper is
-# good at. The overlap is there so a word spoken across a boundary is whole in
-# at least one window; `_anchored` keeps each segment in exactly one of them.
+# decoded twice. 120s because the bias was measured to survive 116s unaided --
+# UNVERIFIED, no reproducing script in this repo, see #100 -- and shortening it
+# buys anchoring at the price of the continuity whisper is good at. The overlap
+# is there so a word spoken across a boundary is whole in at least one window;
+# `_anchored` keeps each segment in exactly one of them. `_anchored` also
+# requires `ANCHOR_CHUNK_S > ANCHOR_OVERLAP_S >= 1.0`; see its own validation.
 ANCHOR_CHUNK_S = 120.0
 ANCHOR_OVERLAP_S = 6.0
 
@@ -140,25 +152,56 @@ def _anchored(
 ) -> list[dict[str, Any]]:
     """Transcribe in windows, re-seeding `prompt` at the head of each one.
 
-    This exists because of a measurement, not a preference. whisper threads
-    each 30s window's decoded text into the next as that window's prompt, so an
-    `initial_prompt` reaches window one and nothing after it. On a voice note
-    that is invisible -- the bias it set still holds. On an hour it is fatal:
-    one window returning Urdu script, which a hallucination loop over silence
-    produces on its own, becomes the prompt for the next, and the run never
-    comes back. Measured over four recordings on 20 Sep 2026, the share of each
-    transcript returned in Urdu script despite `--roman-urdu` was 41%, 80%, 97%
-    and 99%, worst on the longest file.
+    This exists because of a measurement, not a preference. `initial_prompt`
+    is folded into an accumulated buffer that whisper's own
+    condition-on-previous-text threads into every later window, but mlx-whisper
+    keeps only the tail of that buffer -- decoding.py:501-503, confirmed
+    against the installed library, see #100 -- so the seed rides along for as
+    many windows as real speech takes to fill the budget, then is evicted
+    whole, oldest tokens first, not faded gradually. A low-confidence window
+    can also force an earlier reset, dropping the seed sooner than the token
+    budget alone would. On a voice note that is invisible -- the bias it set
+    still holds. On an hour it is fatal: one window returning Urdu script,
+    which a hallucination loop over silence produces on its own, becomes the
+    prompt for the next, and the run never comes back. Measured over four
+    recordings on 20 Sep 2026, the share of each transcript returned in Urdu
+    script despite `--roman-urdu` was 41%, 80%, 97% and 99%, worst on the
+    longest file (scratch/urdu_script_share.py reproduces three of the four;
+    the fourth transcript was deleted, #137).
 
     Cutting the audio up and prompting each piece bounds that: drift can spread
     within one window and no further. What it costs is the cross-window
     continuity whisper would otherwise carry, which is why the windows overlap
-    and are not shorter than the 116s the Roman bias was measured to survive.
+    and are not shorter than the 116s the Roman bias was measured to survive
+    (also UNVERIFIED, see #100).
 
     `condition_on_previous_text=False` is not the fix it looks like:
     mlx-whisper resets its prompt to `len(all_tokens)`, which drops the seed
     along with the drifted text and leaves later windows unprompted entirely.
+
+    Raises:
+        ValueError: if `anchor_s`/`overlap_s` cannot produce a positive step, or
+            `overlap_s` is too short for the short-fragment check below to stay
+            safe. Both are invariants a future re-measurement of
+            `ANCHOR_CHUNK_S`/`ANCHOR_OVERLAP_S` (#100) could break silently
+            without this.
     """
+    if anchor_s <= overlap_s:
+        raise ValueError(
+            f"anchor_s ({anchor_s}) must be greater than overlap_s ({overlap_s}): "
+            f"otherwise each window's step is zero or negative, so every window "
+            f"after the first either never runs or only re-decodes audio already "
+            f"covered, silently returning no new transcript for the rest of the file."
+        )
+    if overlap_s < 1.0:
+        raise ValueError(
+            f"overlap_s ({overlap_s}) must be at least 1.0s. The short-fragment "
+            f"check below drops a final window under a second on the assumption "
+            f"that it is wholly inside the previous window's overlap and was "
+            f"already transcribed; a shorter overlap breaks that assumption and "
+            f"can leave a sliver of real audio at the end of a file untranscribed."
+        )
+
     from mlx_whisper.audio import (
         load_audio as _load_audio,  # pyright: ignore[reportUnknownVariableType]  # mlx has no stubs
     )
@@ -191,7 +234,14 @@ def _anchored(
         ):
             # The overlap is decoded twice on purpose, so that a word across a
             # boundary is whole in at least one window. A segment is kept by
-            # its midpoint, which puts it in exactly one of the two.
+            # its midpoint, which puts it in exactly one of the two. Known
+            # limitation, not fixed here: this trusts whichever window decoded
+            # the overlap first. A hallucinated segment there (whisper is known
+            # to hallucinate over silence -- see this function's own docstring)
+            # can push `covered` past real content, and the next window's
+            # re-decode of that same span -- possibly the correct one -- is
+            # the copy that gets dropped. Needs a real failing recording to
+            # measure against (#100); none exists in this repo yet.
             if (sentence["start"] + sentence["end"]) / 2 < covered:
                 continue
             sentences.append(sentence)

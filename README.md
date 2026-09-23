@@ -181,11 +181,13 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 
 Roman Urdu is a **prompt**, not a setting. whisper writes Urdu in Urdu script by
 default; seeding the decoder with a Roman Urdu example makes it emit Latin, and
-whisper's own condition-on-previous-text carries that across windows. Measured
-on 116s of Urdu speech: **275 of 277 words came back in Latin**, English words
-left in English where they were spoken in English — which is the point, for
-speech that switches mid-sentence. `--roman-urdu` is that prompt plus
-`--language ur`; `--prompt` takes your own.
+whisper's own condition-on-previous-text carries that across windows, for as
+long as the prompt survives (it does not on long recordings, see below).
+**UNVERIFIED, no reproducing script in this repo (m2moiz/dekho-suno-jaano#100):**
+measured on 116s of Urdu speech, 275 of 277 words were claimed to come back in
+Latin, English words left in English where they were spoken in English, which
+is the point, for speech that switches mid-sentence. `--roman-urdu` is that
+prompt plus `--language ur`; `--prompt` takes your own.
 
 The model matters more than it looks. The full `whisper-large-v3` ignores the
 prompt outright — 280 of 280 words in Urdu script, and 218s rather than 85s for

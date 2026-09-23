@@ -40,3 +40,13 @@ whitelist.dikhao  # dsj/cli.py
 # autouse fixture: pytest instantiates it for every test in the module without
 # any test naming it, so there is no call site here either.
 whitelist.no_real_senko  # tests/test_diarize.py
+
+# Signature fidelity again, this time for a test double. fake_load_audio
+# restates mlx_whisper.audio.load_audio's `(file, sr=16000, from_stdin=False)`
+# exactly. The body ignores all three because it returns zeros, but the
+# parameters are load-bearing: dsj/whisper.py:208 calls it as
+# `_load_audio(str(audio), sr=SAMPLE_RATE)`, so a stub missing `sr` raises
+# TypeError instead of standing in.
+whitelist.file  # tests/test_whisper.py
+whitelist.sr  # tests/test_whisper.py
+whitelist.from_stdin  # tests/test_whisper.py

@@ -46,6 +46,52 @@ def _stub_mlx_whisper(
     monkeypatch.setitem(sys.modules, "mlx_whisper", module)
 
 
+def _stub_anchored(
+    monkeypatch: pytest.MonkeyPatch, samples: int, results: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Stub mlx_whisper for the anchored path: a fixed-length clip, one result per window.
+
+    `_anchored` loads audio through `mlx_whisper.audio.load_audio`, a separate
+    submodule `_stub_mlx_whisper` does not reach, and calls `mlx_whisper.transcribe`
+    once per window rather than once per file. `results[i]` is returned for the
+    `i`th call; asking for more windows than `results` holds is a test bug, not
+    something to paper over, so it is left to raise IndexError rather than looping.
+
+    Returns the list calls are recorded into: one dict per call, `n_samples` (the
+    window's length -- by the time whisper sees it the audio is an opaque array,
+    not a path, so this is how a test checks what it was handed) plus every
+    keyword whisper was called with.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def fake_transcribe(audio: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"n_samples": len(audio), **kwargs})
+        return results[len(calls) - 1]
+
+    transcribe_module = ModuleType("mlx_whisper")
+    transcribe_module.transcribe = fake_transcribe  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "mlx_whisper", transcribe_module)
+
+    def fake_load_audio(file: str, sr: int = 16000, from_stdin: bool = False) -> np.ndarray:
+        return np.zeros(samples, dtype=np.float32)
+
+    audio_module = ModuleType("mlx_whisper.audio")
+    audio_module.load_audio = fake_load_audio  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "mlx_whisper.audio", audio_module)
+
+    return calls
+
+
+def _seg(start: float, end: float, text: str) -> dict[str, Any]:
+    """One whisper segment, word timestamps included, for anchored-path tests."""
+    return {
+        "start": start,
+        "end": end,
+        "text": text,
+        "words": [{"word": text, "start": start, "end": end}],
+    }
+
+
 def _result(**over: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "text": "  Mujhe maloom nahin. Aap kaise hain?  ",
@@ -242,11 +288,14 @@ def test_segments_are_written_earliest_first(
 ) -> None:
     """The whisper path can hand back backwards segments too, for its own reason.
 
-    `_anchored` decodes overlapping windows and keeps a segment by its midpoint,
-    so a segment whose midpoint clears the watermark is kept even when it starts
-    before the segment already written above it. Ordering lives in
-    dsj/suno.py:_in_time_order, which both engines pass through, so this is the
-    whisper half of the same promise tests/test_suno.py makes for parakeet.
+    No `anchor_s` is passed here, so this is the plain unchunked path, not
+    `_anchored` -- and that is the point: whisper's own segments can arrive out
+    of `start` order from a single decode with no chunking involved at all, so
+    `_in_time_order` has to hold for whisper even before `_anchored` exists.
+    Ordering lives in dsj/suno.py:_in_time_order, which both engines pass
+    through, so this is the whisper half of the same promise tests/test_suno.py
+    makes for parakeet. `_anchored`'s own overlap/midpoint dedup is a different
+    mechanism and is pinned separately, by the `test_anchored_*` tests below.
 
     The glue differs and that is the point of asserting `text` here: whisper
     strips its segments, so the transcript joins them with a space where
@@ -281,3 +330,135 @@ def test_segments_are_written_earliest_first(
     assert [s["start"] for s in on_disk["sentences"]] == [1.5, 2.5]
     assert on_disk["text"] == " ".join(s["text"] for s in on_disk["sentences"])
     assert on_disk["text"] == "Mujhe maloom nahin. Aap kaise hain?"
+
+
+def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 16s clip at anchor_s=10 (overlap fixed at ANCHOR_OVERLAP_S=6) makes three calls.
+
+    step = anchor_s - overlap_s = 4s, so windows are [0,10), [4,14), [8,16) --
+    the third clipped to the real length by `end = min(start + window, total)`,
+    which is also where the loop has to stop rather than asking for a fourth,
+    empty window past the end of the file.
+    """
+    calls = _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+
+    transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    assert [c["n_samples"] for c in calls] == [
+        10 * whisper_mod.SAMPLE_RATE,
+        10 * whisper_mod.SAMPLE_RATE,
+        8 * whisper_mod.SAMPLE_RATE,
+    ]
+    # The whole point of the feature: every window gets the seed, not just the
+    # first one whisper's own condition-on-previous-text would carry it into.
+    assert all(c["initial_prompt"] == "seed" for c in calls)
+
+
+def test_anchored_reports_progress_at_each_windows_real_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`on_progress` fires once per window, with the window's end in seconds.
+
+    Same 16s/10s/6s geometry as the step test above: windows end at 10s, 14s
+    and 16s (the last clipped to the real length, not the nominal 18s a fourth
+    window would reach).
+    """
+    _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+    seen: list[float] = []
+
+    def on_progress(done_s: float) -> None:
+        seen.append(done_s)
+
+    transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0, on_progress=on_progress)
+
+    assert seen == [10.0, 14.0, 16.0]
+
+
+def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A segment re-decoded inside the overlap is kept once; new content past it survives.
+
+    Same 16s/10s/6s geometry: windows at offset 0, 4, 8. Window 0's segment near
+    its right edge (8.5-9.3) sits inside window 1's overlap and reappears there
+    at the same absolute time -- that copy must be dropped, not duplicated.
+    Window 1's own new segment (10.5-12.0) is past window 0's watermark and must
+    survive; window 2 re-decodes part of it (11.0-12.0) and must not duplicate
+    it either. 4 of the 6 segments across the three windows should survive.
+    """
+    calls = _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[
+            _result(segments=[_seg(1.0, 2.0, " one"), _seg(8.5, 9.3, " edge")]),
+            # Offset +4s: local 4.5-5.3 is global 8.5-9.3, the duplicate above.
+            _result(segments=[_seg(4.5, 5.3, " edge"), _seg(6.5, 8.0, " new")]),
+            # Offset +8s: local 3.0-4.0 is global 11.0-12.0, inside the segment
+            # window 1 already kept (10.5-12.0).
+            _result(segments=[_seg(3.0, 4.0, " newagain"), _seg(6.0, 7.5, " tail")]),
+        ],
+    )
+
+    got = transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    assert len(calls) == 3
+    assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
+        (1.0, 2.0, "one"),
+        (8.5, 9.3, "edge"),
+        (10.5, 12.0, "new"),
+        (14.0, 15.5, "tail"),
+    ]
+
+
+def test_anchored_handles_audio_shorter_than_one_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio under `anchor_s` is one window, not zero windows and not a crash.
+
+    `end = min(start + window, total)` caps the first window at the real
+    length, and `end >= total` breaks right after -- so a 5s clip with a 10s
+    anchor_s makes exactly one call, not an attempt at a second, empty one.
+    """
+    calls = _stub_anchored(
+        monkeypatch, samples=5 * whisper_mod.SAMPLE_RATE, results=[_result(segments=[])]
+    )
+
+    transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    assert len(calls) == 1
+    assert calls[0]["n_samples"] == 5 * whisper_mod.SAMPLE_RATE
+
+
+def test_anchor_s_must_exceed_overlap_s(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A future re-tuning of ANCHOR_CHUNK_S below ANCHOR_OVERLAP_S must fail loudly.
+
+    Left unguarded, `step = anchor_s - overlap_s` goes to zero or negative:
+    `range(0, total, 0)` raises a confusing `range() arg 3 must not be zero`,
+    and a negative step iterates zero times, silently returning no transcript
+    for the whole file. Neither is what should happen when the ratio the
+    116s measurement (#100, unverified) justifies gets retuned.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    with pytest.raises(ValueError, match=r"anchor_s .* must be greater than overlap_s"):
+        transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=whisper_mod.ANCHOR_OVERLAP_S)
+
+
+def test_overlap_s_must_be_at_least_one_second(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A too-short overlap can drop real audio at the very end of a file, silently.
+
+    The short-fragment break at the tail of `_anchored`'s loop assumes a
+    dropped under-a-second tail was already covered by the previous window's
+    overlap. Shrink the overlap below that and the assumption breaks.
+    """
+    monkeypatch.setattr(whisper_mod, "ANCHOR_OVERLAP_S", 0.5)
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    with pytest.raises(ValueError, match=r"overlap_s .* must be at least 1.0s"):
+        transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
