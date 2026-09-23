@@ -129,7 +129,7 @@ class Transcription(NamedTuple):
 
     `sentences` are already in the payload's shape -- `{start, end, text,
     tokens: [{t, w, charOffset}]}`, each token also carrying `e` and `c` when
-    the engine measured them -- so the caller writes them out rather than
+    the engine reports them -- so the caller writes them out rather than
     converting them.
     """
 

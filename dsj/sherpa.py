@@ -25,6 +25,7 @@ __all__ = [
     "wrap",
 ]
 
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,16 +39,17 @@ DEFAULT_MODEL = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 
 SAMPLE_RATE = 16000
 
-# sherpa reports token START times only, so a token's duration is the gap to the
-# next one. The last token has no next, and this is what it gets instead.
-_LAST_TOKEN_S = 0.08
-
-# False, which keeps both out of the transcript (dsj/suno.py reads this). The
-# `end` decode() builds is the next token's start, so a pause is absorbed into
-# the word before it, and `confidence` is never passed, so it is
-# AlignedToken's default 1.0. Written out, both would read as measurements.
-# #77 is where sherpa gets numbers worth writing.
-MEASURES_END_AND_CONFIDENCE = False
+# True: both are the decoder's own (dsj/suno.py reads this). sherpa-onnx's TDT
+# greedy search emits each token with the argmax of the model's duration head,
+# in encoder frames, and the log-softmax of the token it chose
+# (csrc/offline-transducer-greedy-search-nemo-decoder.cc:146-171 at v1.13.7),
+# and the result converts the frames to seconds, 0.08s each for this model
+# (csrc/offline-recognizer-transducer-impl.h:67-76). That is the duration head
+# parakeet-mlx reads too; this model's durations are [0, 1, 2, 3, 4] frames,
+# so sherpa's index and parakeet-mlx's value agree. The confidence is NOT
+# parakeet's: sherpa exposes only the chosen token's log-probability, never the
+# whole distribution parakeet takes an entropy over, so `c` here is exp of it.
+MEASURES_END_AND_CONFIDENCE = True
 
 
 def available() -> str | None:
@@ -135,27 +137,38 @@ class _LoadedSherpa:
 
         texts = list(result.tokens)
         starts = list(result.timestamps)
+        durations = list(result.durations)
+        log_probs = list(result.ys_log_probs)
         if not texts:
             return []
         # Guard rather than zip-and-hope: a mismatch here would silently shift
-        # every timestamp, which is the kind of wrong that looks right.
-        if len(starts) != len(texts):
-            raise RuntimeError(
-                f"sherpa returned {len(texts)} tokens and {len(starts)} timestamps"
-            )
-
-        out: list[AlignedToken] = []
-        for i, (text, start) in enumerate(zip(texts, starts, strict=True)):
-            nxt = starts[i + 1] if i + 1 < len(starts) else start + _LAST_TOKEN_S
-            out.append(
-                AlignedToken(
-                    id=i,
-                    text=text,
-                    start=float(start),
-                    duration=max(float(nxt) - float(start), 0.0),
+        # every timestamp, which is the kind of wrong that looks right. The
+        # same for the other two, and an empty list is a mismatch too: a
+        # transducer that is not TDT has no duration head and returns no
+        # durations, and filling them in from the next token's start is the
+        # guess MEASURES_END_AND_CONFIDENCE promises the transcript is not.
+        for name, values in (
+            ("timestamps", starts),
+            ("durations", durations),
+            ("log-probabilities", log_probs),
+        ):
+            if len(values) != len(texts):
+                raise RuntimeError(
+                    f"sherpa returned {len(texts)} tokens and {len(values)} {name}"
                 )
+
+        return [
+            AlignedToken(
+                id=i,
+                text=text,
+                start=float(start),
+                duration=float(duration),
+                confidence=math.exp(log_prob),
             )
-        return out
+            for i, (text, start, duration, log_prob) in enumerate(
+                zip(texts, starts, durations, log_probs, strict=True)
+            )
+        ]
 
 
 def wrap(recognizer: Any) -> _LoadedSherpa:

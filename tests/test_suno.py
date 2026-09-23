@@ -12,6 +12,7 @@ the real ones from dsj/chunking.py.
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -937,10 +938,22 @@ def test_parakeet_tokens_carry_the_decoders_end_and_confidence(
 
 
 class _SherpaStream:
-    """What sherpa-onnx hands back for one stream: token texts and start times, nothing else."""
+    """What sherpa-onnx hands back for one stream: the four per-token lists dsj reads.
 
-    def __init__(self, tokens: list[str], timestamps: list[float]) -> None:
-        self.result = SimpleNamespace(tokens=tokens, timestamps=timestamps)
+    The real result carries more (`text`, `words`, `lang` and others); these
+    are the ones dsj/sherpa.py decodes, one entry per token in each.
+    """
+
+    def __init__(
+        self,
+        tokens: list[str],
+        timestamps: list[float],
+        durations: list[float],
+        ys_log_probs: list[float],
+    ) -> None:
+        self.result = SimpleNamespace(
+            tokens=tokens, timestamps=timestamps, durations=durations, ys_log_probs=ys_log_probs
+        )
 
     def accept_waveform(self, sample_rate: int, samples: Any) -> None:
         """Take the audio and ignore it; the result is fixed."""
@@ -949,34 +962,50 @@ class _SherpaStream:
 class _SherpaRecognizer:
     """Stands in for sherpa_onnx.OfflineRecognizer, which dsj.sherpa.wrap accepts."""
 
-    def __init__(self, tokens: list[str], timestamps: list[float]) -> None:
-        self.tokens = tokens
-        self.timestamps = timestamps
+    def __init__(
+        self,
+        tokens: list[str],
+        timestamps: list[float],
+        durations: list[float],
+        ys_log_probs: list[float],
+    ) -> None:
+        self.lists = (tokens, timestamps, durations, ys_log_probs)
 
     def create_stream(self) -> _SherpaStream:
-        return _SherpaStream(self.tokens, self.timestamps)
+        return _SherpaStream(*self.lists)
 
     def decode_stream(self, stream: _SherpaStream) -> None:
         """Nothing to decode: the stream already holds its result."""
 
 
-def test_sherpa_tokens_leave_out_the_end_and_confidence_nobody_measured(
+def test_sherpa_tokens_carry_the_decoders_end_and_confidence(
     fake_media: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sherpa engine reports token starts only; dsj/sherpa.py makes up the rest.
+    """`e` is the start plus sherpa's own duration, `c` the probability it gave the token.
 
-    Its end is the next token's start, which swallows the three-second pause
-    after " see" below, and its confidence is AlignedToken's default 1.0.
-    Writing either would present a guess as a measurement, so the transcript
-    leaves both out until #77 gives sherpa numbers worth writing.
+    The three-second pause after " see" is the case that matters. Before #77
+    this engine took a token's end from the next token's start, which runs
+    " see" to 3.0 and puts the whole pause inside the word, so a bleep cut on
+    it would cover the silence and a subtitle would hold the word on screen.
+
+    The duration arrives as a float32, the way the native library returns it
+    (0.24 reads 0.23999999463558197), and is written rounded like parakeet's.
+    `c` is exp of the log-probability, so log(0.5) must come back as 0.5.
 
     The real sherpa decode runs here; only the recognizer under it is faked.
     """
     import dsj.sherpa as sherpa_mod
 
-    loaded = sherpa_mod.wrap(_SherpaRecognizer([" see", " this."], [0.0, 3.0]))
+    loaded = sherpa_mod.wrap(
+        _SherpaRecognizer(
+            [" see", " this."],
+            [0.0, 3.0],
+            durations=[float(np.float32(0.24)), float(np.float32(0.32))],
+            ys_log_probs=[math.log(0.5), math.log(0.9)],
+        )
+    )
 
     def load_audio(path: Path) -> Any:
         return np.zeros(10 * RATE, dtype=np.float32)
@@ -997,8 +1026,32 @@ def test_sherpa_tokens_leave_out_the_end_and_confidence_nobody_measured(
     payload = transcribe(fake_media, tmp_path / "out.json", engine="sherpa", diarize=False)
 
     tokens = [t for s in payload["sentences"] for t in s["tokens"]]
-    assert [(t["t"], t["w"]) for t in tokens] == [(0.0, " see"), (3.0, " this.")]
-    assert [set(t) for t in tokens] == [{"t", "w", "charOffset"}, {"t", "w", "charOffset"}]
+    assert [(t["t"], t["w"], t["e"], t["c"]) for t in tokens] == [
+        (0.0, " see", 0.24, 0.5),
+        (3.0, " this.", 3.32, 0.9),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("durations", "ys_log_probs", "missing"),
+    [([], [-0.1], "0 durations"), ([0.08], [], "0 log-probabilities")],
+)
+def test_sherpa_refuses_to_guess_an_end_or_a_confidence(
+    durations: list[float], ys_log_probs: list[float], missing: str
+) -> None:
+    """A model whose result lacks either list fails loudly instead of writing a guess.
+
+    Only a TDT model has a duration head (a plain transducer leaves
+    `durations` empty), and dsj writes `e` and `c` as the decoder's own. So a
+    token without its duration or log-probability is an error, the same way a
+    token without its timestamp already is, never a quiet return to inferring.
+    """
+    import dsj.sherpa as sherpa_mod
+
+    loaded = sherpa_mod.wrap(_SherpaRecognizer([" see"], [0.0], durations, ys_log_probs))
+
+    with pytest.raises(RuntimeError, match=f"1 tokens and {missing}"):
+        loaded.decode(np.zeros(RATE, dtype=np.float32))
 
 
 def test_parakeet_token_charoffset_indexes_the_sentence_text(

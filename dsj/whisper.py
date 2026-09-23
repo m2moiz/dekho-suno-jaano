@@ -123,6 +123,16 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     which is how parakeet's tokens arrive too. `text` here is whisper's own,
     stripped; dsj/suno.py rebuilds it from the words (#106), and `charOffset`
     is counted over those same words, so it indexes the text that is written.
+
+    Each word's `end` and `probability` become `e` and `c`, the keys and the
+    3-place rounding parakeet's tokens use (dsj/suno.py:_token). Neither is a
+    decode-time measurement the way parakeet's end is. whisper times a word
+    after decoding it, by DTW over cross-attention (mlx_whisper/timing.py:157
+    in 0.4.3), then clamps words it judges too long (:248-258 and :285-325);
+    `t` comes from the same alignment, so a word's two ends are equally
+    inferred. The probability is the mean, over the word's sub-word tokens, of
+    the probability the model gave each one (:173-176). payload.md says which
+    engine measures and which infers.
     """
     out: list[dict[str, Any]] = []
     for segment in segments:
@@ -133,7 +143,15 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
                 "end": float(segment["end"]) + offset,
                 "text": str(segment["text"]).strip(),
                 "tokens": with_char_offsets(
-                    [{"t": float(w["start"]) + offset, "w": str(w["word"])} for w in words]
+                    [
+                        {
+                            "t": float(w["start"]) + offset,
+                            "w": str(w["word"]),
+                            "e": round(float(w["end"]) + offset, 3),
+                            "c": round(float(w["probability"]), 3),
+                        }
+                        for w in words
+                    ]
                 ),
             }
         )

@@ -57,15 +57,23 @@ Inside a token:
 |---|---|---|
 | `t` | float seconds | When the token starts. Always present. |
 | `w` | string | The token's text, leading space kept. `"".join(t.w)` over a sentence's tokens is exactly its `text`. Always present. |
-| `e` | float seconds | When the token ends, as the decoder timed it. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. |
-| `c` | float, 0 to 1 | The decoder's confidence in the token: one minus the normalised entropy of its distribution at that step. Rounded to 3 places, so about half of parakeet's tokens read `1.0`. |
+| `e` | float seconds | When the token ends. Cut a word on `e`, never on the next token's `t`, which is wrong across every pause. Rounded to 3 places. Measured by the decoder or inferred after it, depending on the engine: see below. |
+| `c` | float, 0 to 1 | How sure the model was of the token; higher is surer. Rounded to 3 places. What it is computed from depends on the engine, below, so a threshold tuned on one engine does not carry to another. |
 | `charOffset` | int | Where `w` starts in the sentence's `text`, so `text[charOffset:charOffset + len(w)]` is `w`. It maps a click or a selection on rendered text back to a token. Counted in code points, as Python's `len` counts; JavaScript counts UTF-16 units, and the two differ for any character outside the Basic Multilingual Plane, such as an emoji. Written under every engine, and absent from transcripts written before it existed. |
 
-**`e` and `c` are parakeet's only.** Test for the key, never assume it. They are absent
-under sherpa, whose end is the next token's start and whose confidence is a default, so
-writing either would present a guess as a measurement. They are absent under whisper,
-which does not carry them through yet. And they are absent from every transcript written
-before they existed. `t` and `w` are in all of them.
+**Every engine writes `e` and `c`, and they mean different things under each.** There is
+no `engine` key; `model` names the engine, and this table says what its token times and
+confidences are:
+
+| Engine | `model` | `t` and `e` | `c` |
+|---|---|---|---|
+| parakeet | a hub id, `mlx-community/parakeet-tdt-0.6b-v3` by default | **Measured.** The decoder emits each token at an encoder frame, with a duration of whole 0.08 s frames. | One minus the normalised entropy of the decoder's whole distribution at that step. About half its tokens read `1.0`. |
+| sherpa | a local model directory, `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` by default | **Measured**, the same way: the same TDT model and the same duration head. | The probability the decoder gave the token it emitted, exp of its log-probability. sherpa exposes only that, not the distribution parakeet's entropy is taken over. |
+| whisper | a hub id naming whisper, `mlx-community/whisper-large-v3-turbo` by default | **Inferred.** whisper times each word after decoding it, by aligning its cross-attention to the audio, then shortens words it judges too long. How far that lands from the real boundary is not yet measured here, so pad a cut rather than trusting it to the frame. | The mean of the probabilities the model gave the word's sub-word tokens. |
+
+Test for the key, never assume it. `e` and `c` are absent from every transcript written
+before they existed: parakeet's before #56, sherpa's and whisper's before #77. `t` and `w`
+are in all of them.
 
 `tokens` is the load-bearing half. Speaker labelling votes tokens against the diarizer's
 turns, so an engine that could only give sentence boundaries could be transcribed but not

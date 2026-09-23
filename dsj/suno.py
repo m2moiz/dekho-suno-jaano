@@ -237,9 +237,11 @@ def _in_time_order(transcription: Transcription) -> Transcription:
 def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
     """One token as the transcript writes it: `t` and `w`, and `e` and `c` if measured.
 
-    `measured` is the engine's MEASURES_END_AND_CONFIDENCE. parakeet's decoder
-    times each token and scores it. sherpa's end is the next token's start and
-    its confidence a default, and neither is written as though it were measured.
+    `measured` is the engine's MEASURES_END_AND_CONFIDENCE. Both chunk engines
+    set it: parakeet's and sherpa's decoders each time every token and score it
+    (dsj/sherpa.py says how sherpa's score differs). An engine that could only
+    guess either would leave it False, so a guess is never written as though it
+    were measured.
 
     Both new values are rounded to 3 places, for file size, which is also what
     parakeet-mlx's own JSON writer does (parakeet_mlx/cli.py:143-150). Measured

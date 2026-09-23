@@ -88,7 +88,7 @@ def _seg(start: float, end: float, text: str) -> dict[str, Any]:
         "start": start,
         "end": end,
         "text": text,
-        "words": [{"word": text, "start": start, "end": end}],
+        "words": [{"word": text, "start": start, "end": end, "probability": 0.9}],
     }
 
 
@@ -101,16 +101,16 @@ def _result(**over: Any) -> dict[str, Any]:
                 "end": 1.5,
                 "text": " Mujhe maloom nahin.",
                 "words": [
-                    {"word": " Mujhe", "start": 0.0, "end": 0.5},
-                    {"word": " maloom", "start": 0.5, "end": 1.0},
-                    {"word": " nahin.", "start": 1.0, "end": 1.5},
+                    {"word": " Mujhe", "start": 0.0, "end": 0.5, "probability": 0.25},
+                    {"word": " maloom", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    {"word": " nahin.", "start": 1.0, "end": 1.5, "probability": 0.75},
                 ],
             },
             {
                 "start": 1.5,
                 "end": 2.5,
                 "text": " Aap kaise hain?",
-                "words": [{"word": " Aap", "start": 1.5, "end": 2.5}],
+                "words": [{"word": " Aap", "start": 1.5, "end": 2.5, "probability": 0.5}],
             },
         ],
     }
@@ -127,10 +127,34 @@ def test_segments_become_the_payloads_sentences(monkeypatch: pytest.MonkeyPatch)
     # The token list is what merge.py votes over, and `t` is the only field it
     # reads. The word text keeps its leading space, as parakeet's tokens do.
     assert got.sentences[0]["tokens"] == [
-        {"t": 0.0, "w": " Mujhe", "charOffset": 0},
-        {"t": 0.5, "w": " maloom", "charOffset": 6},
-        {"t": 1.0, "w": " nahin.", "charOffset": 13},
+        {"t": 0.0, "w": " Mujhe", "e": 0.5, "c": 0.25, "charOffset": 0},
+        {"t": 0.5, "w": " maloom", "e": 1.0, "c": 0.9, "charOffset": 6},
+        {"t": 1.0, "w": " nahin.", "e": 1.5, "c": 0.75, "charOffset": 13},
     ]
+
+
+def test_words_carry_whispers_end_and_probability_shifted_with_the_window() -> None:
+    """`e` is the word's own end and `c` its probability, the keys parakeet writes (#77).
+
+    Anchored windows hand `_sentences_from` a non-zero offset, so the end has to
+    move with the start: an `e` left window-relative would sit 114 seconds
+    before its own `t`. Both are rounded to 3 places, as parakeet's are, which
+    also drops the float noise the addition leaves (114.0 + 0.57 is
+    114.57000000000001) and the tail of a float32 mean.
+    """
+    segment = {
+        "start": 0.12,
+        "end": 0.57,
+        "text": " hi",
+        "words": [{"word": " hi", "start": 0.12, "end": 0.57, "probability": 0.87654321}],
+    }
+
+    [sentence] = whisper_mod._sentences_from([segment], 114.0)  # pyright: ignore[reportPrivateUsage]
+
+    [token] = sentence["tokens"]
+    assert token["e"] == 114.57
+    assert token["c"] == 0.877
+    assert token["e"] > token["t"]
 
 
 def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,14 +171,22 @@ def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> 
                 "start": np.float64(0.0),
                 "end": np.float64(1.0),
                 "text": " hello",
-                "words": [{"word": " hello", "start": np.float64(0.0), "end": np.float64(1.0)}],
+                "words": [
+                    {
+                        "word": " hello",
+                        "start": np.float64(0.0),
+                        "end": np.float64(1.0),
+                        "probability": np.float64(0.5),
+                    }
+                ],
             }
         ]
     )
     _stub_mlx_whisper(monkeypatch, result)
     got = transcribe_whisper(Path("a.wav"))
 
-    assert type(got.sentences[0]["tokens"][0]["t"]) is float
+    token = got.sentences[0]["tokens"][0]
+    assert [type(token[k]) for k in ("t", "e", "c")] == [float, float, float]
     json.dumps(got.sentences)  # the assertion that matters: it serialises
 
 
@@ -210,6 +242,8 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
     assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
         "t": 0.0,
         "w": " Mujhe",
+        "e": 0.5,
+        "c": 0.25,
         "charOffset": 0,
     }
     assert list(tmp_path.glob("*.checkpoint*")) == []
@@ -315,9 +349,9 @@ def test_segments_are_written_earliest_first(
                     "end": 3.5,
                     "text": " Aap kaise hain?",
                     "words": [
-                        {"word": " Aap", "start": 2.5, "end": 2.8},
-                        {"word": " kaise", "start": 2.8, "end": 3.2},
-                        {"word": " hain?", "start": 3.2, "end": 3.5},
+                        {"word": " Aap", "start": 2.5, "end": 2.8, "probability": 0.9},
+                        {"word": " kaise", "start": 2.8, "end": 3.2, "probability": 0.9},
+                        {"word": " hain?", "start": 3.2, "end": 3.5, "probability": 0.9},
                     ],
                 },
                 {
@@ -325,9 +359,9 @@ def test_segments_are_written_earliest_first(
                     "end": 2.0,
                     "text": " Mujhe maloom nahin.",
                     "words": [
-                        {"word": " Mujhe", "start": 1.5, "end": 1.7},
-                        {"word": " maloom", "start": 1.7, "end": 1.9},
-                        {"word": " nahin.", "start": 1.9, "end": 2.0},
+                        {"word": " Mujhe", "start": 1.5, "end": 1.7, "probability": 0.9},
+                        {"word": " maloom", "start": 1.7, "end": 1.9, "probability": 0.9},
+                        {"word": " nahin.", "start": 1.9, "end": 2.0, "probability": 0.9},
                     ],
                 },
             ],
