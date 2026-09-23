@@ -299,3 +299,31 @@ def test_the_checkpoint_is_written_with_fsync(
     write_checkpoint(tmp_path / "out.json.ckpt", FP, next_start=44, tokens=TOKENS)
 
     assert seen == [True]
+
+
+def test_a_sherpa_checkpoint_from_before_measured_times_does_not_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Old sherpa tokens must not come back labelled as measured (#169).
+
+    Before #77 sherpa guessed each token's duration from the next token's start
+    and left its confidence at 1.0, and the checkpoint banks both. Resumed on
+    the new code they would be written out as measured `e` and `c`. The marker
+    in sherpa's fingerprint_fields() makes those checkpoints stop matching, so
+    that run starts over instead.
+    """
+    import importlib.metadata
+
+    from dsj import sherpa
+
+    def pinned(_name: str) -> str:
+        return "1.13.7"
+
+    monkeypatch.setattr(importlib.metadata, "version", pinned)
+    now = dataclasses.replace(FP, engine_fields=sherpa.fingerprint_fields())
+    before = dataclasses.replace(FP, engine_fields={"sherpa_onnx_version": "1.13.7"})
+    p = tmp_path / "out.json.ckpt"
+    write_checkpoint(p, before, next_start=0, tokens=TOKENS)
+
+    assert read_checkpoint(p, before) is not None  # the checkpoint itself is sound
+    assert read_checkpoint(p, now) is None

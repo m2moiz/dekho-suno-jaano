@@ -95,10 +95,17 @@ def fingerprint_fields() -> dict[str, str]:
     The wheel version pins the decoder; the model directory pins the weights.
     Either moving means tokens from an old run cannot be trusted alongside new
     ones, which is what the checkpoint is guarding against.
+
+    `token_times` marks what the banked tokens mean. Before #77 a checkpoint
+    held a duration guessed from the next token's start and a confidence left
+    at 1.0; resumed now, those would be written out as measured `e` and `c`.
+    With the marker such a checkpoint no longer matches and the run starts
+    over, which costs a half-done run once and never passes a guess off as a
+    measurement (#169).
     """
     from importlib.metadata import version
 
-    return {"sherpa_onnx_version": version("sherpa-onnx")}
+    return {"sherpa_onnx_version": version("sherpa-onnx"), "token_times": "measured"}
 
 
 @dataclass
