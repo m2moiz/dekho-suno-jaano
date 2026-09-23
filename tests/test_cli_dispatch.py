@@ -12,12 +12,15 @@ two minutes of wall clock.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 
+import dsj
 from dsj.cli import main
 
 pytestmark = pytest.mark.skipif(
@@ -80,6 +83,55 @@ def test_a_bare_invocation_explains_itself_and_fails() -> None:
 def test_help_is_not_an_error() -> None:
     assert main(["--help"]) == 0
     assert main(["help"]) == 0
+
+
+def test_version_prints_the_package_version_and_exits_0(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """How a document, an issue or a bug report is pinned to the build (#50).
+
+    Compared to the whole line, not a substring: a caller parses this, and
+    `dsj 0.1.0` with a banner above it is a different contract.
+    """
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out == f"dsj {dsj.__version__}\n"
+
+
+def test_version_wins_over_a_verb_after_it(capsys: pytest.CaptureFixture[str]) -> None:
+    """Eager, so `dsj --version suno` answers the question and runs nothing."""
+    assert main(["--version", "suno"]) == 0
+    assert capsys.readouterr().out == f"dsj {dsj.__version__}\n"
+
+
+# Rich colours help when it sees GITHUB_ACTIONS or FORCE_COLOR, and then styles the
+# two dashes and the name of an option separately, so the plain text `--version` is
+# not in the raw output at all. Reproduced locally with GITHUB_ACTIONS=true.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def test_help_lists_the_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """`--version` is in the help a person reads, coloured or not."""
+    assert main(["--help"]) == 0
+    assert "--version" in ANSI.sub("", capsys.readouterr().out)
+
+
+def test_every_copy_of_the_version_agrees() -> None:
+    """pyproject.toml, dsj/__init__.py and the skill's header each hold the number.
+
+    Bump one on a release and forget another, and `dsj --version` names a build
+    that `pip show dsj` disagrees with. The skill's `metadata.version` is the
+    third copy: SKILL.md tells an agent to compare it with `dsj --version` to
+    learn whether the flags it documents exist in the build in front of it, so
+    a skill left behind on a release sends that agent the wrong way.
+    """
+    repo = Path(__file__).resolve().parent.parent
+    pyproject = tomllib.loads((repo / "pyproject.toml").read_text())["project"]["version"]
+    skill = (repo / ".agents" / "skills" / "dsj" / "SKILL.md").read_text()
+    header = re.search(r"^---\n(.*?)^---", skill, re.MULTILINE | re.DOTALL)
+    assert header is not None
+    skill_version = re.search(r"^\s+version:\s*(\S+)\s*$", header.group(1), re.MULTILINE)
+    assert skill_version is not None
+    assert pyproject == dsj.__version__ == skill_version.group(1)
 
 
 def test_an_unknown_verb_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,13 +1,17 @@
-"""The `dsj` command -- one Typer app, three verbs.
+"""The `dsj` command -- one Typer app, five verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
+    dsj likho  transcript.json -o captions.srt     # write
+    dsj parho  recording.mov captions.vtt -o transcript.json    # read
 
-Urdu imperatives, and they are not decoration: they name the three things the
-tool does in the order it does them. Suno gives you what was said, dekho gives
-you when the picture changed, dikhao gives you the picture itself. Jaano -- know
--- is what you get from all three, which is why it is the command.
+Urdu imperatives, and they are not decoration: the first three name the things
+the tool does in the order it does them. Suno gives you what was said, dekho
+gives you when the picture changed, dikhao gives you the picture itself. Jaano
+-- know -- is what you get from all three, which is why it is the command.
+Likho writes what suno heard out for the tools that are not dsj, and parho reads
+a transcript those tools made back in, in place of suno.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
 and `dsj.dekho.main` are thin shims onto the commands below, so
@@ -65,6 +69,39 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
     help="Make a long screen recording answerable.",
 )
+
+
+def _show_version(value: bool) -> None:
+    """Print `dsj <version>` and stop, before any verb is parsed.
+
+    Read from dsj.__version__ and never typed here: pyproject.toml holds the
+    other copy, a test holds the two equal, and a third would be the one that
+    drifts.
+    """
+    if value:
+        from dsj import __version__
+
+        print(f"dsj {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def root(
+    _version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_show_version, is_eager=True,
+            help="print the version and exit",
+        ),
+    ] = False,
+) -> None:
+    """Make a long screen recording answerable.
+
+    The callback exists only to carry --version (#50), which is how a document
+    or a bug report gets pinned to the build it was written against. Its
+    docstring repeats the Typer help= above because, with a callback present,
+    Typer reads the group's help from here.
+    """
 
 
 def _stderr_logger(name: str) -> None:
@@ -135,14 +172,16 @@ def suno(
     # enormous line of control characters.
     tty = sys.stderr.isatty()
     last_state = ""
+    last_total = 0.0
 
     def show(p: Progress, state: str) -> None:
         # A phase change ends the rewritten line, so the finished extraction bar
         # stays on screen instead of being overwritten by transcription's 0%.
-        nonlocal last_state
+        nonlocal last_state, last_total
         if tty and last_state and state != last_state:
             print(file=sys.stderr)
         last_state = state
+        last_total = p.audio_total_s
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
     # --roman-urdu is sugar over the two flags under it, and it is spelled as
@@ -195,7 +234,11 @@ def suno(
     if tty:
         print(file=sys.stderr)
     elapsed = time.monotonic() - started
-    total = result["sentences"][-1]["end"] if result["sentences"] else 0.0
+    # The done frame's total, read off the frame rather than recomputed, so
+    # this line and the status file cannot name two lengths for one run (#52).
+    # It used to be rebuilt from the last sentence: `done: 0:00 audio` for
+    # four minutes of audio with no speech in it.
+    total = last_total
     # A count, not a rate. `total / elapsed` would credit a resumed run with
     # work a previous process paid for -- an hour finished in two minutes reads
     # as 30x. Guarded on the key because a degraded run has no speakers.
@@ -287,6 +330,53 @@ def dikhao(
     # program, and a path on stdout composes:
     #     open "$(dsj frame rec.mov 431.5 -o /tmp/f.jpg)"
     print(dest)
+    return 0
+
+
+@app.command("likho")
+def likho(
+    transcript: Annotated[Path, typer.Argument(help="a transcript suno wrote")],
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="where the file goes: .srt, .vtt or .txt")
+    ],
+    fmt: Annotated[
+        str | None,
+        typer.Option("--format", help="srt, vtt or txt; read from the --out suffix if omitted"),
+    ] = None,
+) -> int:
+    """Write: export a transcript as SRT, WebVTT or plain text."""
+    from dsj.atomic import atomic_write_text
+    from dsj.likho import EXPORTERS
+
+    chosen = (fmt or out.suffix.removeprefix(".")).lower()
+    if chosen not in EXPORTERS:
+        # A usage error, before anything is read or written: a guessed format is
+        # a file of the wrong kind under the name the caller asked for.
+        raise typer.BadParameter(f"must be srt, vtt or txt, not {chosen!r}", param_hint="--format")
+    atomic_write_text(out, EXPORTERS[chosen](json.loads(transcript.read_text())))
+    return 0
+
+
+@app.command("parho")
+def parho(
+    media: Annotated[Path, typer.Argument(help="the recording the transcript indexes")],
+    source: Annotated[
+        Path, typer.Argument(help="an SRT, WebVTT or dsj JSON transcript; the content decides")
+    ],
+    out: Annotated[Path, typer.Option("--out", "-o", help="where the transcript JSON goes")],
+) -> int:
+    """Read: import an SRT, WebVTT or JSON transcript instead of running ASR."""
+    from dsj.atomic import atomic_write_text
+    from dsj.parho import parse
+
+    # The recording is never opened, only named, but a transcript naming one
+    # that is not there is an index into nothing; dekho would fail on it later
+    # and further from the typo.
+    if not media.exists():
+        raise FileNotFoundError(media)
+    # utf-8-sig: caption files from Windows tools often open with a BOM.
+    payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
+    atomic_write_text(out, json.dumps(payload))
     return 0
 
 

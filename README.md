@@ -77,6 +77,8 @@ the interesting part.
 | **Suno — transcript** | working. Chunked ASR, resume, optional speaker labels, ~13× realtime |
 | **Dekho — change marks** | working. [Validated on 834 recordings and five hour-long lectures](docs/generalisation.md) — though [worth little on their own](docs/do-marks-help.md) for answering questions |
 | **Dikhao — frame retrieval** | working. The step that actually makes a recording answerable |
+| **Likho: export** | working. SRT, WebVTT and plain text from a finished transcript |
+| **Parho: import** | working. An SRT, WebVTT or dsj JSON transcript in place of ASR |
 | **Frame description** | **not built**, blocked on a *measured* finding rather than a guess. See [Roadmap](#roadmap) |
 
 ---
@@ -220,9 +222,11 @@ jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
 `error`. The file is written atomically, so a reader never sees half of one.
 
 **Interruptions are cheap.** A checkpoint is written beside the output every
-chunk. Re-running the same command resumes from it; a changed model, source
-file, or chunk geometry invalidates it automatically and the run starts over
-rather than reusing tokens that describe something else.
+chunk. Re-running the same command resumes from it, even if the recording was
+renamed, moved or copied in between: the checkpoint knows it by its contents,
+not its path. An edited recording, a changed model, or a different chunk
+geometry invalidates it, and the run starts over rather than reusing tokens
+that describe something else, saying on stderr which of those it was.
 
 ### Dekho — change marks
 
@@ -267,6 +271,58 @@ recall by one string in fifteen ([docs/vlm-legibility.md](docs/vlm-legibility.md
 
 Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
 
+### Likho: exporting a transcript
+
+The transcript is JSON, which nothing but dsj and `jq` reads. `likho` (write)
+turns a finished one into SRT, WebVTT or plain text, running no model:
+
+```bash
+dsj likho transcript.json -o transcript.srt [--format srt|vtt|txt]
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | where the file goes; its suffix picks the format |
+| `--format FORMAT` | `srt`, `vtt` or `txt`, when the suffix does not say; wins over it |
+
+SRT is one cue per sentence, prefixed `SPEAKER_01: ` when speaker labelling
+ran. VTT is the same cues voiced with `<v SPEAKER_01>`, with a timestamp tag
+ahead of every word that starts later than the one before it, the only word
+timing a subtitle format has room for. TXT is for reading: a block per speaker
+turn headed by its start time, or a timestamped line per sentence when there
+are no labels.
+
+The cues never overlap. A chunk seam can leave a sentence ending after the next
+one starts, and MP4 timed text, like most players, keeps one cue at a time, so
+exporting an early transcript and muxing it into its recording moved 22 of 480
+cues. Each cue now ends no later than the next begins, and the same transcript
+exported by `likho` muxes into the same recording and back with 0 of 480
+changed (measured 2026-09-23).
+
+Also available as `dsj.likho.to_srt(payload)`, `to_vtt` and `to_txt`.
+
+### Parho: importing a transcript
+
+When a caption file already exists (a YouTube VTT, a subtitle track, something
+`likho` wrote), `parho` (read) makes it a transcript without running ASR, so
+`dekho`, `dikhao` and `likho` work on it:
+
+```bash
+dsj parho recording.mov captions.vtt -o transcript.json
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | where the transcript JSON goes (required) |
+
+The format, SRT, WebVTT or a dsj transcript JSON, is read from the content,
+not the file name. The recording must exist and is named in `audio`, not
+opened. What the file cannot hold is not invented: `model` is `import:srt` or
+`import:vtt`, an SRT sentence is one token spanning its cue, a VTT cue with
+word timestamp tags becomes word tokens with starts but no ends, and no
+imported token has a confidence. Speakers come back from VTT voice tags and
+from the `SPEAKER_01: ` prefix `likho` writes into SRT.
+
 ## Output
 
 ```jsonc
@@ -282,7 +338,10 @@ Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
       "end": 15.02,
       "speaker": 0,                     // index into `speakers`
       "text": " See this column here.",
-      "tokens": [{"t": 12.34, "w": " See"}, {"t": 12.51, "w": " this"}]
+      // e = token end, c = confidence: each engine's own, see payload.md
+      // charOffset = where `w` starts in this sentence's `text`
+      "tokens": [{"t": 12.34, "w": " See", "e": 12.43, "c": 0.998, "charOffset": 0},
+                 {"t": 12.51, "w": " this", "e": 12.67, "c": 0.941, "charOffset": 4}]
     }
   ],
 
@@ -304,6 +363,13 @@ that word belongs to sorts to where its earliest token claims it began. Measured
 on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
+
+**A sentence's `text` is its `tokens` joined**: every `w` in that time order,
+leading space included, under every engine. The top-level `text` is the
+sentences joined. So a word the stitch mistimed reads out of place in the text
+too, instead of the text reading one order while a click plays another. On the
+same three recordings 32 of 1038, 23 of 664 and 16 of 480 sentences read this
+way, all at seams; most move only punctuation, and about 1 in 100 moves a word.
 
 Two things about this shape are deliberate:
 
@@ -565,12 +631,15 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao
+  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
   chunking.py      the chunk loop parakeet-mlx does not provide
+  likho.py         likho  -- a transcript out as SRT, WebVTT or text
+  parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR
   checkpoint.py    resume, and the validated boundary that reads it
+  identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
   asr.py           the one shape both ASR engines return
   whisper.py       the whisper engine, and why Roman Urdu is a prompt

@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
 from dsj import media as media_mod
-from dsj.asr import ENGINES, Transcription, get_engine
+from dsj.asr import ENGINES, Transcription, get_engine, with_char_offsets
 from dsj.atomic import atomic_write_text
 
 # Names only -- both engine modules keep their backends lazy, so pulling
@@ -154,7 +154,63 @@ def _make_chunk_callback(
     return chunk_callback
 
 
-def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
+def _text_from_tokens(transcription: Transcription) -> Transcription:
+    """`transcription` with each sentence's `text` rebuilt as its tokens joined.
+
+    dsj writes every sentence twice, as `text` and as `tokens`, and at a chunk
+    seam the two disagreed. The vendored splitter glues `text` in the order the
+    merge emitted the words (dsj/alignment.py:149), then AlignedSentence sorts
+    the tokens by time (:76) and leaves `text` alone. Measured on three real
+    transcripts (#106): 16 of 480, 23 of 664 and 32 of 1038 sentences, every one
+    at a seam and every one the same words in another order. A reader saw one
+    order and a click on a word played the other.
+
+    The tokens win because they carry the times, and time order is what the
+    file promises everywhere else (see _in_time_order). The cost is that about
+    1% of sentences read slightly scrambled at a seam, which is what the
+    alignment says happened there. Done here rather than in alignment.py,
+    which tests/test_chunking.py holds to the upstream copy.
+
+    whisper passes through too. Its segment text was stripped while each word
+    kept its leading space (dsj/whisper.py:_sentences_from), so every whisper
+    sentence was one character short of its words joined; now it is not, and
+    the sentences of every engine glue with nothing. A segment with no words
+    gets an empty `text`, which is also what mlx-whisper leaves in the empty
+    and zero-length segments it clears (mlx_whisper/transcribe.py:506-514).
+
+    The top-level `text` is rebuilt from the sentences to match.
+    """
+    sentences = [
+        s | {"text": "".join(str(t["w"]) for t in s["tokens"])}
+        for s in transcription.sentences
+    ]
+    return Transcription(
+        text="".join(str(s["text"]) for s in sentences).strip(), sentences=sentences
+    )
+
+
+def _in_whole_milliseconds(transcription: Transcription) -> Transcription:
+    """`transcription` with each sentence's `start` and `end` in whole milliseconds.
+
+    #174 rounded every token's `t` and `e` to the millisecond, but the sentences
+    built from the same times kept their float noise, so a first token could
+    sit about 1e-14 s before the sentence it belongs to (#175). The bounds are
+    also widened to cover the words, so `start <= first t` and `end >= last e`
+    hold whatever an engine's own segment bounds say. Done where both engine
+    branches meet, before the sort, so the sort compares the rounded times.
+    """
+    sentences: list[Sentence] = []
+    for s in transcription.sentences:
+        start, end = round(s["start"], 3), round(s["end"], 3)
+        tokens = s["tokens"]
+        if tokens:
+            start = min(start, min(t["t"] for t in tokens))
+            end = max(end, max(t.get("e", t["t"]) for t in tokens))
+        sentences.append({**s, "start": start, "end": end})
+    return transcription._replace(sentences=sentences)
+
+
+def _in_time_order(transcription: Transcription) -> Transcription:
     """`transcription` with its sentences earliest first, and `text` rebuilt to match.
 
     Returned untouched when the sentences already run forwards, which is every
@@ -184,21 +240,53 @@ def _in_time_order(transcription: Transcription, joiner: str) -> Transcription:
 
     Stable, so sentences sharing a start keep the order the engine gave them.
 
+    `text` is re-glued with nothing: after _text_from_tokens every sentence,
+    whatever the engine, carries its own leading space.
+
     Args:
         transcription: What an engine returned, in the order it returned it.
-        joiner: What `text` glues its sentences with. parakeet and sherpa carry
-            a leading space on every sentence and join with nothing; whisper
-            strips its segments (dsj.whisper._sentences_from) and joins them
-            with a space. Re-joining with the other one would leave `text`
-            disagreeing with the sentences it is made of.
     """
     starts = [cast("float", s["start"]) for s in transcription.sentences]
     if starts == sorted(starts):
         return transcription
     ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
     return Transcription(
-        text=joiner.join(str(s["text"]) for s in ordered).strip(), sentences=ordered
+        text="".join(str(s["text"]) for s in ordered).strip(), sentences=ordered
     )
+
+
+def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
+    """One token as the transcript writes it: `t` and `w`, and `e` and `c` if measured.
+
+    `measured` is the engine's MEASURES_END_AND_CONFIDENCE. Both chunk engines
+    set it: parakeet's and sherpa's decoders each time every token and score it
+    (dsj/sherpa.py says how sherpa's score differs). An engine that could only
+    guess either would leave it False, so a guess is never written as though it
+    were measured.
+
+    Both new values are rounded to 3 places, for file size, which is also what
+    parakeet-mlx's own JSON writer does (parakeet_mlx/cli.py:143-150). Measured
+    on the 2,902 real parakeet tokens in scratch/gate_resumed.json.ckpt, the two
+    keys grow the sentences 121% unrounded and 70% rounded. Nothing is lost on
+    `e`: every start and end there sits on a 10 ms grid, so what goes is the
+    float noise of `start + duration`, which 784 of the 2,902 ends carry. On
+    `c` a thousandth is far finer than any tint threshold, though about half of
+    parakeet's tokens then read 1.0 (1,413 of the 2,902).
+
+    `t` is rounded the same way, and `e` is never written below it (#174). With
+    only `e` rounded, a zero-length token whose start carried float noise wrote
+    `"t": 107.60000000000001, "e": 107.6`: 1 of 806 parakeet tokens and 6 of 745
+    sherpa ones on a 3-minute clip, each a negative length to anything that
+    takes `e - t`. Rounding is monotonic, so the tokens, already sorted by their
+    unrounded starts, stay in order; two that were a hair apart can now share
+    a `t`, which the stable sorts downstream leave as they were.
+    """
+    t = round(token.start, 3)
+    out: dict[str, Any] = {"t": t, "w": token.text}
+    if measured:
+        out["e"] = max(round(token.end, 3), t)
+        out["c"] = round(token.confidence, 3)
+    return out
 
 
 def _with_speaker(sentence: Sentence, speaker: int) -> Sentence:
@@ -315,8 +403,10 @@ def transcribe(
     both phases so a detached run stays observable.
 
     An interrupted run leaves a checkpoint beside `out`, and the next run
-    continues from its last completed chunk. `resume=False` ignores and removes
-    any checkpoint and transcribes the whole file.
+    continues from its last completed chunk. The checkpoint stays until speaker
+    labelling is over, so a run interrupted while labelling resumes past the
+    last chunk and goes straight back to labelling. `resume=False` ignores and
+    removes any checkpoint and transcribes the whole file.
 
     Sentences are then labelled with who spoke them, which is a pass over an
     output that is already correct without it: any failure degrades to the
@@ -413,6 +503,11 @@ def transcribe(
 
         ckpt_path: Path | None = None
         resumed_from_s = 0.0
+        # The recording's length as this run's transcription frames report it,
+        # kept so the done frame can report the same number (#52). whisper's
+        # frames take ffprobe's duration; the chunk branch below replaces it
+        # with the decoded length, which is what its running frames divide by.
+        audio_total_s = stream.duration_s
         if spec.kind == "file":
             from dsj.whisper import transcribe_whisper
 
@@ -450,12 +545,13 @@ def transcribe(
             )
         else:
             audio_data = loaded.load_audio(audio)
+            audio_total_s = len(audio_data) / rate
 
             ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
-            # differ, and `audio` is a temp wav with a fresh path and mtime on
-            # every run, so a checkpoint keyed to it could never match a second
-            # time.
+            # differ, and `audio` is a temp wav made fresh on every run, so a
+            # checkpoint keyed to it would name ffmpeg's output rather than the
+            # recording the user handed us.
             fp = fingerprint(
                 media, len(audio_data), model_id, CHUNK_S, OVERLAP_S,
                 engine_fields=cast("dict[str, str]", eng_mod.fingerprint_fields()),
@@ -464,7 +560,16 @@ def transcribe(
             start_tokens: list[AlignedToken] = []
             skip_before = 0
             if resume:
-                found = read_checkpoint(ckpt_path, fp)
+                # A warning, not silence: a checkpoint that exists and is not
+                # used costs the whole run, and before #118 a rename did exactly
+                # that with nothing on stderr to say so.
+                found = read_checkpoint(
+                    ckpt_path,
+                    fp,
+                    on_reject=lambda why: logger.warning(
+                        "checkpoint ignored, transcribing from the start: %s", why
+                    ),
+                )
                 if found is not None:
                     skip_before, start_tokens = found
                     logger.info(
@@ -509,6 +614,9 @@ def transcribe(
                 skip_before=skip_before,
                 on_chunk=on_chunk,
             )
+            # Read off the engine module, like everything engine-specific here:
+            # parakeet and sherpa share this branch and differ on exactly this.
+            measured = cast("bool", eng_mod.MEASURES_END_AND_CONFIDENCE)
             transcription = Transcription(
                 text=result.text,
                 sentences=[
@@ -516,18 +624,18 @@ def transcribe(
                         "start": s.start,
                         "end": s.end,
                         "text": s.text,
-                        "tokens": [{"t": t.start, "w": t.text} for t in s.tokens],
+                        "tokens": with_char_offsets([_token(t, measured) for t in s.tokens]),
                     }
                     for s in result.sentences
                 ],
             )
 
-        # Both engine branches meet here, which is why the ordering runs here
-        # and not in either of them: parakeet and sherpa reach it through the
-        # chunk loop above, whisper through its own window loop, and both can
-        # emit a sentence that starts before the one printed ahead of it.
-        # `spec.kind` stays the engine test, read once, as it is above.
-        transcription = _in_time_order(transcription, " " if spec.kind == "file" else "")
+        # Both engine branches meet here, which is why the text and the order
+        # are put right here and not in either of them: parakeet and sherpa
+        # reach it through the chunk loop above, whisper through its own window
+        # loop, and both can emit a sentence that starts before the one printed
+        # ahead of it. Text first, so the order is rebuilt from the final text.
+        transcription = _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
@@ -545,17 +653,6 @@ def transcribe(
         # announce itself -- it merely looks short.
         atomic_write_text(out, json.dumps(payload))
 
-        # The transcript is on disk, so the checkpoint has nothing left to
-        # protect. Removed after the write, not before: a crash between the two
-        # costs one redundant resume rather than the whole run.
-        if ckpt_path is not None:
-            ckpt_path.unlink(missing_ok=True)
-
-        # After the unlink, not before: the checkpoint protects ASR work, that
-        # work is banked the moment the transcript is on disk, and a
-        # diarization crash holding a stale checkpoint open would make the next
-        # run resume audio it has already transcribed.
-        #
         # `audio` and not `media`: media.py has already produced the 16 kHz
         # mono pcm_s16le wav senko wants, and it only exists until this `with`
         # block ends. A .mov handed straight to the diarizer is a second
@@ -565,9 +662,35 @@ def transcribe(
                 payload, audio, out, stream.duration_s, report, require_diarize
             )
 
+        # Removed once labelling is over, not as soon as `out` is written
+        # (#101). The unlabelled transcript carries no fingerprint, so the next
+        # run cannot tell it is finished, or for this media and model; only the
+        # checkpoint can. It used to go first, on the reasoning that a crash in
+        # labelling would strand a stale checkpoint and the next run would
+        # resume audio it had already transcribed. It is not stale: by now it
+        # banks every token through the end of the audio (next_start is the
+        # total), so resuming it skips every chunk, decodes nothing, rebuilds
+        # this same transcript from the banked tokens and goes straight to
+        # labelling. Deleting it early is what cost the whole transcription:
+        # reproduced with `kill` and `kill -9` during labelling, the rerun
+        # started again from 0:00.
+        #
+        # After the write, not before, for the same reason: a crash between
+        # the two costs one redundant resume rather than the whole run.
+        if ckpt_path is not None:
+            ckpt_path.unlink(missing_ok=True)
+
         elapsed = time.monotonic() - started
-        total = transcription.sentences[-1]["end"] if transcription.sentences else 0.0
-        report(Progress(total, total, elapsed, resumed_from_s), "done")
+        # The length of the recording, the total every running frame reported,
+        # so the field keeps one meaning to the last frame (#52). It used to be
+        # the end of the last sentence, a different fact: a 240 s recording
+        # with no speech finished at 0.0 s and 0%, and a resumed run's speed
+        # went negative (-3.71 measured), because `resumed_from_s` kept the
+        # real position. The decoded length on the chunk path rather than
+        # ffprobe's for the same reason: `resumed_from_s` is counted in decoded
+        # samples, so a run resumed from a finished checkpoint (#101) ends at
+        # exactly 0.0x, not a hair below it.
+        report(Progress(audio_total_s, audio_total_s, elapsed, resumed_from_s), "done")
         return payload
 
 

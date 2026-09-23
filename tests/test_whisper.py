@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
-from dsj.suno import transcribe
+from dsj.suno import Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
 
 
@@ -88,7 +88,7 @@ def _seg(start: float, end: float, text: str) -> dict[str, Any]:
         "start": start,
         "end": end,
         "text": text,
-        "words": [{"word": text, "start": start, "end": end}],
+        "words": [{"word": text, "start": start, "end": end, "probability": 0.9}],
     }
 
 
@@ -101,16 +101,16 @@ def _result(**over: Any) -> dict[str, Any]:
                 "end": 1.5,
                 "text": " Mujhe maloom nahin.",
                 "words": [
-                    {"word": " Mujhe", "start": 0.0, "end": 0.5},
-                    {"word": " maloom", "start": 0.5, "end": 1.0},
-                    {"word": " nahin.", "start": 1.0, "end": 1.5},
+                    {"word": " Mujhe", "start": 0.0, "end": 0.5, "probability": 0.25},
+                    {"word": " maloom", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    {"word": " nahin.", "start": 1.0, "end": 1.5, "probability": 0.75},
                 ],
             },
             {
                 "start": 1.5,
                 "end": 2.5,
                 "text": " Aap kaise hain?",
-                "words": [{"word": " Aap", "start": 1.5, "end": 2.5}],
+                "words": [{"word": " Aap", "start": 1.5, "end": 2.5, "probability": 0.5}],
             },
         ],
     }
@@ -127,10 +127,86 @@ def test_segments_become_the_payloads_sentences(monkeypatch: pytest.MonkeyPatch)
     # The token list is what merge.py votes over, and `t` is the only field it
     # reads. The word text keeps its leading space, as parakeet's tokens do.
     assert got.sentences[0]["tokens"] == [
-        {"t": 0.0, "w": " Mujhe"},
-        {"t": 0.5, "w": " maloom"},
-        {"t": 1.0, "w": " nahin."},
+        {"t": 0.0, "w": " Mujhe", "e": 0.5, "c": 0.25, "charOffset": 0},
+        {"t": 0.5, "w": " maloom", "e": 1.0, "c": 0.9, "charOffset": 6},
+        {"t": 1.0, "w": " nahin.", "e": 1.5, "c": 0.75, "charOffset": 13},
     ]
+
+
+def test_words_carry_whispers_end_and_probability_shifted_with_the_window() -> None:
+    """`e` is the word's own end and `c` its probability, the keys parakeet writes (#77).
+
+    Anchored windows hand `_sentences_from` a non-zero offset, so the end has to
+    move with the start: an `e` left window-relative would sit 114 seconds
+    before its own `t`. Both are rounded to 3 places, as parakeet's are, which
+    also drops the float noise the addition leaves (114.0 + 0.57 is
+    114.57000000000001) and the tail of a float32 mean.
+    """
+    segment = {
+        "start": 0.12,
+        "end": 0.57,
+        "text": " hi",
+        "words": [{"word": " hi", "start": 0.12, "end": 0.57, "probability": 0.87654321}],
+    }
+
+    [sentence] = whisper_mod._sentences_from([segment], 114.0)  # pyright: ignore[reportPrivateUsage]
+
+    [token] = sentence["tokens"]
+    assert token["e"] == 114.57
+    assert token["c"] == 0.877
+    assert token["e"] > token["t"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_no_written_whisper_word_ends_before_it_starts(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #174: `t` rounded like `e`, so `e >= t` on every word.
+
+    whisper gives zero-length words often, 159 of 686 on a 3-minute clip. One
+    whose start carries float noise wrote an `e` below its own `t` once `e` was
+    rounded and `t` was not.
+    """
+    noisy = 0.1 + 0.2
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": " a b c",
+                    "words": [
+                        {"word": " a", "start": 0.0, "end": noisy, "probability": 0.9},
+                        {"word": " b", "start": noisy, "end": noisy, "probability": 0.9},
+                        {"word": " c", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, engine="whisper", diarize=False)
+
+    [sentence] = json.loads(out.read_text())["sentences"]
+    tokens = sentence["tokens"]
+    assert [(t["t"], t["e"]) for t in tokens] == [(0.0, 0.3), (0.3, 0.3), (0.5, 1.0)]
+    assert all(t["e"] >= t["t"] for t in tokens)
+    assert [t["w"] for t in tokens] == [" a", " b", " c"]
+
+
+def test_a_whisper_word_ending_before_it_starts_is_written_at_its_start() -> None:
+    """`e >= t` by construction, whatever the alignment hands back (#174)."""
+    segment = {
+        "start": 1.0,
+        "end": 1.5,
+        "text": " x",
+        "words": [{"word": " x", "start": 1.0, "end": 0.75, "probability": 1.0}],
+    }
+    [sentence] = whisper_mod._sentences_from([segment], 0.0)  # pyright: ignore[reportPrivateUsage]
+    [token] = sentence["tokens"]
+    assert (token["t"], token["e"]) == (1.0, 1.0)
 
 
 def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,14 +223,22 @@ def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> 
                 "start": np.float64(0.0),
                 "end": np.float64(1.0),
                 "text": " hello",
-                "words": [{"word": " hello", "start": np.float64(0.0), "end": np.float64(1.0)}],
+                "words": [
+                    {
+                        "word": " hello",
+                        "start": np.float64(0.0),
+                        "end": np.float64(1.0),
+                        "probability": np.float64(0.5),
+                    }
+                ],
             }
         ]
     )
     _stub_mlx_whisper(monkeypatch, result)
     got = transcribe_whisper(Path("a.wav"))
 
-    assert type(got.sentences[0]["tokens"][0]["t"]) is float
+    token = got.sentences[0]["tokens"][0]
+    assert [type(token[k]) for k in ("t", "e", "c")] == [float, float, float]
     json.dumps(got.sentences)  # the assertion that matters: it serialises
 
 
@@ -207,8 +291,38 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     assert set(payload) == {"audio", "model", "text", "sentences"}
     assert payload["model"] == whisper_mod.DEFAULT_WHISPER_MODEL
-    assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {"t": 0.0, "w": " Mujhe"}
+    assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
+        "t": 0.0,
+        "w": " Mujhe",
+        "e": 0.5,
+        "c": 0.25,
+        "charOffset": 0,
+    }
     assert list(tmp_path.glob("*.checkpoint*")) == []
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_run_ends_at_the_length_its_running_frame_reported(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #52: the done frame's total is the recording's, not a sentence's.
+
+    whisper's frames take their total from the probe, 4427.028 s under the stub,
+    and its last sentence here ends at 2.5 s. The done frame used to say 2.5.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+    frames: list[tuple[str, float, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        frames.append((state, p.audio_done_s, p.audio_total_s))
+
+    transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", diarize=False, on_progress=capture
+    )
+
+    assert frames[0] == ("running", 0.0, 4427.028)
+    assert frames[-1] == ("done", 4427.028, 4427.028)
 
 
 def test_an_unknown_engine_is_refused_by_name(fake_media: Path, tmp_path: Path) -> None:
@@ -297,9 +411,9 @@ def test_segments_are_written_earliest_first(
     makes for parakeet. `_anchored`'s own overlap/midpoint dedup is a different
     mechanism and is pinned separately, by the `test_anchored_*` tests below.
 
-    The glue differs and that is the point of asserting `text` here: whisper
-    strips its segments, so the transcript joins them with a space where
-    parakeet's join with nothing.
+    `text` is asserted too, because it is rebuilt from the reordered sentences.
+    Each one's text is its words joined, leading space kept, so the glue is the
+    empty string, as it is for parakeet.
     """
     _stub_mlx_whisper(
         monkeypatch,
@@ -310,13 +424,21 @@ def test_segments_are_written_earliest_first(
                     "start": 2.5,
                     "end": 3.5,
                     "text": " Aap kaise hain?",
-                    "words": [{"word": " Aap", "start": 2.5, "end": 3.5}],
+                    "words": [
+                        {"word": " Aap", "start": 2.5, "end": 2.8, "probability": 0.9},
+                        {"word": " kaise", "start": 2.8, "end": 3.2, "probability": 0.9},
+                        {"word": " hain?", "start": 3.2, "end": 3.5, "probability": 0.9},
+                    ],
                 },
                 {
                     "start": 1.5,
                     "end": 2.0,
                     "text": " Mujhe maloom nahin.",
-                    "words": [{"word": " Mujhe", "start": 1.5, "end": 2.0}],
+                    "words": [
+                        {"word": " Mujhe", "start": 1.5, "end": 1.7, "probability": 0.9},
+                        {"word": " maloom", "start": 1.7, "end": 1.9, "probability": 0.9},
+                        {"word": " nahin.", "start": 1.9, "end": 2.0, "probability": 0.9},
+                    ],
                 },
             ],
         ),
@@ -328,8 +450,98 @@ def test_segments_are_written_earliest_first(
     on_disk = json.loads(out.read_text())
     assert on_disk == payload
     assert [s["start"] for s in on_disk["sentences"]] == [1.5, 2.5]
-    assert on_disk["text"] == " ".join(s["text"] for s in on_disk["sentences"])
+    assert on_disk["text"] == "".join(s["text"] for s in on_disk["sentences"]).strip()
     assert on_disk["text"] == "Mujhe maloom nahin. Aap kaise hain?"
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentences_text_is_its_words_joined(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The leading space included, which whisper's own segment text had stripped.
+
+    Each word keeps its leading space, as parakeet's tokens do, so a stripped
+    `text` was one character short of the words joined in every sentence. A
+    reader mapping a click on the prose back to a word would be off by one.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    first = payload["sentences"][0]
+    assert first["text"] == " Mujhe maloom nahin."
+    for sentence in payload["sentences"]:
+        assert sentence["text"] == "".join(t["w"] for t in sentence["tokens"])
+    assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_whisper_token_charoffset_indexes_the_sentence_text(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #126: same key, same meaning, as parakeet's.
+
+    whisper builds its own sentence dicts and never reaches the chunk path's
+    serializer, so a field added only there would pass every parakeet test and
+    be missing here. Asserted against the written `text`, whose leading space
+    whisper's own segment text did not have: an offset off by that one
+    character would fail on every token.
+    """
+    _stub_mlx_whisper(monkeypatch, _result())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [t["charOffset"] for t in sentence["tokens"]] == [0, 6, 13]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentences_words_are_written_earliest_first(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The time order the README promises, held by a sort rather than by whisper's habit (#167).
+
+    whisper decodes left to right, so its word times normally rise, and no
+    transcript has been seen breaking that. But nothing enforced it, and since
+    #106 a sentence's `text` is its words joined, so one word out of order
+    would scramble the prose as well as the times. The segment below hands
+    `_sentences_from` its last two words swapped; what is written must run
+    earliest first, read in that order, and keep every `charOffset` pointing
+    at its own word.
+    """
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.5,
+                    "text": " Mujhe maloom nahin.",
+                    "words": [
+                        {"word": " Mujhe", "start": 0.0, "end": 0.5, "probability": 0.9},
+                        {"word": " nahin.", "start": 1.0, "end": 1.5, "probability": 0.9},
+                        {"word": " maloom", "start": 0.5, "end": 1.0, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    [sentence] = payload["sentences"]
+    assert [(t["t"], t["w"]) for t in sentence["tokens"]] == [
+        (0.0, " Mujhe"),
+        (0.5, " maloom"),
+        (1.0, " nahin."),
+    ]
+    assert sentence["text"] == " Mujhe maloom nahin."
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
 
 
 def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,3 +674,38 @@ def test_overlap_s_must_be_at_least_one_second(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ValueError, match=r"overlap_s .* must be at least 1.0s"):
         transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #175: sentence times are whole milliseconds and cover the words.
+
+    A segment's own bounds carry float noise, and nothing but this keeps the
+    written sentence from starting after its first word or ending before its
+    last one.
+    """
+    noisy = 0.1 + 0.2
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": noisy,
+                    "end": 1.0 + noisy,
+                    "text": " a b",
+                    "words": [
+                        {"word": " a", "start": 0.2, "end": 0.5, "probability": 0.9},
+                        {"word": " b", "start": 0.6, "end": 1.4, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, engine="whisper", diarize=False)
+
+    [sentence] = json.loads(out.read_text())["sentences"]
+    assert (sentence["start"], sentence["end"]) == (0.2, 1.4)

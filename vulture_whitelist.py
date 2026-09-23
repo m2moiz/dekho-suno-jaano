@@ -1,11 +1,13 @@
 """Deliberate exceptions for vulture (the orphan gate).
 
-Everything here is read by a framework through reflection, so no reachable
-call site exists for vulture to find. Two findings from the same sweep were
-real and were deleted instead of listed (an unused tmp_path_factory in
-conftest's chunked_audio_path, an unused capsys in test_resume_cli) -- this
+Almost everything here is read by a framework through reflection, so no
+reachable call site exists for vulture to find. Two findings from the same
+sweep were real and were deleted instead of listed (an unused tmp_path_factory
+in conftest's chunked_audio_path, an unused capsys in test_resume_cli) -- this
 file is only for names whose "caller" is pytest, pydantic, or a signature
-contract.
+contract. The one exception is marked where it sits: a name with a real call
+site that the orphan gate cannot see, because it scans only the files a branch
+changed.
 """
 
 from typing import Any
@@ -24,6 +26,9 @@ whitelist.fake_media  # tests/conftest.py
 whitelist.frozen_clock  # tests/conftest.py
 whitelist.already_extracted_media  # tests/conftest.py
 whitelist.no_real_diarizer  # tests/conftest.py
+# A session fixture, injected by name into tests/test_chunking.py,
+# tests/test_diarize.py, tests/test_resume_cli.py and tests/test_resume_gate.py.
+whitelist.chunked_audio_path  # tests/conftest.py
 
 # Protocol signature fidelity: _Transcribes restates BaseParakeet.transcribe,
 # and the parameter names must match upstream's keyword API exactly.
@@ -36,6 +41,11 @@ whitelist.overlap_duration  # tests/test_chunking.py
 whitelist.suno  # dsj/cli.py
 whitelist.dekho  # dsj/cli.py
 whitelist.dikhao  # dsj/cli.py
+whitelist.likho  # dsj/cli.py
+whitelist.parho  # dsj/cli.py
+# The same for the group callback, `@app.callback()`, which exists to carry
+# --version. `dsj --version` printing the version is the check that it is wired.
+whitelist.root  # dsj/cli.py
 
 # autouse fixture: pytest instantiates it for every test in the module without
 # any test naming it, so there is no call site here either.
@@ -50,3 +60,10 @@ whitelist.no_real_senko  # tests/test_diarize.py
 whitelist.file  # tests/test_whisper.py
 whitelist.sr  # tests/test_whisper.py
 whitelist.from_stdin  # tests/test_whisper.py
+
+# The exception the docstring names. Every ChunkEngine declares this and the
+# chunk loop reads it, `if end - start < engine.min_chunk_samples:` at
+# dsj/chunking.py:87. The orphan gate scans only the files a branch changed,
+# and chunking.py is rarely one of them, so a branch that touches an engine
+# sees its declaration as unused.
+whitelist.min_chunk_samples  # dsj/asr.py, dsj/parakeet.py, dsj/sherpa.py

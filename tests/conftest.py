@@ -70,6 +70,10 @@ class FakeToken:
     start: float
     end: float
     text: str
+    # AlignedToken's own default. A test that asserts the transcript carries
+    # the decoder's confidence sets something else, or a serializer writing a
+    # constant 1.0 would pass it.
+    confidence: float = 1.0
 
 
 class FakeModel:
@@ -124,7 +128,13 @@ class FakeModel:
 
         self.mels.append(mel)
         decoded = [
-            AlignedToken(id=i, text=t.text, start=t.start, duration=t.end - t.start)
+            AlignedToken(
+                id=i,
+                text=t.text,
+                start=t.start,
+                duration=t.end - t.start,
+                confidence=t.confidence,
+            )
             for i, t in enumerate(self.tokens)
         ]
         cfg: Any = (decoding_config.sentence if decoding_config else None) or SentenceConfig()
@@ -153,7 +163,7 @@ def fake_parakeet(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeModel]:
         def from_pretrained(model_id: str) -> FakeModel:
             return model
 
-        def load_audio(path: Path, rate: int, *a: Any, **k: Any) -> range:
+        def load_audio(path: Path, rate: int, *_a: Any, **_k: Any) -> range:
             return range(model.total_samples)
 
         def get_logmel(audio: Any, cfg: Any) -> Any:
@@ -172,8 +182,8 @@ def fake_media(tmp_path: Path) -> Path:
     """A real file to stand in as the source media for a faked run.
 
     It needs to exist even though load_audio is stubbed and never opens it:
-    transcribe() fingerprints the source by size and mtime, and stat() on a
-    path that is not there raises.
+    transcribe() fingerprints the source by its contents (dsj/identity.py),
+    and reading a path that is not there raises.
     """
     p = tmp_path / "in.wav"
     p.write_bytes(b"RIFF")

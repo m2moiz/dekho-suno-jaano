@@ -45,7 +45,7 @@ REPO = Path(__file__).resolve().parent.parent
 SKILL_DIR = REPO / ".agents" / "skills" / "dsj"
 SKILL = SKILL_DIR / "SKILL.md"
 
-# The three verbs each get a level-3 section in SKILL.md whose body carries the flag
+# Every verb gets a level-3 section in SKILL.md whose body carries the flag
 # table this gate reads. The heading text is load-bearing, not decoration.
 VERB_HEADING = re.compile(r"^###\s+(\w+)\s*$", re.MULTILINE)
 
@@ -54,7 +54,7 @@ OPTION = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
 
 # `dsj suno ...`, with or without a `uv run` prefix, found anywhere on the line so that
 # `open "$(dsj dikhao ...)"` is read too.
-INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao)\b(?P<rest>.*)")
+INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao|likho|parho)\b(?P<rest>.*)")
 
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -84,6 +84,19 @@ def cli_options() -> dict[str, set[str]]:
         name: {opt for param in command.params for opt in param.opts if opt.startswith("-")}
         for name, command in group.commands.items()
     }
+
+
+def top_level_options() -> set[str]:
+    """The options `dsj` itself takes, before any verb, other than --help.
+
+    cli_options() reads only the verbs, so until #50 added a callback to the app
+    there was nothing here to read, and a top-level flag could ship undocumented
+    with this whole file green.
+    """
+    group = cast(Group, get_command(dsj.cli.app))
+    return {
+        opt for param in group.params for opt in param.opts if opt.startswith("-")
+    } - {"--help"}
 
 
 def source_states() -> set[str]:
@@ -254,6 +267,18 @@ def test_each_verb_table_lists_exactly_the_flags_the_cli_has() -> None:
     assert not problems, "the skill and the CLI disagree:\n  " + "\n  ".join(problems)
 
 
+def test_every_top_level_option_is_in_the_first_command_block() -> None:
+    """`dsj --version` belongs where an agent looks before its first command."""
+    text = SKILL.read_text()
+    start = text.index("## Before the first command")
+    first = text[start : text.index("\n## ", start + 1)]
+    commands = "\n".join(body for _, body in FENCE.findall(first))
+    options = top_level_options()
+    assert options, "the app has no top-level options; the #50 callback is gone"
+    missing = sorted(o for o in options if f"dsj {o}" not in commands)
+    assert not missing, f"top-level options the skill never shows an agent: {missing}"
+
+
 def test_no_example_command_uses_a_flag_its_verb_does_not_have() -> None:
     actual = cli_options()
     wrong = [
@@ -361,7 +386,7 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
         assert time.monotonic() < deadline, "no checkpoint within 300s"
         time.sleep(0.05)
     banked = json.loads(ckpt.read_text())
-    assert set(banked) == {"fingerprint", "next_start", "tokens"}
+    assert set(banked) == {"media", "fingerprint", "next_start", "tokens"}
     assert banked["next_start"] > 0
 
     first.send_signal(signal.SIGINT)
@@ -380,12 +405,14 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
     assert set(payload) == {"audio", "model", "text", "sentences"}
     assert payload["audio"] == str(tone)
 
-    # 3. The heartbeat ends in a terminal state. `state`, never `fraction`: the done
-    #    frame rebuilds its totals from the last sentence, so a transcript with no
-    #    sentences ends at fraction 0.0. Issue #52.
+    # 3. The heartbeat ends in a terminal state. `state`, never `fraction`: fraction
+    #    reaches 1.0 before labelling starts and drops to 0.0 for the diarizing frames.
+    #    The done frame reports the length of the audio (#52), so the tone, which has
+    #    no speech in it, still ends at its full 240 s rather than at 0.0.
     heartbeat = json.loads(status.read_text())
     assert heartbeat["state"] == "done", heartbeat
     assert set(heartbeat) >= {"state", "fraction", "speed", "eta_s", "audio_done_s"}
+    assert heartbeat["audio_total_s"] == pytest.approx(240.0)
 
     # 4. dekho merges marks into the transcript it is given.
     marked = tmp_path / "marked.json"

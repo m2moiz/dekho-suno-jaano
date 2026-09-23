@@ -12,9 +12,16 @@ the real ones from dsj/chunking.py.
 from __future__ import annotations
 
 import json
+import logging
+import math
+import os
+import shutil
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 from conftest import FakeToken
 
@@ -39,9 +46,13 @@ RATE = 16_000
 
 
 def _tokens() -> list[FakeToken]:
-    """One sentence ending at 750.0s -- the trailing '.' is what closes it."""
+    """One sentence ending at 750.0s -- the trailing '.' is what closes it.
+
+    The first token's confidence is not the default 1.0, so the pinned token
+    shape below can tell the decoder's number from a constant.
+    """
     return [
-        FakeToken(0.0, 0.4, "see"),
+        FakeToken(0.0, 0.4, "see", confidence=0.5),
         FakeToken(0.5, 1.0, " this"),
         FakeToken(1.1, 1.6, " column"),
         FakeToken(1.7, 750.0, " here."),
@@ -133,7 +144,13 @@ def test_transcribe_writes_the_timestamped_index(
     assert on_disk["sentences"][0]["start"] == 0.0
     assert on_disk["sentences"][0]["end"] == 750.0
     assert on_disk["sentences"][0]["text"] == "see this column here."
-    assert on_disk["sentences"][0]["tokens"][0] == {"t": 0.0, "w": "see"}
+    assert on_disk["sentences"][0]["tokens"][0] == {
+        "t": 0.0,
+        "w": "see",
+        "e": 0.4,
+        "c": 0.5,
+        "charOffset": 0,
+    }
     assert on_disk["audio"] == str(fake_media)
 
 
@@ -182,6 +199,12 @@ def test_status_file_ends_in_the_done_state(
     fake_media: Path,
     tmp_path: Path,
 ) -> None:
+    """The done frame reports the length of the audio, as the running frames did (#52).
+
+    The fake decodes 100 seconds and its one sentence claims to end at 750.0,
+    which a real run cannot produce but which shows what the number is built
+    from: this frame used to repeat the last sentence's end.
+    """
     fake_parakeet(sample_rate=RATE, tokens=_tokens())
     status = tmp_path / "status.json"
 
@@ -189,8 +212,117 @@ def test_status_file_ends_in_the_done_state(
 
     final = json.loads(status.read_text())
     assert final["state"] == "done"
-    assert final["audio_done_s"] == pytest.approx(750.0)
+    assert final["audio_done_s"] == pytest.approx(100.0)
+    assert final["audio_total_s"] == pytest.approx(100.0)
     assert final["fraction"] == 1.0
+
+
+def test_a_recording_with_no_speech_ends_at_its_own_length(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Four minutes with no sentences finish at 240 s and 100%, not at 0 s and 0% (#52).
+
+    Measured on a real 240 s tone on 2026-09-05: the final frame read 0.0,
+    0.0, fraction 0.0 and speed 0.0, because both totals came from the end of
+    the last sentence and there was none. The case the bug hinges on, so the
+    with-speech test above cannot stand in for it. Also held: the done frame's
+    total is the one every running frame reported, so a bar does not jump on
+    the last frame.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=240.0)
+    status = tmp_path / "status.json"
+    totals: list[tuple[str, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        totals.append((state, p.audio_total_s))
+
+    transcribe(fake_media, tmp_path / "out.json", status_path=status, on_progress=capture)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["audio_done_s"] == pytest.approx(240.0)
+    assert final["audio_total_s"] == pytest.approx(240.0)
+    assert final["fraction"] == 1.0
+    assert final["speed"] > 0
+    assert {total for state, total in totals if state in ("running", "done")} == {240.0}
+
+
+def test_a_resumed_run_ends_at_a_positive_speed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Speed is audio done minus audio resumed from, so both must be the audio's (#52).
+
+    With the done frame's total taken from the last sentence (none here) and
+    `resumed_from_s` kept at the real 210 s, the subtraction went negative:
+    reproduced at -3.71 on a real 240 s tone on 2026-09-05.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    class Interrupt(Exception):
+        pass
+
+    seen = 0
+
+    def die_after_two(_p: Progress, state: str) -> None:
+        nonlocal seen
+        if state != "running":
+            return
+        seen += 1
+        if seen == 2:
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        transcribe(fake_media, out, on_progress=die_after_two)
+
+    transcribe(fake_media, out, status_path=status)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["resumed_from_s"] == pytest.approx(210.0)
+    assert final["audio_total_s"] == pytest.approx(360.0)
+    assert final["speed"] > 0
+
+
+def test_a_run_resumed_from_a_finished_checkpoint_ends_at_zero_speed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Resumed past its last chunk, a run transcribed nothing, and says 0.0x, never less.
+
+    Since #101 an interrupt during labelling leaves a checkpoint banked through
+    the end of the audio, so `resumed_from_s` is the whole decoded length. The
+    done frame's total is that same decoded length, not ffprobe's (4427.028 s
+    under this module's stub), so the subtraction in `speed` is exactly zero.
+    """
+    fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    def interrupt(wav: Path) -> None:
+        raise KeyboardInterrupt
+
+    fake_turns(**_one_speaker(then=interrupt))
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out)
+
+    fake_turns(**_one_speaker())
+    transcribe(fake_media, out, status_path=status)
+
+    final = json.loads(status.read_text())
+    assert final["state"] == "done"
+    assert final["resumed_from_s"] == pytest.approx(100.0)
+    assert final["audio_total_s"] == pytest.approx(100.0)
+    assert final["fraction"] == 1.0
+    assert final["speed"] == 0.0
 
 
 def test_no_status_path_writes_nothing(
@@ -282,6 +414,104 @@ def test_an_interrupted_run_leaves_a_checkpoint_and_no_transcript(
     assert not out.exists(), "a partial transcript was written as if complete"
     banked = json.loads(checkpoint_path_for(out).read_text())
     assert banked["next_start"] == int(210.0 * RATE)
+
+
+def _interrupt_after_two_chunks(media: Path, out: Path) -> None:
+    """Run on 360 s of fake audio and stop it with the checkpoint at 210 s."""
+
+    class Interrupt(Exception):
+        pass
+
+    seen = 0
+
+    def die_after_two(_p: Progress, state: str) -> None:
+        nonlocal seen
+        if state != "running":
+            return
+        seen += 1
+        if seen == 2:
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        transcribe(media, out, on_progress=die_after_two)
+    assert json.loads(checkpoint_path_for(out).read_text())["next_start"] == int(210.0 * RATE)
+
+
+def _where_the_rerun_started(media: Path, out: Path) -> float:
+    """Finish the run on `media`, and return the audio second it resumed from."""
+    done: list[Progress] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        if state == "done":
+            done.append(p)
+
+    transcribe(media, out, on_progress=capture)
+    return done[0].resumed_from_s
+
+
+def _renamed(media: Path) -> Path:
+    return media.rename(media.with_name("renamed.wav"))
+
+
+def _moved(media: Path) -> Path:
+    folder = media.parent / "elsewhere"
+    folder.mkdir()
+    return media.rename(folder / media.name)
+
+
+def _copied(media: Path) -> Path:
+    """A plain `cp`, which gives the copy a new mtime; utime makes that certain."""
+    copy = media.with_name("copy.wav")
+    shutil.copyfile(media, copy)
+    os.utime(copy, ns=(1, 1))
+    return copy
+
+
+@pytest.mark.parametrize(
+    "relocate", [_renamed, _moved, _copied], ids=["renamed", "moved", "copied"]
+)
+def test_a_recording_resumes_under_another_name_folder_or_mtime(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    relocate: Callable[[Path], Path],
+) -> None:
+    """Renaming, moving or copying a recording between two runs keeps its resume (#118).
+
+    The fingerprint used to hold the path and the mtime, so each of these threw
+    away an interrupted run and started it again from zero, with no message.
+    """
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    _interrupt_after_two_chunks(fake_media, out)
+
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    assert _where_the_rerun_started(relocate(fake_media), out) == 210.0
+    assert "resuming from 3:30" in caplog.text
+    assert "checkpoint ignored" not in caplog.text
+
+
+def test_an_edited_recording_does_not_resume_and_says_why(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """New contents are a different recording, and the rerun names what failed (#118)."""
+    fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    out = tmp_path / "out.json"
+    _interrupt_after_two_chunks(fake_media, out)
+
+    fake_media.write_bytes(b"RIFX")
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    assert _where_the_rerun_started(fake_media, out) == 0.0
+    assert "resuming from" not in caplog.text
+    assert (
+        "checkpoint ignored, transcribing from the start: "
+        "the recording's contents changed (content_id)"
+    ) in caplog.text
 
 
 def test_no_resume_removes_a_checkpoint_it_will_not_use(
@@ -382,7 +612,7 @@ def test_the_failure_status_is_written_through_the_atomic_writer(
     status = tmp_path / "status.json"
     seen = _spy_on_atomic_write(monkeypatch)
 
-    def boom(*args: Any, **kwargs: Any) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("model exploded")
 
     monkeypatch.setattr(transcribe_mod, "transcribe", boom)
@@ -564,31 +794,83 @@ def test_the_transcript_is_written_before_diarization_runs(
     assert "speaker" not in seen[0]["sentences"][0]
 
 
-def test_the_checkpoint_is_gone_before_diarization_runs(
+def test_the_checkpoint_outlives_the_labelling_pass(
     fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     fake_turns: Callable[..., list[Path]],
 ) -> None:
-    """The checkpoint protects ASR, and ASR is banked once `out` exists.
+    """Present while labelling runs, gone once it is over (#101).
 
-    Left in place across this pass, a diarization crash would strand it, and
-    the next run would resume audio it has already transcribed.
+    The unlabelled transcript on disk carries no fingerprint, so a rerun cannot
+    tell it is finished; the checkpoint can, and by now it banks every token
+    through the end of the audio. Deleted before this pass, as it used to be,
+    an interrupt here cost the whole transcription.
     """
     fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
     out = tmp_path / "out.json"
     ckpt = checkpoint_path_for(out)
-    seen: list[bool] = []
+    seen: list[int] = []
 
     # def, not lambda: an annotated lambda parameter is not expressible.
     def record(wav: Path) -> None:
-        seen.append(ckpt.exists())
+        seen.append(json.loads(ckpt.read_text())["next_start"])
 
     fake_turns(**_one_speaker(then=record))
 
     transcribe(fake_media, out)
 
-    assert seen == [False]
+    assert seen == [360 * RATE], "labelling ran without a complete checkpoint beside it"
+    assert not ckpt.exists()
+
+
+def test_an_interrupt_while_labelling_does_not_transcribe_again(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Stopped during speaker labelling, the rerun goes straight back to labelling (#101).
+
+    Reproduced on 2026-09-22 with both `kill` and `kill -9`: the rerun redid
+    the whole transcription from 0:00, although the complete unlabelled
+    transcript was on disk. On an hour of audio that is most of an hour.
+    KeyboardInterrupt stands in for the signal; it is what Ctrl-C raises, and
+    like a kill it lets none of transcribe()'s own clean-up run.
+
+    The fake model counts its decodes, so "the ASR pass did not re-execute" is
+    asserted directly: one decode across both runs.
+    """
+    model = fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+
+    def interrupt(wav: Path) -> None:
+        raise KeyboardInterrupt
+
+    fake_turns(**_one_speaker(then=interrupt))
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out)
+    unlabelled = json.loads(out.read_text())
+    assert "speakers" not in unlabelled
+    assert len(model.mels) == 1
+
+    fake_turns(**_one_speaker())
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, out, on_progress=capture)
+
+    assert len(model.mels) == 1, "the rerun transcribed the audio again"
+    assert "running" not in states, "the rerun reported transcription progress again"
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert [s["speaker"] for s in payload["sentences"]] == [0]
+    assert [s["tokens"] for s in payload["sentences"]] == [
+        s["tokens"] for s in unlabelled["sentences"]
+    ]
+    assert not checkpoint_path_for(out).exists()
 
 
 def test_the_diarizing_state_is_reported_between_running_and_done(
@@ -690,7 +972,7 @@ def test_the_diarizer_is_handed_the_extracted_wav_not_the_source(
     monkeypatch.setattr(media, "needs_conversion", always_convert)
 
     def fake_extract(
-        source: Path,
+        _source: Path,
         dest: Path,
         rate: int,
         on_progress: Callable[[float], None] | None = None,
@@ -808,7 +1090,56 @@ def test_the_text_reads_in_the_order_the_sentences_are_written_in(
     payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
 
     assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
-    assert payload["text"] == "First name. Structured SAP. Yeah."
+    # The mistimed full stop reads where its time puts it, ahead of the words it
+    # closed: a sentence's text is its tokens joined (#106), and at this seam
+    # the time is wrong by 5.72s. The text shows what the timing says.
+    assert payload["text"] == ". First name Structured SAP. Yeah."
+
+
+def _merge_that_reordered_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, returning one sentence whose words it re-sorted.
+
+    The overlap merge left a full stop timed before the word it follows, and
+    AlignedSentence sorted the tokens by time after its `text` had been glued
+    in arrival order (dsj/alignment.py:76). One sentence, so the sentence order
+    is already right and _in_time_order has nothing to do: the case that made
+    up most of the 16 of 480, 23 of 664 and 32 of 1038 measured on #106.
+    """
+    tokens = [
+        AlignedToken(id=1, text=" hello", start=10.0, duration=0.4),
+        AlignedToken(id=2, text=".", start=9.0, duration=0.1),
+    ]
+    sentence = AlignedSentence(text="".join(t.text for t in tokens), tokens=tokens)
+    assert sentence.text == " hello."  # precondition: the two copies disagree
+    assert "".join(t.text for t in sentence.tokens) == ". hello"
+
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text=sentence.text, sentences=[sentence])
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def test_a_sentences_text_is_its_tokens_joined(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two copies of a sentence are one: `text` is `w` joined, in time order.
+
+    Left as the merge built it, a reader sees " hello." and a click on the
+    first word plays the full stop. The tokens win because they carry the
+    times, and times are what the order of everything in the file promises.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_reordered_a_sentence(monkeypatch)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [t["w"] for t in sentence["tokens"]] == [".", " hello"]
+    assert sentence["text"] == ". hello"
+    assert payload["text"] == ". hello"
 
 
 def test_speaker_turns_run_forwards_too(
@@ -837,3 +1168,271 @@ def test_speaker_turns_run_forwards_too(
     turns = [(s["speaker"], s["start"]) for s in payload["sentences"]]
     firsts = [start for i, (spk, start) in enumerate(turns) if i == 0 or turns[i - 1][0] != spk]
     assert firsts == sorted(firsts)
+
+
+# --- what a token carries ------------------------------------------------
+
+
+def test_parakeet_tokens_carry_the_decoders_end_and_confidence(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """`e` is the token's own end, not the next token's start, and `c` is the decoder's.
+
+    The gap after "see" is the case that matters. A bleep cut to the next start
+    would run 0.1s into the pause here, and seconds across a real one. Dropping
+    either key again, or writing a constant in place of the decoder's number,
+    fails this.
+    """
+    fake_parakeet(
+        tokens=[
+            FakeToken(0.0, 0.4, "see", confidence=0.5),
+            FakeToken(0.5, 1.0, " this", confidence=0.12345678),
+            FakeToken(3.0, 3.5, " here."),
+        ]
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    tokens = payload["sentences"][0]["tokens"]
+    # Rounded to 3 places on the way out: the second confidence is written as
+    # 0.123. The third is AlignedToken's default and parakeet does report it.
+    assert [(t["t"], t["e"], t["c"]) for t in tokens] == [
+        (0.0, 0.4, 0.5),
+        (0.5, 1.0, 0.123),
+        (3.0, 3.5, 1.0),
+    ]
+
+
+def test_no_written_token_ends_before_it_starts(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """`t` is rounded to the millisecond like `e`, so a zero-length token cannot go negative (#174).
+
+    parakeet emits zero-length tokens for some subword continuations, 8 of 806
+    on a 3-minute clip. `e` was rounded to 3 places and `t` was not, so a start
+    carrying float noise wrote `"t": 107.60000000000001, "e": 107.6`, and a
+    bleep span computed as `e - t` came out negative. 0.1 + 0.2 is the same
+    noise in a smaller number. Read back from the file, the way a consumer
+    reads it.
+    """
+    noisy = 0.1 + 0.2
+    fake_parakeet(
+        tokens=[
+            FakeToken(0.0, noisy, " see"),
+            FakeToken(noisy, noisy, "s"),
+            FakeToken(0.5, 1.0, " here."),
+        ]
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, diarize=False)
+
+    tokens = [t for s in json.loads(out.read_text())["sentences"] for t in s["tokens"]]
+    assert [(t["t"], t["e"]) for t in tokens] == [(0.0, 0.3), (0.3, 0.3), (0.5, 1.0)]
+    assert all(t["e"] >= t["t"] for t in tokens)
+    assert [t["w"] for t in tokens] == [" see", "s", " here."]
+    assert [t["charOffset"] for t in tokens] == [0, 4, 5]
+
+
+def test_an_end_the_decoder_put_before_the_start_is_written_at_the_start() -> None:
+    """`e >= t` holds for any token, not only for the float noise #174 found.
+
+    A negative duration has not been seen from either chunk engine; the guard
+    costs a max() and makes the promise payload.md states true by construction.
+    """
+    from dsj.suno import _token  # pyright: ignore[reportPrivateUsage]
+
+    backwards = AlignedToken(id=1, text=" x", start=2.0, duration=-0.25, confidence=1.0)
+    assert _token(backwards, measured=True) == {"t": 2.0, "w": " x", "e": 2.0, "c": 1.0}
+
+
+class _SherpaStream:
+    """What sherpa-onnx hands back for one stream: the four per-token lists dsj reads.
+
+    The real result carries more (`text`, `words`, `lang` and others); these
+    are the ones dsj/sherpa.py decodes, one entry per token in each.
+    """
+
+    def __init__(
+        self,
+        tokens: list[str],
+        timestamps: list[float],
+        durations: list[float],
+        ys_log_probs: list[float],
+    ) -> None:
+        self.result = SimpleNamespace(
+            tokens=tokens, timestamps=timestamps, durations=durations, ys_log_probs=ys_log_probs
+        )
+
+    def accept_waveform(self, sample_rate: int, samples: Any) -> None:
+        """Take the audio and ignore it; the result is fixed."""
+
+
+class _SherpaRecognizer:
+    """Stands in for sherpa_onnx.OfflineRecognizer, which dsj.sherpa.wrap accepts."""
+
+    def __init__(
+        self,
+        tokens: list[str],
+        timestamps: list[float],
+        durations: list[float],
+        ys_log_probs: list[float],
+    ) -> None:
+        self.lists = (tokens, timestamps, durations, ys_log_probs)
+
+    def create_stream(self) -> _SherpaStream:
+        return _SherpaStream(*self.lists)
+
+    def decode_stream(self, stream: _SherpaStream) -> None:
+        """Nothing to decode: the stream already holds its result."""
+
+
+def test_sherpa_tokens_carry_the_decoders_end_and_confidence(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`e` is the start plus sherpa's own duration, `c` the probability it gave the token.
+
+    The three-second pause after " see" is the case that matters. Before #77
+    this engine took a token's end from the next token's start, which runs
+    " see" to 3.0 and puts the whole pause inside the word, so a bleep cut on
+    it would cover the silence and a subtitle would hold the word on screen.
+
+    The duration arrives as a float32, the way the native library returns it
+    (0.24 reads 0.23999999463558197), and is written rounded like parakeet's.
+    `c` is exp of the log-probability, so log(0.5) must come back as 0.5.
+
+    The real sherpa decode runs here; only the recognizer under it is faked.
+    """
+    import dsj.sherpa as sherpa_mod
+
+    loaded = sherpa_mod.wrap(
+        _SherpaRecognizer(
+            [" see", " this."],
+            [0.0, 3.0],
+            durations=[float(np.float32(0.24)), float(np.float32(0.32))],
+            ys_log_probs=[math.log(0.5), math.log(0.9)],
+        )
+    )
+
+    def load_audio(path: Path) -> Any:
+        return np.zeros(10 * RATE, dtype=np.float32)
+
+    def load(model_id: str) -> Any:
+        return loaded
+
+    def fingerprint_fields() -> dict[str, str]:
+        return {"sherpa_onnx_version": "0.0.0-fake"}
+
+    # A stand-in module, so available() says yes without loading the native
+    # library, which is absent wherever the sherpa extra is.
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", ModuleType("sherpa_onnx"))
+    monkeypatch.setattr(loaded, "load_audio", load_audio)
+    monkeypatch.setattr(sherpa_mod, "load", load)
+    monkeypatch.setattr(sherpa_mod, "fingerprint_fields", fingerprint_fields)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="sherpa", diarize=False)
+
+    tokens = [t for s in payload["sentences"] for t in s["tokens"]]
+    assert [(t["t"], t["w"], t["e"], t["c"]) for t in tokens] == [
+        (0.0, " see", 0.24, 0.5),
+        (3.0, " this.", 3.32, 0.9),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("durations", "ys_log_probs", "missing"),
+    [([], [-0.1], "0 durations"), ([0.08], [], "0 log-probabilities")],
+)
+def test_sherpa_refuses_to_guess_an_end_or_a_confidence(
+    durations: list[float], ys_log_probs: list[float], missing: str
+) -> None:
+    """A model whose result lacks either list fails loudly instead of writing a guess.
+
+    Only a TDT model has a duration head (a plain transducer leaves
+    `durations` empty), and dsj writes `e` and `c` as the decoder's own. So a
+    token without its duration or log-probability is an error, the same way a
+    token without its timestamp already is, never a quiet return to inferring.
+    """
+    import dsj.sherpa as sherpa_mod
+
+    loaded = sherpa_mod.wrap(_SherpaRecognizer([" see"], [0.0], durations, ys_log_probs))
+
+    with pytest.raises(RuntimeError, match=f"1 tokens and {missing}"):
+        loaded.decode(np.zeros(RATE, dtype=np.float32))
+
+
+def test_parakeet_token_charoffset_indexes_the_sentence_text(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """A click on rendered prose maps back to a word through `charOffset` (#126).
+
+    Each token's offset is where its `w` starts in the sentence's `text`, so a
+    reader rendering `text` can turn a character position into a token index
+    without re-deriving the join, which is where the #106 mismatch came from.
+    """
+    fake_parakeet(tokens=_tokens())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    text = sentence["text"]
+    assert [t["charOffset"] for t in sentence["tokens"]] == [0, 3, 8, 15]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert text[start : start + len(token["w"])] == token["w"]
+
+
+def test_charoffset_indexes_the_text_a_seam_rebuilt(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At a seam the offsets point into the text as it is written, not as the merge glued it.
+
+    The merge glued " hello." and the tokens run ". hello". Offsets taken from
+    the glued string would put the full stop at 6; in the written text it is at 0.
+    """
+    fake_parakeet(tokens=[])
+    _merge_that_reordered_a_sentence(monkeypatch)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    sentence = payload["sentences"][0]
+    assert [(t["w"], t["charOffset"]) for t in sentence["tokens"]] == [(".", 0), (" hello", 1)]
+    for token in sentence["tokens"]:
+        start = token["charOffset"]
+        assert sentence["text"][start : start + len(token["w"])] == token["w"]
+
+
+def test_a_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Sentence `start` and `end` are whole milliseconds, like their tokens (#175).
+
+    #174 rounded every token's `t` and `e`, but a sentence built from the same
+    unrounded times kept the float noise, so its first token could sit about
+    1e-14 s before the sentence it belongs to. Read back from the file.
+    """
+    noisy = 0.1 + 0.2
+    fake_parakeet(tokens=[FakeToken(noisy, 0.5, " see"), FakeToken(0.6, 0.7 + noisy, " here.")])
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, diarize=False)
+
+    sentences = json.loads(out.read_text())["sentences"]
+    assert sentences
+    for s in sentences:
+        assert (round(s["start"], 3), round(s["end"], 3)) == (s["start"], s["end"])
+        assert s["start"] <= s["tokens"][0]["t"]
+        assert s["end"] >= max(t["e"] for t in s["tokens"])

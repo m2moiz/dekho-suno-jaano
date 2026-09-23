@@ -57,7 +57,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-from dsj.asr import Transcription
+from dsj.asr import Transcription, with_char_offsets
 
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -120,20 +120,56 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     """Turn whisper's segments into payload sentences, shifted by `offset` seconds.
 
     The word text is kept exactly as whisper emits it, leading space and all,
-    which is how parakeet's tokens arrive too. A reader joining tokens gets the
-    sentence back either way.
+    which is how parakeet's tokens arrive too. `text` here is whisper's own,
+    stripped; dsj/suno.py rebuilds it from the words (#106), and `charOffset`
+    is counted over those same words, so it indexes the text that is written.
+
+    Each word's `end` and `probability` become `e` and `c`, the keys and the
+    3-place rounding parakeet's tokens use (dsj/suno.py:_token). Neither is a
+    decode-time measurement the way parakeet's end is. whisper times a word
+    after decoding it, by DTW over cross-attention (mlx_whisper/timing.py:157
+    in 0.4.3), then clamps words it judges too long (:248-258 and :285-325);
+    `t` comes from the same alignment, so a word's two ends are equally
+    inferred. The probability is the mean, over the word's sub-word tokens, of
+    the probability the model gave each one (:173-176). payload.md says which
+    engine measures and which infers.
+
+    The words are sorted by start before anything is built from them (#167).
+    whisper decodes left to right, so they normally arrive in order already
+    and no transcript has been seen otherwise; the sort is what makes the
+    README's time-order promise hold here by code rather than by habit, as
+    AlignedSentence's sort does for parakeet. It has to come first: the
+    sentence's `text` is these words joined (#106), and `charOffset` indexes
+    that text. Stable, so words sharing a start keep whisper's order.
+
+    `t` is rounded to 3 places as `e` is, and `e` is never written below it
+    (#174): with only `e` rounded, a zero-length word whose shifted start
+    carried float noise ended before it began. Rounding after the sort cannot
+    reorder the words, because it never moves one start past another.
     """
     out: list[dict[str, Any]] = []
     for segment in segments:
-        words = cast("list[dict[str, Any]]", segment.get("words") or [])
+        words = sorted(
+            cast("list[dict[str, Any]]", segment.get("words") or []),
+            key=lambda w: float(w["start"]),
+        )
+        tokens: list[dict[str, Any]] = []
+        for w in words:
+            t = round(float(w["start"]) + offset, 3)
+            tokens.append(
+                {
+                    "t": t,
+                    "w": str(w["word"]),
+                    "e": max(round(float(w["end"]) + offset, 3), t),
+                    "c": round(float(w["probability"]), 3),
+                }
+            )
         out.append(
             {
                 "start": float(segment["start"]) + offset,
                 "end": float(segment["end"]) + offset,
                 "text": str(segment["text"]).strip(),
-                "tokens": [
-                    {"t": float(w["start"]) + offset, "w": str(w["word"])} for w in words
-                ],
+                "tokens": with_char_offsets(tokens),
             }
         )
     return out

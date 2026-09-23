@@ -354,9 +354,9 @@ def gate(source_wav: Path, work: Path, as_mov: bool, self_test: bool,
     check(next_start > 0, "checkpoint banked nothing")
     check(next_start < total, f"checkpoint is complete (next_start={next_start}, total={total})")
     check(bool(banked_ckpt["tokens"]), "checkpoint has a boundary but no tokens")
-    check(banked_ckpt["fingerprint"]["media"] == str(media.resolve()),
-          f"checkpoint keyed to {banked_ckpt['fingerprint']['media']}, not the source media "
-          f"-- for a .mov that is a fingerprint that can never match again")
+    check(banked_ckpt["media"] == str(media.resolve()),
+          f"checkpoint written for {banked_ckpt['media']}, not the source media "
+          f"-- for a .mov that is a fingerprint of ffmpeg's output, not the recording")
     check(not out.exists(), "a partial transcript was written as if it were complete")
 
     # -- 3. resume ---------------------------------------------------------
@@ -406,7 +406,7 @@ def gate(source_wav: Path, work: Path, as_mov: bool, self_test: bool,
     say("[5] stale-checkpoint rejection")
     for field, value in [("model_id", "mlx-community/not-the-model"),
                          ("chunk_s", 90.0),
-                         ("media_mtime_ns", 1)]:
+                         ("content_id", "1-" + "0" * 64)]:
         stale_out = work / f"stale_{field}.json"
         stale_ckpt = Path(str(stale_out) + ".ckpt")
         # Take the real mid-run checkpoint we captured and poison one field.

@@ -6,9 +6,10 @@ description: >
   moment in a recording; when a frame has to be pulled out of a video by timestamp; or
   when a `dsj suno`, `dsj dekho` or `dsj dikhao` run needs polling, resuming, or
   reading after it failed. Also when a long recording must be made answerable without
-  feeding the whole video to a vision model.
+  feeding the whole video to a vision model, when a transcript has to become SRT, VTT
+  or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -24,16 +25,24 @@ that one frame. A 74-minute recording is about 444,000 tokens on a native-video 
 against about 10,000 for its transcript.
 
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
-(show me).
+(show me). Two more work on the transcript alone: `likho` (write) turns a finished one
+into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
+file those tools made into a transcript, in place of `suno`.
 
 ## Before the first command
 
 ```bash
+dsj --version
 dsj --help
 ```
 
-That is the entire self-check. There is no `dsj doctor`, no `--version`, and no way to
-ask the tool which engine it has until you try to use one.
+`dsj --version` prints `dsj` and the version of the build in front of you. This skill
+was written against the `version` in its own header above. If the two differ, a flag
+named below may not exist in that build, and using one fails as `No such option`, which
+reads like a typo and is not one.
+
+`dsj --help` lists the five verbs. There is no `dsj doctor`, and no way to ask the tool
+which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
 installs the command at `.venv/bin/dsj` and links it nowhere. An installed copy has
@@ -42,7 +51,7 @@ missing command means a missing install.
 
 `ffmpeg` must be on `PATH` for anything that is not already a 16 kHz mono wav.
 
-## The three verbs
+## The five verbs
 
 ### suno
 
@@ -128,6 +137,70 @@ open "$(dsj dikhao recording.mov 431.5 -o /tmp/f.jpg)"
 The 1500 px default is a measured ceiling: a full 2940 px frame is about 776 KB as a
 JPEG, more than most vision APIs want, and legibility stopped improving well below that.
 
+### likho
+
+Export a transcript as SRT, WebVTT or plain text. It reads the JSON `suno` wrote and
+runs no model, so it takes a moment, not minutes. Never write your own converter.
+
+```bash
+dsj likho transcript.json -o transcript.srt
+dsj likho transcript.json -o captions.vtt
+dsj likho transcript.json -o notes.txt
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | **required.** Where the file goes. Its suffix picks the format |
+| `--format FORMAT` | `srt`, `vtt` or `txt`, when the suffix does not say. Wins over it |
+
+Any other suffix and no `--format` is a usage error, exit 2, and nothing is written.
+
+- **SRT** is one cue per sentence, with the speaker's label ahead of the words, as
+  `SPEAKER_01: ...`, when labelling ran.
+- **VTT** is the same cues, voiced with `<v SPEAKER_01>`, and a timestamp tag ahead of
+  every word that starts later than the one before it. It is the only one of the three
+  that carries word timing.
+- **TXT** is for a person: one block per speaker turn, headed `[1:02] SPEAKER_01`, or
+  one `[1:02] ...` line per sentence when labelling did not run.
+
+Cues run in time order and **never overlap**: each one ends no later than the next
+begins, and nothing else about the times changes. A seam can leave a sentence ending
+after the next one starts, and a player or muxer that keeps one cue at a time would
+rewrite it. Measured on a 480-sentence transcript: the exported SRT muxed into its
+recording and back with 0 of 480 cues changed, where 22 moved before.
+
+Writes nothing to stdout. Transcripts from older builds, with no speakers, no token
+ends or sentences out of order, export too.
+
+### parho
+
+Import a transcript instead of running ASR: a YouTube VTT, a subtitle track, a file
+`likho` wrote, or a dsj transcript JSON. The result is the same JSON `suno` writes, so
+`dekho`, `dikhao` and `likho` take it as they take a native one.
+
+```bash
+dsj parho recording.mov captions.vtt -o transcript.json
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | **required.** Where the transcript JSON goes |
+
+The recording comes first, as for every verb that indexes one, and must exist; it is
+named in `audio`, not opened. The format is read from the content, never the suffix.
+
+What the file could not hold, the transcript does not claim. `model` says where the
+times came from, `import:srt` or `import:vtt`, and no imported token has a `c`:
+
+- **SRT**: one token per sentence, spanning the cue, `t` its start and `e` its end.
+- **VTT**: a cue with word timestamp tags splits into word tokens with a `t` each and
+  no `e`, because a tag marks a start only. An untagged cue is one token, as for SRT.
+- **JSON** must be a dsj transcript. It passes through unchanged but for `audio`.
+
+Speakers come back from VTT voice tags, and from SRT only in the form `likho` writes,
+`SPEAKER_01: ` ahead of the words. A file with no labels imports with no `speakers` and
+no `diarization`, exactly like a transcript that was never labelled.
+
 ## The transcript is the index
 
 Once a recording is transcribed, **every question about it is a query against the JSON**.
@@ -143,6 +216,12 @@ may walk it from the top and stop at the first `start` past its window. The orde
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
 pieces, and a word at a seam can be mistimed by a few seconds — measured worst case
 5.72 s — which pulls its whole sentence that far earlier in the list.
+
+A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
+space, under every engine, and the top-level `text` is the sentences joined. So at a seam
+a mistimed word reads out of place in the text as well: about 1 sentence in 100 moves a
+word, and about 2 more move only punctuation. What the text shows and what a click on it
+plays always agree.
 
 When a question is visual, find the mark, then pull the frame:
 
@@ -174,13 +253,11 @@ sees half of one.
 
 Two things will break a poller that assumes otherwise:
 
-- **Branch on `state`, never on `fraction`.** `fraction` is not monotonic and does not
-  end at 1.0. It reaches 1.0 when the audio is decoded, drops back to 0.0 for the
-  `diarizing` frames, and on the final frame the totals are rebuilt from the end of the
-  last sentence rather than the length of the audio, so a recording with no speech
-  finishes at 0.0. Observed across three separate runs: a poller that stops at
-  `fraction == 1` calls it done before the speaker labels exist, and one that waits for
-  1.0 can wait forever.
+- **Branch on `state`, never on `fraction`.** `fraction` is not monotonic. It reaches
+  1.0 when the audio is decoded, drops back to 0.0 for the `diarizing` frames, and is 1.0
+  again on the final frame, whose totals are the length of the audio. Observed across
+  three separate runs: a poller that stops at `fraction == 1` calls it done before the
+  speaker labels exist.
 - **The failure document is a different shape**, two keys and no progress fields:
   `{"state": "failed", "error": "FileNotFoundError: /nope.mov"}`. Read `state` first.
 
@@ -193,7 +270,9 @@ audio, fsynced, and through a temporary file so an interrupt can only leave a wh
 `-o transcript.json` gives `transcript.json.ckpt`.
 
 **Re-running the same command resumes.** It prints `resuming from 1:45 (841 tokens
-banked)` on stderr and picks up there.
+banked)` on stderr and picks up there. That holds during speaker labelling too: the
+checkpoint is kept until labelling is over, so a run stopped in the `diarizing` state
+transcribes nothing on the rerun and goes straight back to labelling.
 
 Interrupting a run **you are watching in a terminal** is Ctrl-C. It exits 130.
 
@@ -224,9 +303,13 @@ child rather than replacing itself with it, so `$!` is the wrapper. `kill` still
 because the signal reaches the child through it and the run exits 143. `kill -INT` on that
 wrapper pid does nothing at all, which is the same dead end from the other direction.
 
-A changed model, a moved or edited source file, or an upgraded engine invalidates the
-checkpoint automatically, and the run starts over rather than reusing tokens that
-describe something else. That is silent and correct, not an error.
+The checkpoint knows the recording by its contents, not its name, so renaming, moving or
+copying the file between the two runs still resumes. An edited recording, a changed
+model or an upgraded engine invalidates it, and the run starts over rather than reusing
+tokens that describe something else. That is correct, not an error, and it is not
+silent: stderr says `checkpoint ignored, transcribing from the start:` and names the part
+that changed. A checkpoint written by a dsj from before this rule is ignored the same
+way, once.
 
 `--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
 none at all, so an interrupted whisper run always starts over.
@@ -237,7 +320,7 @@ none at all, so an interrupted whisper run always starts over.
 |---|---|
 | 0 | Success |
 | 1 | An uncaught exception, printed as a traceback on stderr |
-| 2 | A usage error. Run `dsj <verb> --help` |
+| 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
 | 130 | Interrupted. For `suno` on parakeet or sherpa, re-run to resume |
 
 **Read the last line of stderr, not the first.** A failure is a traceback, and when

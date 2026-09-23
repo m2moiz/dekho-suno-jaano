@@ -511,3 +511,9 @@ Stated explicitly so nobody reads a green run as more than it is.
    recording. It proves the fingerprint survives temp-wav churn, which is the
    point; it proves nothing about real screen-recorder container quirks.
 5. **`--model` is never actually varied.** See §7's flag.
+6. **Every leg runs with `diarize=False`.** An interrupt during speaker
+   labelling resumes too: the checkpoint is kept until labelling is over, and
+   by then it banks the whole file, so the rerun decodes nothing and goes
+   straight to labelling (#101). That case is held by
+   `tests/test_suno.py::test_an_interrupt_while_labelling_does_not_transcribe_again`,
+   against the fake model, not by this gate.

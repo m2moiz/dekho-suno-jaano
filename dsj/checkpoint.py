@@ -19,6 +19,7 @@ __all__ = [
 
 import dataclasses
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -27,8 +28,13 @@ from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 
 from dsj.alignment import AlignedToken
 from dsj.atomic import atomic_write_text
+from dsj.identity import content_id
 
-SCHEMA = 1
+# 2 since #118, when the recording stopped being named by its path, size and
+# mtime and started being named by content_id. A schema 1 checkpoint cannot
+# match, so a run interrupted before the upgrade starts over once, and the
+# message it prints says that is why.
+SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -45,30 +51,38 @@ class Fingerprint:
     SETS, so their serialized fingerprints can never be equal even where every
     shared value collides. Stronger than comparing an engine-name value, and
     free.
+
+    The recording is named by `content_id`, its bytes, and not by where it
+    sits. The path and the mtime used to be in this record, so renaming,
+    moving or plainly copying a recording between two runs threw its resume
+    away without a word (#118). `media` still travels with the record, as a
+    note for a person reading a stray checkpoint, and takes no part in the
+    match: it is excluded from equality here and from `to_dict()`.
     """
 
     schema: int
-    media: str
-    media_size: int
-    media_mtime_ns: int
+    content_id: str
     total_samples: int
     model_id: str
     chunk_s: float
     overlap_s: float
     engine_fields: dict[str, str]
+    media: str = dataclasses.field(compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         """The comparable, serializable form. Engine keys merge FLAT.
 
-        A parakeet fingerprint must serialize byte-identically to what dsj
-        wrote before this field existed -- when `parakeet_version` was a flat
-        dataclass field -- or every checkpoint on disk stops matching on
-        upgrade. Silently: a mismatch is not an error, it is a re-transcription
-        of an hour of audio. tests/test_checkpoint_golden.py holds this shape
-        against a checkpoint written by the pre-extraction code.
+        Flat because that is how every checkpoint dsj has written stores them:
+        `parakeet_version` started life as a dataclass field of its own, and
+        nesting the engine's keys now would change the bytes for nothing.
+        tests/test_checkpoint_golden.py holds this shape against a checkpoint
+        written by the code that introduced it, so a refactor cannot move it
+        without a test saying so.
         """
         return {
-            k: v for k, v in dataclasses.asdict(self).items() if k != "engine_fields"
+            k: v
+            for k, v in dataclasses.asdict(self).items()
+            if k not in ("engine_fields", "media")
         } | self.engine_fields
 
 
@@ -84,12 +98,18 @@ def fingerprint(
 
     Keyed on the SOURCE media -- the file the user handed us -- and never on
     the audio actually fed to the model. A .mov is extracted to a fresh temp
-    wav on every run, with a new path and a new mtime each time, so keying on
-    that would mean resume never matches for exactly the normal input, and
-    would do it silently: every test on an already-conforming wav would still
-    pass.
+    wav on every run, so keying on that would tie resume to ffmpeg decoding
+    the same bytes every time, rather than to the recording the user named.
 
-    `total_samples` is included even though size and mtime already cover most
+    By content, not by path or mtime (#118): content_id reads the size and
+    the first and last MiB, so a renamed, moved or copied recording still
+    resumes and an edited one does not. mtime used to be here to catch an edit
+    in place; the content id catches that, and mtime is also what a plain `cp`
+    changes. What the content id cannot see is an edit confined to the middle
+    of a file that keeps its size exactly; dsj/identity.py says why that is
+    accepted.
+
+    `total_samples` is included even though the content id already covers most
     edits: it is the only field that catches an ffmpeg upgrade decoding the
     same untouched file to a different length, which would silently shift every
     chunk boundary.
@@ -98,17 +118,15 @@ def fingerprint(
     the caller does not invent it, because the engine knows what invalidates
     its own tokens (for parakeet: the vendored merge functions' ancestry).
     """
-    st = media.stat()
     return Fingerprint(
         schema=SCHEMA,
-        media=str(media.resolve()),
-        media_size=st.st_size,
-        media_mtime_ns=st.st_mtime_ns,
+        content_id=content_id(media),
         total_samples=total_samples,
         model_id=model_id,
         chunk_s=chunk_s,
         overlap_s=overlap_s,
         engine_fields=engine_fields,
+        media=str(media.resolve()),
     )
 
 
@@ -143,6 +161,9 @@ def write_checkpoint(
     megabytes; an append log would buy nothing and cost a recovery path.
     """
     payload = {
+        # Beside the fingerprint, not in it: which file this run read, for a
+        # person, never compared (#118).
+        "media": fp.media,
         "fingerprint": fp.to_dict(),
         "next_start": next_start,
         "tokens": [_to_json(t) for t in tokens],
@@ -196,36 +217,97 @@ class _CheckpointDoc(BaseModel):
     tokens: list[_TokenDoc]
 
 
-def read_checkpoint(path: Path, fp: Fingerprint) -> tuple[int, list[AlignedToken]] | None:
-    """Return `(next_start, tokens)` if the checkpoint matches, else None.
+# What each fingerprint key means, in the words a rejected checkpoint prints.
+# Every other key is an engine's own, from its fingerprint_fields().
+_WHAT_CHANGED = {
+    "content_id": "the recording's contents changed",
+    "total_samples": "the audio decoded to a different length",
+    "model_id": "the model changed",
+    "chunk_s": "the chunk length changed",
+    "overlap_s": "the chunk overlap changed",
+}
+_ENGINE_CHANGED = "the engine or its version changed"
+_UNREADABLE = "the file is not a checkpoint this dsj can read"
 
-    A mismatch is not an error. A changed model or a re-encoded source just
-    means the stored tokens describe something else; the caller starts over.
+
+def _mismatch(stored: dict[str, Any], expected: dict[str, Any]) -> str | None:
+    """Say which part of a stored fingerprint differs from this run's, or None.
+
+    The field is named as well as described, because what the user does next
+    depends on which it was: a changed --model is deliberate, an edited
+    recording may not be.
     """
+    if stored == expected:
+        return None
+    if stored.get("schema") != expected["schema"]:
+        # Every other key may differ too, and listing them would bury the one
+        # fact that matters: the file predates, or postdates, this format.
+        return (
+            f"it was written by another version of dsj, checkpoint schema "
+            f"{stored.get('schema')} where this one reads {expected['schema']} (schema)"
+        )
+    changed: dict[str, list[str]] = {}
+    for key in [*expected, *(k for k in stored if k not in expected)]:
+        if key not in stored or key not in expected or stored[key] != expected[key]:
+            changed.setdefault(_WHAT_CHANGED.get(key, _ENGINE_CHANGED), []).append(key)
+    return "; ".join(f"{what} ({', '.join(keys)})" for what, keys in changed.items())
+
+
+def _load(path: Path, fp: Fingerprint) -> tuple[int, list[AlignedToken]] | str | None:
+    """The checkpoint's contents, the reason it cannot be used, or None if absent."""
     try:
         raw: object = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        # No checkpoint is the normal case for a first run, not a rejection.
         return None
+    except (OSError, json.JSONDecodeError):
+        return _UNREADABLE
 
     if not isinstance(raw, dict):
-        return None
+        return _UNREADABLE
     # The guard above proves it is a dict but says nothing about key/value
     # types; JSON object keys are always str, and the values stay Any because
     # the shape check happens below, in the try.
     payload = cast("dict[str, Any]", raw)
 
-    if payload.get("fingerprint") != fp.to_dict():
-        return None
+    stored: object = payload.get("fingerprint")
+    if not isinstance(stored, dict):
+        return _UNREADABLE
+    reason = _mismatch(cast("dict[str, Any]", stored), fp.to_dict())
+    if reason is not None:
+        return reason
 
     try:
         doc = _CheckpointDoc.model_validate(payload)
     except ValidationError:
         # Well-formed JSON with the right fingerprint but the wrong shape means
         # something wrote this file that was not us. Do not guess.
-        return None
+        return _UNREADABLE
 
     return doc.next_start, [
         AlignedToken(id=t.id, text=t.text, start=t.start, duration=t.duration,
                      confidence=t.confidence)
         for t in doc.tokens
     ]
+
+
+def read_checkpoint(
+    path: Path, fp: Fingerprint, on_reject: Callable[[str], None] | None = None
+) -> tuple[int, list[AlignedToken]] | None:
+    """Return `(next_start, tokens)` if the checkpoint matches, else None.
+
+    A mismatch is not an error. A changed model or a re-encoded source just
+    means the stored tokens describe something else; the caller starts over.
+
+    It is not the same as having no checkpoint, though, and until #118 the two
+    looked identical: a rename cost a whole transcription and printed nothing.
+    So when a checkpoint exists and is not used, `on_reject` gets one clause
+    saying why, naming the fingerprint field that failed. A missing file is
+    not a rejection and reports nothing.
+    """
+    found = _load(path, fp)
+    if isinstance(found, str):
+        if on_reject is not None:
+            on_reject(found)
+        return None
+    return found

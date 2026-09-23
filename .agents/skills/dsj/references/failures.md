@@ -23,8 +23,8 @@ lands in the same bucket.
 | 2 | A usage error from the argument parser | You got the flags wrong. Run `dsj <verb> --help`. |
 | 130 | Interrupted with Ctrl-C or SIGINT | For `suno` on parakeet or sherpa this is safe and resumable. Re-run the same command. |
 
-`--help` exits 0 on every command, and a bare `dsj` with no arguments prints help and
-exits 2.
+`--help` exits 0 on every command, `dsj --version` exits 0, and a bare `dsj` with no
+arguments prints help and exits 2.
 
 ## The one rule: read the last line of stderr
 
@@ -54,7 +54,7 @@ never empty on a successful `suno` either. Branch on the exit code, then read st
 | `Missing option '--out' / '-o'.` | `-o` is required on `suno` and `dikhao` |
 | `Missing option '--transcript' / '-t'.` | `-t` is required on `dekho` |
 | `No such command 'transcribe'.` | The verbs are `suno`, `dekho`, `dikhao` |
-| `No such option: --version` | There is no version flag. See `dsj --help` for the whole surface |
+| `No such option`, for a flag a document names | The document describes another build. Compare `dsj --version` with the version the document was written against |
 
 `--engine` is **not** validated by the parser. A bad engine name reaches the application
 and exits 1, not 2:
@@ -76,7 +76,7 @@ carries the remedy:
 |---|---|
 | parakeet | `parakeet-mlx is not installed. It requires Apple Silicon and Metal; this machine is <machine> <system>.` Install the mac bundle, or pick another engine. |
 | whisper | `mlx-whisper is not installed. Install it with uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano" (or uv sync --extra whisper from a clone).` |
-| sherpa | `sherpa-onnx will not import here: <import error>. Install it with pip install sherpa-onnx (manylinux wheels only, inside a proot/glibc container on Android, not Termux itself).` |
+| sherpa | `sherpa-onnx will not import here: <import error>. Install it with uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano" (or uv sync --extra sherpa from a clone). On Android that install goes inside a proot glibc container, not Termux itself, which is bionic.` |
 
 A bare install carries no engine at all, on purpose, so that the package can install on a
 phone. The first `suno` then names the extra to add. See `engines.md`.
