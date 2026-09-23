@@ -23,8 +23,8 @@ lands in the same bucket.
 | 2 | A usage error from the argument parser | You got the flags wrong. Run `dsj <verb> --help`. |
 | 130 | Interrupted with Ctrl-C or SIGINT | For `suno` on parakeet or sherpa this is safe and resumable. Re-run the same command. |
 
-`--help` exits 0 on every command, and a bare `dsj` with no arguments prints help and
-exits 2.
+`--help` exits 0 on every command, `dsj --version` exits 0, and a bare `dsj` with no
+arguments prints help and exits 2.
 
 ## The one rule: read the last line of stderr
 
@@ -54,7 +54,7 @@ never empty on a successful `suno` either. Branch on the exit code, then read st
 | `Missing option '--out' / '-o'.` | `-o` is required on `suno` and `dikhao` |
 | `Missing option '--transcript' / '-t'.` | `-t` is required on `dekho` |
 | `No such command 'transcribe'.` | The verbs are `suno`, `dekho`, `dikhao` |
-| `No such option: --version` | There is no version flag. See `dsj --help` for the whole surface |
+| `No such option`, for a flag a document names | The document describes another build. Compare `dsj --version` with the version the document was written against |
 
 `--engine` is **not** validated by the parser. A bad engine name reaches the application
 and exits 1, not 2:

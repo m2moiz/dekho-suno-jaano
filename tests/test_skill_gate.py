@@ -86,6 +86,19 @@ def cli_options() -> dict[str, set[str]]:
     }
 
 
+def top_level_options() -> set[str]:
+    """The options `dsj` itself takes, before any verb, other than --help.
+
+    cli_options() reads only the verbs, so until #50 added a callback to the app
+    there was nothing here to read, and a top-level flag could ship undocumented
+    with this whole file green.
+    """
+    group = cast(Group, get_command(dsj.cli.app))
+    return {
+        opt for param in group.params for opt in param.opts if opt.startswith("-")
+    } - {"--help"}
+
+
 def source_states() -> set[str]:
     """The `state` values the code can write into a `--status` file.
 
@@ -252,6 +265,18 @@ def test_the_skill_documents_exactly_the_verbs_that_exist() -> None:
 def test_each_verb_table_lists_exactly_the_flags_the_cli_has() -> None:
     problems = flag_table_problems(SKILL.read_text(), cli_options())
     assert not problems, "the skill and the CLI disagree:\n  " + "\n  ".join(problems)
+
+
+def test_every_top_level_option_is_in_the_first_command_block() -> None:
+    """`dsj --version` belongs where an agent looks before its first command."""
+    text = SKILL.read_text()
+    start = text.index("## Before the first command")
+    first = text[start : text.index("\n## ", start + 1)]
+    commands = "\n".join(body for _, body in FENCE.findall(first))
+    options = top_level_options()
+    assert options, "the app has no top-level options; the #50 callback is gone"
+    missing = sorted(o for o in options if f"dsj {o}" not in commands)
+    assert not missing, f"top-level options the skill never shows an agent: {missing}"
 
 
 def test_no_example_command_uses_a_flag_its_verb_does_not_have() -> None:

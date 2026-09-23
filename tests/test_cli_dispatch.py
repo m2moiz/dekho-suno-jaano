@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 
+import dsj
 from dsj.cli import main
 
 pytestmark = pytest.mark.skipif(
@@ -80,6 +82,39 @@ def test_a_bare_invocation_explains_itself_and_fails() -> None:
 def test_help_is_not_an_error() -> None:
     assert main(["--help"]) == 0
     assert main(["help"]) == 0
+
+
+def test_version_prints_the_package_version_and_exits_0(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """How a document, an issue or a bug report is pinned to the build (#50).
+
+    Compared to the whole line, not a substring: a caller parses this, and
+    `dsj 0.1.0` with a banner above it is a different contract.
+    """
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out == f"dsj {dsj.__version__}\n"
+
+
+def test_version_wins_over_a_verb_after_it(capsys: pytest.CaptureFixture[str]) -> None:
+    """Eager, so `dsj --version suno` answers the question and runs nothing."""
+    assert main(["--version", "suno"]) == 0
+    assert capsys.readouterr().out == f"dsj {dsj.__version__}\n"
+
+
+def test_help_lists_the_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--help"]) == 0
+    assert "--version" in capsys.readouterr().out
+
+
+def test_the_two_copies_of_the_version_agree() -> None:
+    """pyproject.toml and dsj/__init__.py each hold the number; nothing else did compare them.
+
+    Bump one on a release and forget the other, and `dsj --version` names a
+    build that `pip show dsj` disagrees with.
+    """
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    assert tomllib.loads(pyproject.read_text())["project"]["version"] == dsj.__version__
 
 
 def test_an_unknown_verb_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:

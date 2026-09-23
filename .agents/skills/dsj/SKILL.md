@@ -29,11 +29,17 @@ Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikh
 ## Before the first command
 
 ```bash
+dsj --version
 dsj --help
 ```
 
-That is the entire self-check. There is no `dsj doctor`, no `--version`, and no way to
-ask the tool which engine it has until you try to use one.
+`dsj --version` prints `dsj` and the version of the build in front of you. This skill
+was written against the `version` in its own header above. If the two differ, a flag
+named below may not exist in that build, and using one fails as `No such option`, which
+reads like a typo and is not one.
+
+`dsj --help` lists the three verbs. There is no `dsj doctor`, and no way to ask the tool
+which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
 installs the command at `.venv/bin/dsj` and links it nowhere. An installed copy has

@@ -67,6 +67,39 @@ app = typer.Typer(
 )
 
 
+def _show_version(value: bool) -> None:
+    """Print `dsj <version>` and stop, before any verb is parsed.
+
+    Read from dsj.__version__ and never typed here: pyproject.toml holds the
+    other copy, a test holds the two equal, and a third would be the one that
+    drifts.
+    """
+    if value:
+        from dsj import __version__
+
+        print(f"dsj {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def root(
+    _version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_show_version, is_eager=True,
+            help="print the version and exit",
+        ),
+    ] = False,
+) -> None:
+    """Make a long screen recording answerable.
+
+    The callback exists only to carry --version (#50), which is how a document
+    or a bug report gets pinned to the build it was written against. Its
+    docstring repeats the Typer help= above because, with a callback present,
+    Typer reads the group's help from here.
+    """
+
+
 def _stderr_logger(name: str) -> None:
     """Attach the one stderr handler a CLI is allowed to install.
 
