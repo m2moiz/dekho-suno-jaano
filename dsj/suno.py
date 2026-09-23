@@ -189,6 +189,27 @@ def _text_from_tokens(transcription: Transcription) -> Transcription:
     )
 
 
+def _in_whole_milliseconds(transcription: Transcription) -> Transcription:
+    """`transcription` with each sentence's `start` and `end` in whole milliseconds.
+
+    #174 rounded every token's `t` and `e` to the millisecond, but the sentences
+    built from the same times kept their float noise, so a first token could
+    sit about 1e-14 s before the sentence it belongs to (#175). The bounds are
+    also widened to cover the words, so `start <= first t` and `end >= last e`
+    hold whatever an engine's own segment bounds say. Done where both engine
+    branches meet, before the sort, so the sort compares the rounded times.
+    """
+    sentences: list[Sentence] = []
+    for s in transcription.sentences:
+        start, end = round(s["start"], 3), round(s["end"], 3)
+        tokens = s["tokens"]
+        if tokens:
+            start = min(start, min(t["t"] for t in tokens))
+            end = max(end, max(t.get("e", t["t"]) for t in tokens))
+        sentences.append({**s, "start": start, "end": end})
+    return transcription._replace(sentences=sentences)
+
+
 def _in_time_order(transcription: Transcription) -> Transcription:
     """`transcription` with its sentences earliest first, and `text` rebuilt to match.
 
@@ -614,7 +635,7 @@ def transcribe(
         # reach it through the chunk loop above, whisper through its own window
         # loop, and both can emit a sentence that starts before the one printed
         # ahead of it. Text first, so the order is rebuilt from the final text.
-        transcription = _in_time_order(_text_from_tokens(transcription))
+        transcription = _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is

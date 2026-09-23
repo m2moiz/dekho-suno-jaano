@@ -674,3 +674,38 @@ def test_overlap_s_must_be_at_least_one_second(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ValueError, match=r"overlap_s .* must be at least 1.0s"):
         transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_whisper_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The whisper half of #175: sentence times are whole milliseconds and cover the words.
+
+    A segment's own bounds carry float noise, and nothing but this keeps the
+    written sentence from starting after its first word or ending before its
+    last one.
+    """
+    noisy = 0.1 + 0.2
+    _stub_mlx_whisper(
+        monkeypatch,
+        _result(
+            segments=[
+                {
+                    "start": noisy,
+                    "end": 1.0 + noisy,
+                    "text": " a b",
+                    "words": [
+                        {"word": " a", "start": 0.2, "end": 0.5, "probability": 0.9},
+                        {"word": " b", "start": 0.6, "end": 1.4, "probability": 0.9},
+                    ],
+                }
+            ]
+        ),
+    )
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, engine="whisper", diarize=False)
+
+    [sentence] = json.loads(out.read_text())["sentences"]
+    assert (sentence["start"], sentence["end"]) == (0.2, 1.4)

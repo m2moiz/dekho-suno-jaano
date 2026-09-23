@@ -1411,3 +1411,28 @@ def test_charoffset_indexes_the_text_a_seam_rebuilt(
     for token in sentence["tokens"]:
         start = token["charOffset"]
         assert sentence["text"][start : start + len(token["w"])] == token["w"]
+
+
+def test_a_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Sentence `start` and `end` are whole milliseconds, like their tokens (#175).
+
+    #174 rounded every token's `t` and `e`, but a sentence built from the same
+    unrounded times kept the float noise, so its first token could sit about
+    1e-14 s before the sentence it belongs to. Read back from the file.
+    """
+    noisy = 0.1 + 0.2
+    fake_parakeet(tokens=[FakeToken(noisy, 0.5, " see"), FakeToken(0.6, 0.7 + noisy, " here.")])
+    out = tmp_path / "out.json"
+
+    transcribe(fake_media, out, diarize=False)
+
+    sentences = json.loads(out.read_text())["sentences"]
+    assert sentences
+    for s in sentences:
+        assert (round(s["start"], 3), round(s["end"], 3)) == (s["start"], s["end"])
+        assert s["start"] <= s["tokens"][0]["t"]
+        assert s["end"] >= max(t["e"] for t in s["tokens"])

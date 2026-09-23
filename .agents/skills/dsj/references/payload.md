@@ -47,7 +47,7 @@ Inside a sentence:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | |
+| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. |
 | `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
