@@ -542,6 +542,24 @@ Two things about this shape are deliberate:
   of tiles against 2.2% at `look`. Use `t` to know *when*, `look` to know
   *where to point a camera*.
 
+### The library
+
+The app (`dsj ui`, v0.3.0) remembers every recording and transcript in one
+SQLite file, created the first time it is opened:
+
+- on a Mac, `~/Library/Application Support/dsj/library.db`
+- elsewhere, `$XDG_DATA_HOME/dsj/library.db` (`~/.local/share/dsj/library.db`)
+- anywhere, `DSJ_LIBRARY=<path>` instead, which is how the tests keep out of yours
+
+It is an index and nothing more. The transcript JSON files stay the truth and
+the library never writes to one, so deleting `library.db` loses the list, not a
+transcript: every file still opens, and handing the same files to the library
+again rebuilds it. A recording is known by its contents (#120), not its path, so
+one that was renamed or moved shows as missing until it is pointed at the new
+name, and then keeps every transcript it had. That new name lives only in the
+library, so after a rebuild the recording reads missing again until it is
+pointed at it a second time.
+
 ## Development
 
 ```bash
@@ -798,6 +816,7 @@ dsj/            the package
   sherpa.py        the sherpa engine: parakeet's weights on ONNX, for the phone
   diarize.py       the fail-soft senko boundary
   atomic.py        write-or-do-not-write, for files a reader may be watching
+  ui/store.py      the library: every recording and transcript, in one SQLite file
 tests/             fast unit tests, plus the two slow end-to-end gates
 scratch/           working probes; the data beside them is gitignored
 docs/              the reasoning that did not fit here
