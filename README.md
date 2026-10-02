@@ -33,6 +33,7 @@ Three Urdu imperatives, in the order the tool works:
 | <div dir="rtl">سنو</div> | `suno` | *listen* — what was said, and when |
 | <div dir="rtl">دیکھو</div> | `dekho` | *look* — when the picture changed |
 | <div dir="rtl">دکھاؤ</div> | `dikhao` | *show me* — the picture itself |
+| <div dir="rtl">ہٹاؤ</div> | `hatao` | *remove it*: a copy with the swear words bleeped |
 | <div dir="rtl">جانو</div> | `dsj` | *know* — what you get from all three, and so the command |
 
 <p align="center">
@@ -82,6 +83,7 @@ the interesting part.
 | **Dikhao — frame retrieval** | working. The step that actually makes a recording answerable |
 | **Likho: export** | working. SRT, WebVTT and plain text from a finished transcript |
 | **Parho: import** | working. An SRT, WebVTT or dsj JSON transcript in place of ASR |
+| **Hatao: bleep** | working from the terminal. Word lists for English, Urdu, Hindi and Punjabi; how often each engine leaves a swear word out of its transcript is not yet measured (#152) |
 | **Frame description** | **not built**, blocked on a *measured* finding rather than a guess. See [Roadmap](#roadmap) |
 
 ---
@@ -440,6 +442,50 @@ want, and legibility stopped improving well below that — 700px to 1600px moved
 recall by one string in fifteen ([docs/vlm-legibility.md](docs/vlm-legibility.md)).
 
 Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
+
+### Hatao: bleeping
+
+`hatao` (remove it) writes a copy of the recording with every word a word list
+flags muted, from the transcript `suno` already wrote. No model runs, no app or
+server is needed, and the recording itself is never written to:
+
+```bash
+dsj hatao recording.mov -t transcript.json -o clean.mov
+```
+
+| Flag | |
+|---|---|
+| `-t, --transcript PATH` | the recording's transcript (required) |
+| `-o, --out PATH` | the bleeped copy, in the input's container (required) |
+| `--overwrite` | replace `--out` and its log if they exist |
+
+The shipped lists in `dsj/words/` cover English, Urdu, Hindi and Punjabi, Roman
+and own-script spellings, and every word is looked up in every list, so a
+sentence that switches language halfway is covered. Matching is exact after
+folding case and punctuation; Roman Urdu has no fixed spelling, so an entry
+lists each spelling. Your own words go in `words.toml` in dsj's data folder
+(`~/Library/Application Support/dsj/` on a Mac, or the file `$DSJ_WORDS`
+names), which no update touches:
+
+```toml
+[[entry]]
+name = "yaar"
+roman = ["yaar", "yar"]
+script = ["یار"]
+```
+
+Each word is muted from 0.1 s before it to 0.1 s after it; the picture is
+copied untouched and the sound re-encoded in its own codec. `clean.bleeps.json`
+beside the output lists every muted word with its start, end and the entry
+that matched it. Listen at those times: whether the cut clicks, or clips the
+word next to it, is a judgment for an ear.
+
+A run that matches nothing writes nothing, says so on stderr and exits 3, so it
+cannot pass for a cleaned file. Every run also prints a `recall:` line, because
+a recogniser can leave a swear word out of the transcript altogether, and how
+often each engine does that is not measured yet (#152). A transcript without
+word end times, from before v0.2.0 or from `parho`, is refused rather than
+guessed at.
 
 ### Likho: exporting a transcript
 
@@ -877,10 +923,12 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho | ui
+  cli.py           the `dsj` command: suno | dekho | dikhao | hatao | likho | parho | ui
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
-  media.py         ffmpeg: audio out, tile grids out, dikhao frames out
+  media.py         ffmpeg: audio out, tile grids out, dikhao frames out, bleeps rendered
+  hatao.py         hatao  -- the edit list, the word lists' matcher, what a render mutes
+  words/           the shipped word lists, one TOML file a language
   chunking.py      the chunk loop parakeet-mlx does not provide
   likho.py         likho  -- a transcript out as SRT, WebVTT or text
   parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR

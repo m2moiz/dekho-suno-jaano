@@ -18,7 +18,9 @@
 | 0 | Success | |
 | 1 | `suno`: a mistake you can put right, printed as one line, `dsj: <message>`. A missing input, an `-o` or `--status` in a directory that does not exist, an unknown `--engine`, whisper's options on parakeet, an engine or ffmpeg that is not installed | Read the line. It carries the remedy. |
 | 1 | Anything else, printed as a Python traceback on stderr. On `suno` that is a bug in dsj | Read the last line. It names the class and carries the remedy. |
+| 1 | `hatao`: a mistake you can put right, one line, `dsj: <message>`. A missing file, a transcript with no word end times, a broken user word list, a recording with no sound, an output that exists without `--overwrite` | Read the line. It carries the remedy. |
 | 2 | A usage error from the argument parser | You got the flags wrong. Run `dsj <verb> --help`. |
+| 3 | `hatao` only: no word in the transcript matched a word list. Nothing was written | If a word you can hear should have matched, add its spelling to the user word list the warning names. If the recogniser never wrote it down, no list will find it. |
 | 75 | `suno` only: another `suno` is already running on this machine. Nothing was started | Wait for the pid stderr names to finish, then run it again. |
 | 130 | Interrupted with Ctrl-C or SIGINT | For `suno` on parakeet or sherpa this is safe and resumable. Re-run the same command. |
 | 143 | Stopped by `kill` | The same as 130. |
@@ -163,6 +165,8 @@ has no wheel for, and the fix is a reinstall pinned to Python 3.12.
 | `MissingPath`, a `FileNotFoundError` | `suno`'s input is not there, or its `-o` or `--status` is in a directory that does not exist. One line, `dsj: ...`, naming the `mkdir -p` that fixes it. |
 | `ValueError` | `--fps` not positive, or `--budget`, `--min-gap` or `--delta` negative |
 | `ValueError` | A negative timestamp or a `--width` of less than zero on `dikhao` |
+| `TranscriptUnusable`, a `ValueError` | `hatao`'s transcript has a token with no `e`, or tokens running backwards: written before v0.2.0, imported by `parho`, or written before v0.2.3 and overlapping at a seam. Muting it would mean guessing where a word is, so it is refused. Transcribe the recording again |
+| `WordListError`, a `ValueError` | The user word list is not TOML, or an entry has no `name`, no spellings, a key other than `roman`, `script` and `disguised`, or a spelling that is all punctuation. Named with its file |
 
 ## Detecting failure from a `--status` file
 

@@ -55,6 +55,7 @@ whitelist.overlap_duration  # tests/test_chunking.py
 whitelist.suno  # dsj/cli.py
 whitelist.dekho  # dsj/cli.py
 whitelist.dikhao  # dsj/cli.py
+whitelist.hatao  # dsj/cli.py
 whitelist.likho  # dsj/cli.py
 whitelist.parho  # dsj/cli.py
 whitelist.ui  # dsj/cli.py

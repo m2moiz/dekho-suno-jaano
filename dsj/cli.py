@@ -1,8 +1,9 @@
-"""The `dsj` command -- one Typer app, six verbs.
+"""The `dsj` command -- one Typer app, seven verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
+    dsj hatao  recording.mov -t transcript.json -o clean.mov   # remove it
     dsj likho  transcript.json -o captions.srt     # write
     dsj parho  recording.mov captions.vtt -o transcript.json    # read
     dsj ui                                         # the app, in a browser
@@ -12,7 +13,8 @@ the tool does in the order it does them. Suno gives you what was said, dekho
 gives you when the picture changed, dikhao gives you the picture itself. Jaano
 -- know -- is what you get from all three, which is why it is the command.
 Likho writes what suno heard out for the tools that are not dsj, and parho reads
-a transcript those tools made back in, in place of suno. `ui` is plain English
+a transcript those tools made back in, in place of suno. Hatao -- remove it --
+mutes the words a list flags and writes a bleeped copy. `ui` is plain English
 because it is not a step in that sequence: it is the window over all of them.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
@@ -417,6 +419,137 @@ def dikhao(
     # program, and a path on stdout composes:
     #     open "$(dsj frame rec.mov 431.5 -o /tmp/f.jpg)"
     print(dest)
+    return 0
+
+
+# `dsj hatao` found nothing to mute, so it wrote nothing. Not 0, because a run
+# that muted nothing must not read as a cleaned file (#44, #153); not 1, which
+# is a mistake to put right, because a recording with no swear words in it is a
+# correct answer. A script tells the two apart by the number.
+EXIT_NOTHING_MUTED = 3
+
+
+@app.command("hatao")
+def hatao(
+    media: Annotated[Path, typer.Argument(help="the recording the transcript indexes")],
+    transcript: Annotated[
+        Path, typer.Option("--transcript", "-t", help="its transcript, as dsj suno wrote it")
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out", "-o",
+            help="the bleeped copy, same container as the input; a log goes beside it",
+        ),
+    ],
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="replace --out and its log if they exist")
+    ] = False,
+) -> int:
+    """Remove it: mute the words a word list flags, into a new file.
+
+    The shipped lists cover English, Urdu, Hindi and Punjabi; add your own words
+    to the file named by $DSJ_WORDS, else words.toml in dsj's data folder. The
+    recording is never written to. Beside --out goes <stem>.bleeps.json, every
+    muted word with its start, end and the list entry it matched. A run that
+    finds nothing to mute says so on stderr, writes nothing and exits 3.
+    """
+    from dsj import hatao as bleep
+    from dsj import media as media_mod
+    from dsj.atomic import atomic_write_text
+    from dsj.suno import Progress, render_bar
+
+    log = out.with_name(f"{out.stem}.bleeps.json")
+    if out.suffix.lower() != media.suffix.lower():
+        raise typer.BadParameter(
+            f"must keep the recording's container, so end in {media.suffix or '(none)'}",
+            param_hint="--out",
+        )
+    if not overwrite and (existing := [p for p in (out, log) if p.exists()]):
+        print(
+            f"dsj: refusing to replace {' and '.join(map(str, existing))}; pass --overwrite",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    # The caller's to put right, each one line (#200): a missing file, a
+    # transcript that is not one or has no word ends, a broken user list, no
+    # sound to mute, no ffmpeg. Anything else is a bug in dsj, with its traceback.
+    try:
+        payload = json.loads(transcript.read_text(encoding="utf-8"))
+        total = media_mod.probe(media).duration_s
+        doc = bleep.from_transcript(payload, media, duration_s=total)
+        found = bleep.find(doc, bleep.load_words(bleep.word_lists()))
+    except FileNotFoundError as exc:
+        print(f"dsj: no such file: {exc.filename or exc.args[0]}", file=sys.stderr)
+        raise typer.Exit(1) from None
+    except json.JSONDecodeError as exc:
+        print(f"dsj: {transcript} is not a transcript: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from None
+    except (
+        bleep.TranscriptUnusable, bleep.WordListError, media_mod.NoAudioStream, FFmpegNotFound
+    ) as exc:
+        print(f"dsj: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from None
+    engine = str(payload.get("engine") or payload.get("model") or "this engine")
+    print(bleep.recall_line(engine), file=sys.stderr)
+    lists = [str(path) for path in found.lists]
+    if not found.count:
+        print(
+            f"warning: nothing to mute. {found.words_searched} words of {transcript} matched "
+            f"none of the word lists ({', '.join(lists)}), so nothing was written. If a word "
+            f"you hear is missing, add its spelling to {bleep.user_words_path()}",
+            file=sys.stderr,
+        )
+        raise typer.Exit(EXIT_NOTHING_MUTED)
+
+    tty = sys.stderr.isatty()
+    started = time.monotonic()
+
+    def show(done: float, length: float) -> None:
+        p = Progress(done, length, time.monotonic() - started)
+        print(render_bar(p, "rendering"), end="\r" if tty else "\n", file=sys.stderr, flush=True)
+
+    # SIGTERM as Ctrl-C, as suno does, so `kill` stops ffmpeg and leaves no
+    # half-written file (dsj.media.mute cleans up on the way out).
+    sigterm_installed = (
+        threading.current_thread() is threading.main_thread()
+        and signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    )
+    if sigterm_installed:
+        signal.signal(signal.SIGTERM, _raise_terminated)
+    try:
+        spans = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
+                             on_progress=show)
+    except Terminated:
+        raise SystemExit(143) from None
+    finally:
+        if sigterm_installed:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    if tty:
+        print(file=sys.stderr)
+    atomic_write_text(
+        log,
+        json.dumps(
+            {
+                "media": str(media.resolve()),
+                "transcript": str(transcript.resolve()),
+                "output": str(out.resolve()),
+                "engine": engine,
+                "lists": lists,
+                "pad_s": bleep.PAD_S,
+                "muted": [
+                    {"word": m.word, "entry": m.entry, "start": round(m.source_start, 3),
+                     "end": round(m.source_end, 3)}
+                    for m in found.matches
+                ],
+                "spans": [[a, b] for a, b in spans],
+            },
+            ensure_ascii=False,
+            indent=1,
+        ),
+    )
+    print(f"muted {found.count} words in {len(spans)} spans -> {out} (log: {log})",
+          file=sys.stderr)
     return 0
 
 

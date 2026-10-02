@@ -1,4 +1,4 @@
-# The four documents dsj writes
+# The documents dsj writes
 
 ## Contents
 
@@ -8,6 +8,7 @@
 - Querying a transcript with jq
 - The status heartbeat, written by `--status`
 - The checkpoint, written beside `--out`
+- The bleep log, written by `hatao`
 
 Every time value in every one of these documents is **seconds, as a float**, measured
 from the start of the media. The single exception is `next_start` in the checkpoint,
@@ -458,3 +459,24 @@ changes what whisper writes, so a rerun with another of any of them decodes agai
 says so: `checkpoint ignored, transcribing from the start: the prompt changed (prompt)`.
 Values are strings, and `"None"` means the setting was not given. `--no-resume` deletes
 the file as it deletes a chunk checkpoint.
+
+## The bleep log, written by `hatao`
+
+`-o clean.mov` gives `clean.bleeps.json`, written after the render, beside it:
+
+```json
+{"media": "/tmp/src.mov", "transcript": "/tmp/src.json", "output": "/tmp/clean.mov",
+ "engine": "parakeet", "lists": ["/path/to/dsj/words/en.toml", "/path/to/words.toml"],
+ "pad_s": 0.1,
+ "muted": [{"word": "Weather.", "entry": "user:weather", "start": 10.32, "end": 10.96}],
+ "spans": [[10.22, 11.06]]}
+```
+
+| Field | Notes |
+|---|---|
+| `muted` | One entry per word muted, in time order. `word` as the transcript wrote it, punctuation included; `entry` is `<list>:<name>`, the list being `en`, `ur`, `hi`, `pa` or `user`; `start` and `end` are the word's own, before padding |
+| `spans` | What was silenced: each word widened by `pad_s` on both sides, clamped to the recording, and overlapping ones merged. Listen here |
+| `lists` | Every word list searched, the user's last when it exists |
+| `engine` | The transcript's `engine`, else its `model` |
+
+No log is written when nothing matched: that run writes nothing at all and exits 3.

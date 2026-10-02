@@ -49,6 +49,7 @@ __all__ = [
     "FORMAT",
     "FORMAT_VERSION",
     "PAD_S",
+    "RECALL",
     "SHIPPED_LISTS",
     "WORDS_ENV",
     "Document",
@@ -73,6 +74,7 @@ __all__ = [
     "move",
     "mute",
     "normalize",
+    "recall_line",
     "render",
     "save",
     "spans_to_mute",
@@ -647,6 +649,25 @@ def flag(doc: Document, found: Found) -> Document:
 # 80 ms grid and whisper only infers its ends. A zero-length word (e == t) is
 # muted by its pad alone.
 PAD_S = 0.1
+
+# How often each engine leaves a swear word out of its transcript, once #152 has
+# measured it, as the sentence `dsj hatao` prints for that engine. Empty until
+# then, and every engine reads "unmeasured": a word the recogniser never wrote
+# down cannot be matched or muted, and a run that muted nothing it heard is not
+# allowed to look like a clean recording (#44).
+RECALL: dict[str, str] = {}
+
+
+def recall_line(engine: str) -> str:
+    """The one line `dsj hatao` prints about what `engine` may have missed."""
+    measured = RECALL.get(engine)
+    if measured is not None:
+        return f"recall: {engine} {measured}"
+    return (
+        f"recall: how often {engine} leaves a swear word out of its transcript is unmeasured "
+        f"(#152); a word it never wrote down was not muted"
+    )
+
 
 # Two items closer than this are one stretch of the recording, not a cut: the
 # times are rounded to the millisecond and summed.
