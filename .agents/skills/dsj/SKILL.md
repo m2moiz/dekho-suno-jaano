@@ -251,7 +251,8 @@ dsj suno meeting.mov -o out.json --status run.json &
 jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s" end' run.json
 ```
 
-`state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`.
+`state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`, or
+`interrupted` when Ctrl-C or `kill` stopped it.
 A whisper run that wrote a repetition loop passes through `retrying` after `running`,
 while each loop span is decoded again.
 The file is one JSON object rewritten in full and replaced atomically, so a reader never
@@ -327,7 +328,8 @@ none at all, so an interrupted whisper run always starts over.
 | 0 | Success |
 | 1 | An uncaught exception, printed as a traceback on stderr |
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
-| 130 | Interrupted. For `suno` on parakeet or sherpa, re-run to resume |
+| 130 | Interrupted by Ctrl-C. For `suno` on parakeet or sherpa, re-run to resume |
+| 143 | Stopped by `kill`. The same as 130 otherwise |
 
 **Read the last line of stderr, not the first.** A failure is a traceback, and when
 ffmpeg is involved its own log prints above the exception, so the useful sentence can be

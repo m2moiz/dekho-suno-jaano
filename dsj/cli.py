@@ -44,9 +44,12 @@ __all__ = ["app", "main", "run"]
 
 import json
 import logging
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
+from types import FrameType
 from typing import Annotated
 
 import typer
@@ -119,6 +122,22 @@ def _stderr_logger(name: str) -> None:
     logger.propagate = False
 
 
+class _Terminated(KeyboardInterrupt):
+    """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
+
+    A KeyboardInterrupt so that everything already written to survive Ctrl-C
+    survives `kill` too: the temp file cleanup in atomic.py, the checkpoint the
+    chunk loop banked, the temporary directory the extracted audio sits in.
+    Python's default for SIGTERM is to end the process on the spot, which skips
+    all of it, and the status file kept saying `running` about a process that no
+    longer existed (#143, observed 2026-09-22).
+    """
+
+
+def _raise_terminated(_signum: int, _frame: FrameType | None) -> None:
+    raise _Terminated
+
+
 @app.command("suno")
 def suno(
     media: Annotated[Path, typer.Argument(help="video or audio file; a .mov is the normal case")],
@@ -173,15 +192,17 @@ def suno(
     tty = sys.stderr.isatty()
     last_state = ""
     last_total = 0.0
+    last_progress: Progress | None = None
 
     def show(p: Progress, state: str) -> None:
         # A phase change ends the rewritten line, so the finished extraction bar
         # stays on screen instead of being overwritten by transcription's 0%.
-        nonlocal last_state, last_total
+        nonlocal last_state, last_total, last_progress
         if tty and last_state and state != last_state:
             print(file=sys.stderr)
         last_state = state
         last_total = p.audio_total_s
+        last_progress = p
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
     # --roman-urdu is sugar over the two flags under it, and it is spelled as
@@ -202,6 +223,19 @@ def suno(
     # project, and a default that lives in two places is a default that will
     # disagree with `--help` eventually.
     model = model or (DEFAULT_WHISPER_MODEL if engine == "whisper" else DEFAULT_MODEL)
+
+    # Only where SIGTERM still has its default action, and only on the main
+    # thread, the one place signal.signal is allowed. A caller that ignored
+    # SIGTERM on purpose, or installed its own handler, keeps it. SIGINT needs
+    # nothing: Python already raises KeyboardInterrupt for it, unless the
+    # process started with SIGINT ignored, which is what a `&` job in a shell
+    # without job control gets, and that choice is the caller's to keep too.
+    sigterm_installed = (
+        threading.current_thread() is threading.main_thread()
+        and signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    )
+    if sigterm_installed:
+        signal.signal(signal.SIGTERM, _raise_terminated)
 
     started = time.monotonic()
     try:
@@ -231,6 +265,38 @@ def suno(
                 status, json.dumps({"state": "failed", "error": f"{type(exc).__name__}: {exc}"})
             )
         raise
+    except KeyboardInterrupt as exc:
+        # Ctrl-C and `kill`. KeyboardInterrupt is not an Exception, so before
+        # #143 both went past the branch above and the heartbeat said `running`
+        # forever. Default restored first, so a second `kill` ends the process
+        # at once instead of interrupting this write.
+        if sigterm_installed:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            sigterm_installed = False
+        terminated = isinstance(exc, _Terminated)
+        if status:
+            stopped: dict[str, object] = {
+                "state": "interrupted",
+                "signal": "SIGTERM" if terminated else "SIGINT",
+            }
+            # Where it had got to, with the phase that number belongs to: an
+            # extracting frame's audio_done_s counts extraction, not transcript.
+            if last_progress is not None:
+                stopped |= {
+                    "during": last_state,
+                    "audio_done_s": last_progress.audio_done_s,
+                    "audio_total_s": last_progress.audio_total_s,
+                }
+            atomic_write_text(status, json.dumps(stopped))
+        if terminated:
+            # 128 + 15, what a shell reports for a process SIGTERM ended, so
+            # `wait` and anything already reading 143 see what they saw before.
+            raise SystemExit(143) from None
+        # Typer turns this into exit 130.
+        raise
+    finally:
+        if sigterm_installed:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
     if tty:
         print(file=sys.stderr)
     elapsed = time.monotonic() - started

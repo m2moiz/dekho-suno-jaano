@@ -261,7 +261,7 @@ sees half of one. It is not a log and not JSONL.
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
+| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, `failed`, or `interrupted`. **This is the only reliable completion signal.** |
 | `audio_done_s`, `audio_total_s` | float seconds | Of audio, not wall clock. |
 | `elapsed_s` | float seconds | Wall clock **for the current phase**, not for the run. Extraction and transcription each restart it, because one runs at about 1000x realtime and the other at about 13x, so a shared clock would make both speeds meaningless. |
 | `resumed_from_s` | float seconds | Audio a previous run already transcribed. `0.0` otherwise. |
@@ -291,6 +291,22 @@ jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fracti
 ```
 
 `error` is `"<ExceptionClassName>: <message>"`.
+
+**A stopped run says so.** Ctrl-C (SIGINT) and a plain `kill` (SIGTERM) write a third
+shape before the process exits, 130 and 143 respectively:
+
+```json
+{"state": "interrupted", "signal": "SIGTERM", "during": "running",
+ "audio_done_s": 105.0, "audio_total_s": 300.0}
+```
+
+`signal` is `SIGINT` or `SIGTERM`. `during` is the state of the last frame written before
+the signal, and `audio_done_s` and `audio_total_s` are that frame's, so they count
+extraction if `during` is `extracting`. All three are absent when the signal arrived
+before the first frame, while the model was loading. `interrupted` is terminal: nothing
+writes to the file again. Do not wait on it. A parakeet or sherpa run resumes from its
+checkpoint when the same command is run again; a whisper run starts over. `kill -9`
+cannot be caught, so it writes nothing and the file keeps its last frame.
 
 How often each state is written:
 
