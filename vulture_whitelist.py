@@ -85,3 +85,9 @@ whitelist.decode_stream  # tests/test_suno.py
 # its caller and reports both unused.
 whitelist.preprocessor_config  # tests/conftest.py
 whitelist.generate  # tests/conftest.py
+
+# Read by reflection too: Fingerprint.to_dict() serializes every field through
+# dataclasses.asdict, which is how `schema` reaches every checkpoint and every
+# comparison of one. Nothing reads it as an attribute, so a branch that changes
+# dsj/checkpoint.py sees it as unused.
+whitelist.schema  # dsj/checkpoint.py -- Fingerprint
