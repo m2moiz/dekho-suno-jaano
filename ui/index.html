@@ -2,6 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Before any stylesheet, on purpose (#116): the saved colour choice is
+         applied before the first paint, so a dark-mode open never flashes
+         white. The cookie, not localStorage, because each dsj ui launch gets
+         a new port and localStorage is kept per port; ui/src/features/theme/
+         writes the same cookie. -->
+    <script>
+      (function () {
+        var found = /(?:^|; )dsj-theme=(light|dark|system)(?:;|$)/.exec(document.cookie);
+        var theme = found ? found[1] : "system";
+        var root = document.documentElement;
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme === "system" ? "light dark" : theme;
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dsj</title>
   </head>

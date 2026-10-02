@@ -503,6 +503,10 @@ back, and a request that names any host but this machine's is refused. Close
 the window and the server stops within a minute. Run `dsj ui` again while it
 is open and you get the running one's address, not a second copy.
 
+It follows the Mac's light or dark Appearance, live, until you pick Light or
+Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
+the browser's per-port storage, survives the new port each launch gets.
+
 ## Output
 
 ```jsonc
