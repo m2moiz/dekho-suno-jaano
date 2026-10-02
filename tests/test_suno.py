@@ -2247,3 +2247,111 @@ def test_a_failing_run_still_writes_failed_and_its_own_error_to_a_valid_status(
     assert f"the directory {missing} does not exist" in failed["error"]
     assert "pass another -o" in failed["error"]
     assert loaded == []
+
+
+# --- the transcript as a file tag on the recording (#119) ----------------
+
+
+def _file_facts(path: Path) -> tuple[str, int, int]:
+    """What a tag write must not change: the recording's bytes, size and mtime."""
+    import hashlib
+
+    st = path.stat()
+    return hashlib.sha256(path.read_bytes()).hexdigest(), st.st_size, st.st_mtime_ns
+
+
+@pytest.mark.parametrize("labelled", [False, True])
+def test_the_xattr_holds_the_sidecar_bytes_and_leaves_the_recording_alone(
+    labelled: bool,
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Byte for byte, including after labelling wrote the sidecar a second time.
+
+    And the recording is untouched: its SHA-256, size and mtime are what a
+    checkpoint's fingerprint and the content id are built on, so a tag that
+    moved any of them would cost the next run its resume.
+    """
+    from dsj.filetag import TRANSCRIPT_TAG, read_tag
+
+    fake_parakeet(tokens=_tokens())
+    if labelled:
+        fake_turns(**_one_speaker())
+    out = tmp_path / "out.json"
+    before = _file_facts(fake_media)
+
+    transcribe(fake_media, out, diarize=labelled)
+
+    assert ("speakers" in json.loads(out.read_text())) is labelled
+    assert read_tag(fake_media, TRANSCRIPT_TAG) == out.read_bytes()
+    assert _file_facts(fake_media) == before
+
+
+def test_reading_prefers_the_sidecar_and_falls_back_to_the_xattr(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+) -> None:
+    """The sidecar is the truth; the tag answers only once the sidecar is gone."""
+    from dsj.filetag import read_transcript, sidecar_for
+
+    fake_parakeet(tokens=_tokens())
+    sidecar = sidecar_for(fake_media)
+    written = transcribe(fake_media, sidecar)
+    assert sidecar == fake_media.with_name(f"{fake_media.stem}.dsj.json")
+
+    # A sidecar that now differs from the tag, so "prefers" is observable.
+    edited = written | {"model": "edited after the run"}
+    sidecar.write_text(json.dumps(edited))
+    assert read_transcript(fake_media) == edited
+
+    sidecar.unlink()
+    assert read_transcript(fake_media) == json.loads(json.dumps(written))
+
+
+def test_reading_with_neither_xattr_nor_sidecar_names_both(tmp_path: Path) -> None:
+    from dsj.filetag import read_transcript
+
+    recording = tmp_path / "rec.m4a"
+    recording.write_bytes(b"not transcribed")
+
+    with pytest.raises(FileNotFoundError) as missing:
+        read_transcript(recording)
+
+    said = str(missing.value)
+    assert str(tmp_path / "rec.dsj.json") in said
+    assert "com.jaano.transcript" in said
+
+
+def test_a_failed_xattr_write_keeps_the_transcript_and_says_so(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A recording that cannot take a tag (read-only, an odd file system) still gets a run.
+
+    The transcript is on disk before the tag is tried, and it is the truth;
+    exiting 1 over the safety net would make a caller throw it away.
+    """
+    import errno
+
+    import dsj.filetag as filetag
+
+    def refuse(path: Path, name: str, data: bytes) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted", str(path))
+
+    monkeypatch.setattr(filetag, "write_tag", refuse)
+    fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(fake_media, out, status_path=status)
+
+    assert json.loads(out.read_text())["sentences"]
+    assert json.loads(status.read_text())["state"] == "done"
+    assert f"transcript not tagged onto {fake_media}" in caplog.text
+    assert "Operation not permitted" in caplog.text

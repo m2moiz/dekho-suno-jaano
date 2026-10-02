@@ -47,6 +47,7 @@ import numpy as np
 
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
+from dsj import filetag
 from dsj import media as media_mod
 from dsj.asr import ENGINES, Transcription, get_engine, with_char_offsets
 from dsj.atomic import atomic_write_text
@@ -1411,6 +1412,11 @@ def _transcribe(
             payload = _label_speakers(
                 payload, audio, out, stream.duration_s, report, require_diarize
             )
+
+        # After the last write to `out`, never after the first: labelling
+        # rewrites it, and the tag has to hold the bytes that stayed (#119).
+        # Onto `media`, the recording the user handed us, never the temp wav.
+        filetag.tag_transcript(media, out)
 
         # Removed once labelling is over, not as soon as `out` is written
         # (#101). whisper's banked result goes at the same moment and for the

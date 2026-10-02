@@ -365,6 +365,23 @@ second run start beside the first. `DSJ_SUNO_LOCK=<path>` moves it, which is
 how the test suite keeps out of a real run's way; two runs under different
 lock paths do not see each other.
 
+**A copy of the transcript rides on the recording.** On a Mac, once the
+transcript is written, the same bytes go into a hidden file tag on the
+recording, `com.jaano.transcript`. The recording's contents, size and
+modified time stay exactly as they were, so a checkpoint for it stays good.
+`xattr -p com.jaano.transcript recording.mov` prints it. If the tag cannot be
+written (a read-only recording, say), the run says so on stderr and finishes
+anyway.
+
+From Python, `dsj.filetag.read_transcript(recording)` returns the transcript
+from `<stem>.dsj.json` beside the recording, and from the tag only when that
+file is missing. The JSON file is the real copy; the tag is a local safety net.
+Three ordinary things drop the tag without a word, measured in #117: remuxing
+with `ffmpeg -c copy`, saving through `avconvert` with `PresetPassthrough` (what
+QuickTime Player uses), and a trip through Google Drive's servers. A `cp` or
+`mv` on the Mac keeps it. Off a Mac nothing is tagged, and the JSON file is the
+only copy.
+
 ### Dekho — change marks
 
 A second pass adds the timestamps where the picture changed most. It is
@@ -827,6 +844,7 @@ dsj/            the package
   parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
+  filetag.py       the transcript's copy as a hidden tag on the recording, macOS only
   merge.py         token-vote speaker labelling
   asr.py           the one shape every ASR engine returns
   parakeet.py      the parakeet engine, the default, on MLX
