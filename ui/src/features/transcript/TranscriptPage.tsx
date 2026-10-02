@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
+import { Player } from "@/features/player/Player";
 import { parseTranscript, read, type Reading } from "./document";
 import { TranscriptView } from "./TranscriptView";
 
@@ -39,6 +40,7 @@ async function open(recordingId: number, transcriptId: number): Promise<Opened> 
 /** One transcript, opened from the library, to read (#58). */
 export function TranscriptPage({ recording, transcript }: { recording: number; transcript: number }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  const article = useRef<HTMLElement>(null);
   useEffect(() => {
     let live = true;
     open(recording, transcript).then(
@@ -72,7 +74,15 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
             <h2 className="text-xl font-semibold text-balance">{fileName(loaded.recording.path)}</h2>
             <p className="text-sm text-muted-foreground">{loaded.model}</p>
           </header>
-          <TranscriptView reading={loaded.reading} />
+          <TranscriptView reading={loaded.reading} articleRef={article} />
+          {loaded.recording.missing ? (
+            <p className="sticky bottom-0 mt-8 border-t bg-background/95 py-3 text-sm text-muted-foreground">
+              The recording is not where it was last seen, so this transcript cannot play. Last seen at{" "}
+              <span className="font-mono break-all">{loaded.recording.path}</span>
+            </p>
+          ) : (
+            <Player recording={loaded.recording} reading={loaded.reading} article={article} />
+          )}
         </>
       )}
     </>

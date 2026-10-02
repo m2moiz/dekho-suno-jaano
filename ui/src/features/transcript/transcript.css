@@ -28,4 +28,15 @@
 
 .transcript p {
   margin: 0;
+  /* Every word is a seek target (#60). */
+  cursor: pointer;
+}
+
+/* The word being said (#60). A background only: ::highlight() takes colour,
+ * background and decoration, never border-radius or padding (#57 section 7).
+ * Amber, light enough in light mode and dark enough in dark mode that the
+ * body text on it keeps its contrast. */
+::highlight(dsj-playhead) {
+  background-color: light-dark(oklch(0.9 0.12 85), oklch(0.42 0.09 75));
+  color: var(--foreground);
 }

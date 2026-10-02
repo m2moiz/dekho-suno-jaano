@@ -48,6 +48,14 @@ export function takeToken(win: Window = window): string | null {
   return token;
 }
 
+/**
+ * The token, for the one request that cannot carry the header: a media
+ * element's, which the server lets put it in the query (#59).
+ */
+export function sessionToken(): string | null {
+  return token;
+}
+
 // The server exits a minute after the last beat (#112 rule 6), so a closed
 // window does not leave it running. Four beats a minute, so one lost to a busy
 // moment is not the one that stops it.

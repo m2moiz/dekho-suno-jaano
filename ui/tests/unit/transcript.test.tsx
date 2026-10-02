@@ -22,6 +22,7 @@ import {
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { TranscriptView } from "../../src/features/transcript/TranscriptView";
 import { SHAPE, syntheticTranscript } from "../perf/fixture";
+import { installHighlights } from "./highlights";
 
 function sentence(start: number, words: string[], extra: Partial<Sentence> = {}): Sentence {
   const tokens = words.map((w, i) => ({ t: start + i * 0.3, w }));
@@ -181,6 +182,8 @@ describe("TranscriptPage", () => {
   };
 
   beforeEach(() => {
+    // The page mounts the player, whose playhead paints with the Highlight API.
+    installHighlights();
     window.history.replaceState(null, "", "/?recording=2&transcript=7#t=a-token");
     takeToken();
     fetchMock.mockReset();

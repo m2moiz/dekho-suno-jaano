@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type Ref } from "react";
 
 import { durationLabel } from "@/features/library/describe";
 import { type Reading, speakerName } from "./document";
@@ -14,9 +14,15 @@ import "./transcript.css";
  * Memoised on the reading, which is made once per transcript: nothing that
  * changes while it plays may re-render this.
  */
-export const TranscriptView = memo(function TranscriptView({ reading }: { reading: Reading }) {
+export const TranscriptView = memo(function TranscriptView({
+  reading,
+  articleRef,
+}: {
+  reading: Reading;
+  articleRef?: Ref<HTMLElement>;
+}) {
   return (
-    <article className="transcript" aria-label="Transcript">
+    <article ref={articleRef} className="transcript" aria-label="Transcript">
       {reading.turns.map((turn, i) => {
         const name = speakerName(reading.speakers, turn.speaker);
         return (

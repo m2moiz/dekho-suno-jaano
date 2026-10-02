@@ -180,3 +180,36 @@ export function read(doc: TranscriptDoc): Reading {
     },
   };
 }
+
+/** The word a character offset in paragraph `turn` falls in, or -1. */
+export function wordAtOffset(reading: Reading, turn: number, offset: number): number {
+  const paragraph = reading.turns[turn];
+  if (paragraph === undefined || paragraph.count === 0) return -1;
+  // The last word of the paragraph that starts at or before `offset`.
+  let lo = paragraph.first;
+  let hi = paragraph.first + paragraph.count - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((reading.words.offset[mid] ?? 0) <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * The word being said at `seconds`, or -1 before the first word and in a pause
+ * after a sentence's last word. A binary search over start times, so the
+ * playhead's per-frame cost does not grow with the length of the recording.
+ */
+export function wordAtTime(words: Words, seconds: number): number {
+  const { start, end } = words;
+  if (start.length === 0 || seconds < (start[0] ?? 0)) return -1;
+  let lo = 0;
+  let hi = start.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((start[mid] ?? 0) <= seconds) lo = mid;
+    else hi = mid - 1;
+  }
+  return seconds < (end[lo] ?? 0) ? lo : -1;
+}
