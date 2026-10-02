@@ -17,12 +17,14 @@ against working code.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,42 @@ def _sigint_default() -> None:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
+# Every process launch() started, so the fixture below can end the ones a test
+# did not. A held stub runs until a signal reaches it, and a test that fails
+# before sending one used to leave it running, parented to launchd, for good.
+_launched: list[subprocess.Popen[bytes]] = []
+
+
+@pytest.fixture(autouse=True)
+def end_what_the_test_started() -> Iterator[None]:
+    """After each test, pass or fail, SIGKILL and reap whatever it left running."""
+    yield
+    while _launched:
+        proc = _launched.pop()
+        if proc.poll() is None:
+            # The group, not the pid: launch() gives each child its own session,
+            # so this reaches anything it started and nothing else.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=60)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def no_stub_outlives_the_module(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """The check on the fixture above: nothing this session launched is still alive.
+
+    Matched on the session's own temp directory, which every launched command
+    line names, so a stub from another session or another checkout is not ours
+    to report.
+    """
+    yield
+    pattern = f"{STUB} {tmp_path_factory.getbasetemp()}"
+    found = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+    assert found.returncode == 1 and not found.stdout.strip(), (
+        f"stub processes outlived their tests: pids {found.stdout.split()}"
+    )
+
+
 def launch(
     argv: list[str], log: Path, env: dict[str, str] | None = None
 ) -> subprocess.Popen[bytes]:
@@ -45,7 +83,7 @@ def launch(
     terminal's Ctrl-C does, reaches it and never this test.
     """
     with log.open("wb") as err:
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             argv,
             stdout=subprocess.DEVNULL,
             stderr=err,
@@ -53,6 +91,8 @@ def launch(
             start_new_session=True,
             preexec_fn=_sigint_default,
         )
+    _launched.append(proc)
+    return proc
 
 
 def stub_run(work: Path, *extra: str, hold: bool = True) -> subprocess.Popen[bytes]:

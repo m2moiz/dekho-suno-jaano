@@ -12,7 +12,8 @@ heartbeat and every write to disk are the shipped code.
 Two environment variables steer it:
 
     STUB_HOLD=1             after the first chunk is banked and reported, block until
-                            a signal arrives, so a test can catch the run mid-flight
+                            a signal arrives, so a test can catch the run mid-flight,
+                            or until its parent process is gone
     STUB_LOADED=<path>      touched when the model is loaded, so a test can prove a
                             refused run never got that far
 
@@ -35,6 +36,7 @@ from dsj import asr, chunking, cli, media, suno
 
 RATE = 16_000
 AUDIO_S = 300.0
+PARENT = os.getppid()
 
 
 def _load_audio(_path: Path) -> Any:
@@ -70,8 +72,12 @@ def _transcribe_chunked(
     if on_chunk is not None:
         on_chunk(first, first, total, [])
     if os.environ.get("STUB_HOLD") == "1":
-        while True:
+        # Held until a signal arrives, or until the test that started it is
+        # gone: a parent that died without stopping this process (pytest killed
+        # by a timeout, say) would otherwise leave it running for good.
+        while os.getppid() == PARENT:
             time.sleep(0.05)
+        raise SystemExit("stub_suno: the process that started this one is gone")
     if on_chunk is not None:
         on_chunk(total, total, total, [])
     return SimpleNamespace(text="", sentences=[])
