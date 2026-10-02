@@ -188,7 +188,7 @@ dsj hatao recording.mov -t transcript.json -o clean.mov
 |---|---|
 | `-t, --transcript PATH` | **required.** The recording's transcript, as `suno` wrote it |
 | `-o, --out PATH` | **required.** The bleeped copy. Same container as the input, so the same suffix |
-| `--overwrite` | replace `--out` and its log if they exist; refused otherwise, exit 1 |
+| `--overwrite` | replace `--out` and the two files beside it if they exist; refused otherwise, exit 1 |
 
 The shipped word lists cover English, Urdu, Hindi and Punjabi, in Roman and in their own
 scripts, and are searched one word at a time, so a sentence that mixes languages is
@@ -208,7 +208,11 @@ Each muted word is silenced from 0.1 s before its start to 0.1 s after its end. 
 picture is copied untouched, the sound re-encoded in its own codec. Beside `--out` goes
 `<stem>.bleeps.json`, listing every muted word with its `start`, `end` and the list
 `entry` that matched it, and the merged `spans` that were silenced. Read it to check
-the result, and listen at those times.
+the result, and listen at those times. Beside it too goes `<stem>.source.txt`, the content
+id of the recording the copy came from (its size, a dash, and a SHA-256 of its first and
+last MiB), and the copy carries the same id as the file tag `com.jaano.source`
+(`xattr -p com.jaano.source clean.mov`), except in a cloud-synced folder, where the
+sidecar alone holds it and stderr says so.
 
 Two things it says on stderr every run, and both matter:
 

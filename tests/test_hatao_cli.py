@@ -207,3 +207,55 @@ def test_kill_stops_a_render_and_leaves_no_file(
     assert subprocess.run(["pgrep", "-f", str(tmp_path)], capture_output=True).returncode == 1
     left: list[Any] = sorted(p.name for p in tmp_path.iterdir())
     assert left == ["long.m4a", "t.json"], left
+
+
+# --------------------------------------------------------------------------
+# Which recording a rendered file came from (#121)
+# --------------------------------------------------------------------------
+
+
+def test_a_rendered_file_names_its_source_in_a_sidecar_and_a_tag(
+    recording: Path, transcript: Path, word_list: Path, tmp_path: Path
+) -> None:
+    from dsj.filetag import SOURCE_TAG, read_tag
+    from dsj.identity import content_id
+
+    out = tmp_path / "clean.wav"
+    assert main(["hatao", str(recording), "-t", str(transcript), "-o", str(out)]) == 0
+    expected = content_id(recording)
+    assert (tmp_path / "clean.source.txt").read_text() == expected + "\n"
+    assert read_tag(out, SOURCE_TAG) == expected.encode()
+
+
+def test_a_render_into_a_cloud_synced_folder_writes_the_sidecar_only(
+    recording: Path, transcript: Path, word_list: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A fake Google Drive folder under a temporary home, as #202's tests do."""
+    from dsj.filetag import SOURCE_TAG, read_tag
+    from dsj.identity import content_id
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    drive = home / "Library" / "CloudStorage" / "GoogleDrive-someone" / "My Drive"
+    drive.mkdir(parents=True)
+    out = drive / "clean.wav"
+    assert main(["hatao", str(recording), "-t", str(transcript), "-o", str(out)]) == 0
+    assert (drive / "clean.source.txt").read_text() == content_id(recording) + "\n"
+    assert read_tag(out, SOURCE_TAG) is None
+    err = capsys.readouterr().err
+    assert f"source not tagged onto {out}, so only {drive / 'clean.source.txt'} names it" in err
+    assert "cloud-synced folder" in err
+
+
+def test_a_leftover_source_sidecar_is_not_replaced_without_overwrite(
+    recording: Path, transcript: Path, word_list: Path, tmp_path: Path
+) -> None:
+    sidecar = tmp_path / "clean.source.txt"
+    sidecar.write_text("an older render's\n")
+    args = ["hatao", str(recording), "-t", str(transcript), "-o", str(tmp_path / "clean.wav")]
+    assert main(args) == 1
+    assert sidecar.read_text() == "an older render's\n"
+    assert not (tmp_path / "clean.wav").exists()
+    assert main([*args, "--overwrite"]) == 0
+    assert sidecar.read_text() != "an older render's\n"

@@ -443,7 +443,8 @@ def hatao(
         ),
     ],
     overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="replace --out and its log if they exist")
+        bool,
+        typer.Option("--overwrite", help="replace --out and the files beside it if they exist"),
     ] = False,
 ) -> int:
     """Remove it: mute the words a word list flags, into a new file.
@@ -451,21 +452,25 @@ def hatao(
     The shipped lists cover English, Urdu, Hindi and Punjabi; add your own words
     to the file named by $DSJ_WORDS, else words.toml in dsj's data folder. The
     recording is never written to. Beside --out goes <stem>.bleeps.json, every
-    muted word with its start, end and the list entry it matched. A run that
+    muted word with its start, end and the list entry it matched, and
+    <stem>.source.txt, the recording's content id, which is also tagged onto
+    --out as com.jaano.source outside a cloud-synced folder. A run that
     finds nothing to mute says so on stderr, writes nothing and exits 3.
     """
     from dsj import hatao as bleep
     from dsj import media as media_mod
     from dsj.atomic import atomic_write_text
+    from dsj.filetag import source_sidecar_for
     from dsj.suno import Progress, render_bar
 
     log = out.with_name(f"{out.stem}.bleeps.json")
+    source = source_sidecar_for(out)
     if out.suffix.lower() != media.suffix.lower():
         raise typer.BadParameter(
             f"must keep the recording's container, so end in {media.suffix or '(none)'}",
             param_hint="--out",
         )
-    if not overwrite and (existing := [p for p in (out, log) if p.exists()]):
+    if not overwrite and (existing := [p for p in (out, log, source) if p.exists()]):
         print(
             f"dsj: refusing to replace {' and '.join(map(str, existing))}; pass --overwrite",
             file=sys.stderr,
@@ -518,8 +523,8 @@ def hatao(
     if sigterm_installed:
         signal.signal(signal.SIGTERM, _raise_terminated)
     try:
-        spans = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
-                             on_progress=show)
+        rendered = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
+                                on_progress=show)
     except Terminated:
         raise SystemExit(143) from None
     finally:
@@ -542,13 +547,16 @@ def hatao(
                      "end": round(m.source_end, 3)}
                     for m in found.matches
                 ],
-                "spans": [[a, b] for a, b in spans],
+                "spans": [[a, b] for a, b in rendered.spans],
             },
             ensure_ascii=False,
             indent=1,
         ),
     )
-    print(f"muted {found.count} words in {len(spans)} spans -> {out} (log: {log})",
+    if rendered.untagged:
+        print(f"source not tagged onto {out}, so only {source} names it: {rendered.untagged}",
+              file=sys.stderr)
+    print(f"muted {found.count} words in {len(rendered.spans)} spans -> {out} (log: {log})",
           file=sys.stderr)
     return 0
 

@@ -457,7 +457,7 @@ dsj hatao recording.mov -t transcript.json -o clean.mov
 |---|---|
 | `-t, --transcript PATH` | the recording's transcript (required) |
 | `-o, --out PATH` | the bleeped copy, in the input's container (required) |
-| `--overwrite` | replace `--out` and its log if they exist |
+| `--overwrite` | replace `--out` and the two files beside it if they exist |
 
 The shipped lists in `dsj/words/` cover English, Urdu, Hindi and Punjabi, Roman
 and own-script spellings, and every word is looked up in every list, so a
@@ -478,7 +478,10 @@ Each word is muted from 0.1 s before it to 0.1 s after it; the picture is
 copied untouched and the sound re-encoded in its own codec. `clean.bleeps.json`
 beside the output lists every muted word with its start, end and the entry
 that matched it. Listen at those times: whether the cut clicks, or clips the
-word next to it, is a judgment for an ear.
+word next to it, is a judgment for an ear. `clean.source.txt` holds the content
+id of the recording it came from, and outside a cloud-synced folder the copy
+carries it as the file tag `com.jaano.source` too, so a copy that leaves the
+folder can still be matched to its source.
 
 A run that matches nothing writes nothing, says so on stderr and exits 3, so it
 cannot pass for a cleaned file. Every run also prints a `recall:` line, because

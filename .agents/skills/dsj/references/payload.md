@@ -480,3 +480,8 @@ the file as it deletes a chunk checkpoint.
 | `engine` | The transcript's `engine`, else its `model` |
 
 No log is written when nothing matched: that run writes nothing at all and exits 3.
+
+`clean.source.txt` beside it is one line, the source recording's content id, the same
+`<size>-<sha256 of its first and last MiB>` the checkpoint's `content_id` holds. The
+rendered file carries it as the tag `com.jaano.source` too, unless it is in a
+cloud-synced folder.

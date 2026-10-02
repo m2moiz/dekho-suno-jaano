@@ -60,6 +60,7 @@ __all__ = [
     "Match",
     "Paragraph",
     "RenderRefused",
+    "Rendered",
     "TranscriptUnusable",
     "WordList",
     "WordListError",
@@ -95,6 +96,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
+from dsj import filetag
 from dsj import media as media_mod
 from dsj.atomic import atomic_write_text
 
@@ -720,6 +722,14 @@ def spans_to_mute(
     return [(round(a, 3), round(b, 3)) for a, b in spans if b > a]
 
 
+@dataclass(frozen=True)
+class Rendered:
+    """What a render did: the spans it silenced, and why its source tag is missing, if it is."""
+
+    spans: list[tuple[float, float]]
+    untagged: str | None
+
+
 def render(
     doc: Document,
     media: Path,
@@ -727,7 +737,7 @@ def render(
     *,
     replace: bool = False,
     on_progress: Callable[[float, float], None] | None = None,
-) -> list[tuple[float, float]]:
+) -> Rendered:
     """Write `media` to `out` with every muted item of `doc` silenced (#65).
 
     The one render, for `dsj hatao` and for the app alike. `media` must be the
@@ -735,8 +745,9 @@ def render(
     rendered onto another would mute the wrong moments, in silence.
     `on_progress` is called with seconds written and the recording's length.
 
-    Returns:
-        The spans silenced, padded and merged, in seconds.
+    The finished file is stamped with its source's content id (#121,
+    dsj.filetag.stamp_source), so a copy that leaves this folder can still say
+    which recording it came from.
 
     Raises:
         RenderRefused: `media` is not the document's recording, or the document
@@ -757,4 +768,4 @@ def render(
         replace=replace,
         on_progress=(lambda done: on_progress(done, total)) if on_progress else None,
     )
-    return spans
+    return Rendered(spans, filetag.stamp_source(media, out))
