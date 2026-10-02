@@ -15,7 +15,8 @@ it only has to guess the port. So only this machine's own page may use this one
   1. It listens on 127.0.0.1 only, on a port the kernel picks.
   2. Every /api and /media request carries a token made at startup, in an
      `Authorization` header. The page itself is served without one: a browser
-     navigation cannot send a header.
+     navigation cannot send a header. Nor can an <audio> or <video> element,
+     so a recording's media route alone also takes it as `?t=` (#59).
   3. A request whose `Host` is not this server's loopback address is refused
      before anything else is looked at. That is what stops a hostile site
      pointing its own domain at 127.0.0.1 (DNS rebinding).
@@ -44,6 +45,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -54,6 +56,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -63,7 +66,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
-from dsj.ui.routes import recording
+from dsj.ui.routes import media, recording
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -80,6 +83,10 @@ IDLE_S = 60.0
 # The prefixes whose requests must carry the token. The page and its assets
 # are everything else, and are served to any loopback request (#112 rule 2).
 _GUARDED = ("/api", "/media")
+
+# The one route whose requests come from a media element, which sends no
+# headers of its own: GET or HEAD of a recording's file (dsj/ui/routes/media.py).
+_MEDIA = re.compile(r"/api/recording/[^/]+/media")
 
 # How long a second `dsj ui` waits for the first to write where it listens. The
 # first writes it straight after binding, so this only covers two launched in
@@ -120,7 +127,24 @@ class _Guard:
         self.app = app
         self.hosts = hosts
         self.expected = f"Bearer {token}".encode()
+        self.token = token.encode()
         self.heartbeat = heartbeat
+
+    def _carries_token(self, scope: Scope, headers: dict[bytes, bytes]) -> bool:
+        """The header, or for a media element's request, `?t=`.
+
+        A query token is accepted on the media route only, and only to read:
+        the URL of a subresource reaches no history and no Referer, and serve()
+        runs uvicorn at "warning", below its access log, so no log either: the
+        three reasons for the header (#57 section 9). Every other route still
+        refuses it.
+        """
+        if secrets.compare_digest(headers.get(b"authorization", b""), self.expected):
+            return True
+        if scope.get("method") not in ("GET", "HEAD") or not _MEDIA.fullmatch(scope["path"]):
+            return False
+        query = parse_qs(scope["query_string"].decode("latin-1")).get("t", [])
+        return len(query) == 1 and secrets.compare_digest(query[0].encode(), self.token)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -134,8 +158,7 @@ class _Guard:
             return
         path: str = scope["path"]
         if any(path == p or path.startswith(f"{p}/") for p in _GUARDED):
-            given = headers.get(b"authorization", b"")
-            if not secrets.compare_digest(given, self.expected):
+            if not self._carries_token(scope, headers):
                 await JSONResponse(
                     {
                         "error": "Unauthorized",
@@ -188,6 +211,7 @@ def create_app(
     app = FastAPI(title="dsj", docs_url=None, redoc_url=None)
     app.state.heartbeat = Heartbeat()
     app.include_router(recording.router)
+    app.include_router(media.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
