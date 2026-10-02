@@ -67,6 +67,18 @@ missing command means a missing install.
 
 `ffmpeg` must be on `PATH` for anything that is not already a 16 kHz mono wav.
 
+**The checkout may not be yours alone.** Another session may be running dsj, or editing
+it, from the same clone. Run `git status` before you start and before you stop, and never
+touch a file it already shows as modified. Stop only a job you started, by its pid: `$!`
+when you started it with `&`, or the `pid` its `--status` file records. Never
+`pkill -f 'dsj suno'`, which matches every dsj run on the machine, another session's
+included.
+
+**If a usage task turns into changing dsj**, even when you were asked to, file an issue
+for the change before running the patched tool, and put a measurement, with the command
+that produced it, behind any constant you introduce. Then gate it as
+[Changing dsj itself](#changing-dsj-itself) says.
+
 ## The five verbs
 
 ### suno

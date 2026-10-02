@@ -48,6 +48,20 @@ are in a sandbox or VM with this checkout mounted into it: stop, and do not run 
 rebuilds it for the platform you are on, which wipes the Mac's environment under any job
 running there (#141).
 
+Three rules for any session that runs dsj from this checkout, including one that was only
+asked to transcribe something:
+
+1. If the task turns into a change to `dsj/*.py`, even an approved one, file an issue for
+   the change before running the patched tool, and put a measurement, with the command
+   that produced it, behind any constant you introduce. On 2026-09-22 an approved
+   167-line patch went live with neither, and was then swept into another session's
+   commit (#135).
+2. The checkout may not be yours alone. Run `git status` before you start and before you
+   stop, and never touch a file it already shows as modified.
+3. Stop only the job you started, by its pid: `$!` when you started it with `&`, or the
+   `pid` its `--status` file records (#138). Never `pkill -f 'dsj suno'`, which matches
+   every dsj run on the machine, another session's included.
+
 To use it outside this checkout, symlink it once. `~/.agents/skills` is read by Codex and
 by anything else that follows that convention, and `~/.claude/skills` by Claude Code:
 
