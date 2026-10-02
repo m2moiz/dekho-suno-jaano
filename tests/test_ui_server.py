@@ -9,11 +9,16 @@ then fail, which is what CI's `--extra ui` is for.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import signal
+import socket
+import stat
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -125,8 +130,17 @@ def test_a_bare_install_carries_no_web_server() -> None:
 # --------------------------------------------------------------------------
 
 
+# Every request a test makes as the page carries the Host the page's own does.
+LOOPBACK = "http://127.0.0.1:8721"
+URL = re.compile(r"http://127\.0\.0\.1:(\d+)/#t=([A-Za-z0-9_-]{43})")
+
+
 def client() -> TestClient:
-    return TestClient(create_app(port=8721)[0])
+    """A client that is the page: the right Host, and the token on every request."""
+    app, token = create_app(port=8721)
+    return TestClient(
+        app, base_url=LOOPBACK, headers={"Authorization": f"Bearer {token}"}
+    )
 
 
 def no_serving(*_args: object, **_kwargs: object) -> None:
@@ -183,7 +197,7 @@ def test_print_url_is_what_keeps_the_browser_closed(
     monkeypatch.setattr("uvicorn.Server.run", no_serving)
     assert main(["ui", *flag]) == 0
     assert bool(seen) is opened
-    assert all(re.fullmatch(r"http://127\.0\.0\.1:\d+/", url) for url in seen), seen
+    assert all(URL.fullmatch(url) for url in seen), seen
 
 
 def test_dsj_ui_print_url_serves_the_page_on_loopback() -> None:
@@ -195,12 +209,15 @@ def test_dsj_ui_print_url_serves_the_page_on_loopback() -> None:
     try:
         assert proc.stdout is not None
         url = proc.stdout.readline().strip()
-        assert re.fullmatch(r"http://127\.0\.0\.1:\d+/", url), url
+        found = URL.fullmatch(url)
+        assert found, url
+        root = f"http://127.0.0.1:{found[1]}"
+        # The page itself needs no token: a browser navigation cannot send one.
         with urllib.request.urlopen(url, timeout=30) as reply:
             assert reply.status == 200
             page = reply.read().decode()
         assert page == (STATIC / "index.html").read_text()
-        with urllib.request.urlopen(url.rstrip("/") + built_assets(page)[0], timeout=30) as reply:
+        with urllib.request.urlopen(root + built_assets(page)[0], timeout=30) as reply:
             assert reply.status == 200
         assert proc.poll() is None, "--print-url must keep serving, not print and exit"
     finally:
@@ -247,3 +264,283 @@ def test_the_frontend_pins_every_version_exactly() -> None:
         if locked[f"node_modules/{name}"]["version"] != version
     }
     assert not drift, f"package.json and package-lock.json disagree: {drift}"
+
+
+# --------------------------------------------------------------------------
+# Only this machine may reach the server (#112)
+# --------------------------------------------------------------------------
+#
+# The first four are the tests #112's first comment wrote out, with the Host
+# pair kept together: a guard that refuses everything passes the hostile half.
+
+
+def bare_client() -> tuple[TestClient, str]:
+    """A client that sends only what each test gives it."""
+    app, token = create_app(port=8721)
+    # raise_server_exceptions=False so a 500 arrives as a response, not an
+    # exception, and a guard that crashes instead of refusing cannot read as a pass.
+    return TestClient(app, raise_server_exceptions=False), token
+
+
+def test_a_foreign_host_header_is_rejected() -> None:
+    client, token = bare_client()
+    for path in ("/api/recordings", "/"):
+        response = client.get(
+            path, headers={"Host": "evil.example.com", "Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 403, (path, response.text)
+        # The body must not leak the answer it refused to give.
+        assert "recordings" not in response.text
+        assert "<html" not in response.text.lower()
+
+
+def test_the_loopback_host_header_is_accepted() -> None:
+    """The precondition. Without it, a server that 403s everything passes the test above."""
+    client, token = bare_client()
+    for host in ("127.0.0.1:8721", "localhost:8721"):
+        response = client.get(
+            "/api/recordings", headers={"Host": host, "Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200, (host, response.text)
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.1:9999", "localhost:8721.evil.com", ""])
+def test_a_loopback_host_on_another_port_is_rejected(host: str) -> None:
+    client, token = bare_client()
+    response = client.get(
+        "/api/recordings", headers={"Host": host, "Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403, (host, response.text)
+
+
+@pytest.mark.parametrize("auth", [None, "", "Bearer ", "Bearer wrong", "{token}", "Basic {token}"])
+def test_no_token_is_rejected(auth: str | None) -> None:
+    client, token = bare_client()
+    headers = {"Host": "127.0.0.1:8721"}
+    if auth is not None:
+        headers["Authorization"] = auth.format(token=token)
+    for path in ("/api/recordings", "/media/1"):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 401, (path, response.text)
+
+
+def test_the_host_check_runs_before_the_token_check() -> None:
+    """A foreign origin with no token is told 403, never 401: it learns nothing."""
+    client, _ = bare_client()
+    response = client.get("/api/recordings", headers={"Host": "evil.example.com"})
+    assert response.status_code == 403, response.text
+
+
+def test_the_page_is_served_without_a_token() -> None:
+    """A browser navigation cannot send a header, so the page itself needs none (rule 2)."""
+    client, _ = bare_client()
+    response = client.get("/", headers={"Host": "127.0.0.1:8721"})
+    assert response.status_code == 200
+    assert response.text == (STATIC / "index.html").read_text()
+
+
+def test_no_cors_header_is_ever_sent() -> None:
+    client, token = bare_client()
+    origin = {"Host": "127.0.0.1:8721", "Origin": "https://evil.example.com"}
+    replies = [
+        client.get("/api/recordings", headers={**origin, "Authorization": f"Bearer {token}"}),
+        client.get("/", headers=origin),
+        # A preflight, the request CORS middleware exists to answer.
+        client.options(
+            "/api/recordings",
+            headers={**origin, "Access-Control-Request-Method": "GET",
+                     "Access-Control-Request-Headers": "authorization"},
+        ),
+    ]
+    for reply in replies:
+        assert not any(k.lower().startswith("access-control-") for k in reply.headers), (
+            reply.request.method, dict(reply.headers),
+        )
+
+
+def test_no_route_takes_a_filesystem_path() -> None:
+    """Rule 5: the page names a recording by id; the server looks the path up itself."""
+    from fastapi.routing import APIRoute
+
+    app, _ = create_app(port=8721)
+    routes = [route for route in app.routes if isinstance(route, APIRoute)]
+    assert routes, "no API routes found, so this test would check nothing"
+    for route in routes:
+        dependant = route.dependant
+        params = [
+            *dependant.path_params, *dependant.query_params, *dependant.body_params,
+            *dependant.header_params, *dependant.cookie_params,
+        ]
+        for param in params:
+            assert "path" not in param.name.lower(), (route.path, param.name)
+            assert param.field_info.annotation not in (Path, str | Path), (route.path, param.name)
+
+
+def test_the_heartbeat_route_counts_as_the_page_being_open() -> None:
+    app, token = create_app(port=8721)
+    beats = app.state.heartbeat
+    beats._last -= 100  # pyright: ignore[reportPrivateUsage]  # as if a hundred seconds ago
+    assert beats.idle_s() >= 100
+    reply = TestClient(app, base_url=LOOPBACK).post(
+        "/api/heartbeat", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert reply.status_code == 204, reply.text
+    assert beats.idle_s() < 5
+
+
+def test_a_refused_request_is_not_a_heartbeat() -> None:
+    app, _ = create_app(port=8721)
+    beats = app.state.heartbeat
+    beats._last -= 100  # pyright: ignore[reportPrivateUsage]
+    TestClient(app, base_url=LOOPBACK).post("/api/heartbeat")
+    assert beats.idle_s() >= 100
+
+
+def test_the_server_listens_on_loopback_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    bound: list[tuple[str, int]] = []
+
+    def capture(_server: object, sockets: list[socket.socket]) -> None:
+        bound.extend(sock.getsockname() for sock in sockets)
+
+    monkeypatch.setattr("uvicorn.Server.run", capture)
+    dsj.ui.server.serve(open_browser=False)
+    ((host, port),) = bound
+    assert host == "127.0.0.1"
+    assert port != 0
+
+
+def test_the_server_stops_when_no_page_beats(capsys: pytest.CaptureFixture[str]) -> None:
+    """Rule 6: a real server, on a real socket, with nobody at it."""
+    started = time.monotonic()
+    dsj.ui.server.serve(open_browser=False, idle_s=0.5)
+    took = time.monotonic() - started
+    assert took < 10, took
+    captured = capsys.readouterr()
+    assert URL.fullmatch(captured.out.strip()), captured.out
+    assert "dsj ui stopped" in captured.err
+    # The token goes with the server: the lock file no longer holds it.
+    assert dsj.ui.server.lock_path().read_text() == ""
+
+
+def wait_for_url() -> str:
+    """The URL a `dsj ui` started by this test wrote into its lock file."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with contextlib.suppress(OSError, ValueError):
+            url = json.loads(dsj.ui.server.lock_path().read_text())["url"]
+            if isinstance(url, str):
+                return url
+        time.sleep(0.05)
+    raise AssertionError("dsj ui never wrote its URL")
+
+
+def beat(url: str) -> int:
+    found = URL.fullmatch(url)
+    assert found
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{found[1]}/api/heartbeat", method="POST",
+        headers={"Authorization": f"Bearer {found[2]}"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        return reply.status
+
+
+def test_a_beating_page_keeps_the_server_up_until_it_stops() -> None:
+    idle = 1.0
+    server = threading.Thread(
+        target=dsj.ui.server.serve, kwargs={"open_browser": False, "idle_s": idle}
+    )
+    server.start()
+    try:
+        url = wait_for_url()
+        until = time.monotonic() + 3 * idle
+        while time.monotonic() < until:
+            assert beat(url) == 204
+            time.sleep(idle / 5)
+        assert server.is_alive(), "the server stopped while the page was still beating"
+    finally:
+        server.join(timeout=10 * idle)
+    assert not server.is_alive(), "the server outlived the last heartbeat"
+
+
+def test_the_lock_file_is_readable_by_its_owner_only() -> None:
+    server = threading.Thread(
+        target=dsj.ui.server.serve, kwargs={"open_browser": False, "idle_s": 1.0}
+    )
+    server.start()
+    try:
+        wait_for_url()
+        assert stat.S_IMODE(dsj.ui.server.lock_path().stat().st_mode) == 0o600
+    finally:
+        server.join(timeout=10)
+
+
+def test_a_second_dsj_ui_prints_the_first_ones_url_and_binds_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    server = threading.Thread(
+        target=dsj.ui.server.serve, kwargs={"open_browser": False, "idle_s": 2.0}
+    )
+    server.start()
+    try:
+        url = wait_for_url()
+
+        def no_second_app(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("the second dsj ui built an app")
+
+        monkeypatch.setattr(dsj.ui.server, "create_app", no_second_app)
+        opened: list[str] = []
+        monkeypatch.setattr("webbrowser.open", opened.append)
+        capsys.readouterr()
+        assert main(["ui"]) == 0
+        assert capsys.readouterr().out.strip() == url
+        assert opened == [url], "the second dsj ui should open the first one's page"
+    finally:
+        server.join(timeout=20)
+
+
+def test_a_second_dsj_ui_process_prints_the_running_url() -> None:
+    """The same, as two real processes, so the lock is two processes' and not two fds'."""
+    first = subprocess.Popen(
+        [str(CONSOLE_SCRIPT), "ui", "--print-url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert first.stdout is not None
+        url = first.stdout.readline().strip()
+        assert URL.fullmatch(url), url
+        second = subprocess.run(
+            [str(CONSOLE_SCRIPT), "ui", "--print-url"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert second.returncode == 0, second.stderr
+        assert second.stdout.strip() == url
+        assert "already running" in second.stderr
+        assert first.poll() is None
+    finally:
+        first.terminate()
+        first.wait(timeout=30)
+
+
+def test_a_killed_dsj_ui_does_not_lock_out_the_next() -> None:
+    """flock(2) dies with its holder, so `kill -9` leaves nothing to clean up."""
+    first = subprocess.Popen(
+        [str(CONSOLE_SCRIPT), "ui", "--print-url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    assert first.stdout is not None
+    old = first.stdout.readline().strip()
+    first.kill()
+    first.wait(timeout=30)
+    second = subprocess.Popen(
+        [str(CONSOLE_SCRIPT), "ui", "--print-url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert second.stdout is not None
+        new = second.stdout.readline().strip()
+        assert URL.fullmatch(new), new
+        assert new != old
+    finally:
+        second.terminate()
+        second.wait(timeout=30)

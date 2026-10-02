@@ -492,6 +492,12 @@ dsj ui --print-url    # prints the URL and serves, without opening one
 It needs the `ui` extra, which `dsj[mac]` carries. The page is built ahead of
 time and ships inside the package, so an install needs no Node.
 
+Only this Mac's own page can use it. The URL carries a key after `#`, which
+the page takes and wipes from the address bar; every request has to bring it
+back, and a request that names any host but this machine's is refused. Close
+the window and the server stops within a minute. Run `dsj ui` again while it
+is open and you get the running one's address, not a second copy.
+
 ## Output
 
 ```jsonc

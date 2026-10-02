@@ -1,0 +1,68 @@
+// The token that lets this page, and only this page, use the dsj ui server
+// (#112). `dsj ui` opens http://127.0.0.1:<port>/#t=<token>. The part after
+// `#` never reaches a server, so it stays out of logs and out of Referer; this
+// file takes it, wipes it from the address bar at once so it stays out of the
+// browser's history too, and sends it as a header on every request.
+
+const KEY = "dsj-token";
+const FRAGMENT = /^#t=([A-Za-z0-9_-]+)$/;
+
+let token: string | null = null;
+
+/**
+ * Take the token from the address bar, or from this tab's earlier load.
+ *
+ * Kept in sessionStorage so a reload of this tab still works: it is per tab
+ * and per port, so it dies with the tab and never reaches another server.
+ */
+export function takeToken(win: Window = window): string | null {
+  const found = FRAGMENT.exec(win.location.hash);
+  if (found?.[1] !== undefined) {
+    token = found[1];
+    win.sessionStorage.setItem(KEY, token);
+    win.history.replaceState(win.history.state, "", win.location.pathname + win.location.search);
+    return token;
+  }
+  token = win.sessionStorage.getItem(KEY);
+  return token;
+}
+
+/** fetch, with the token, for any /api or /media path on this server. */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  if (token === null) {
+    throw new Error(
+      "This page has no dsj ui token. Open the address `dsj ui` printed in the terminal, " +
+        "including the part after #.",
+    );
+  }
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return fetch(path, { ...init, headers });
+}
+
+// The server exits a minute after the last beat (#112 rule 6), so a closed
+// window does not leave it running. Four beats a minute, so one lost to a busy
+// moment is not the one that stops it.
+export const BEAT_MS = 15_000;
+
+/** Beat now, then every BEAT_MS, and on the tab coming back into view. */
+export function startHeartbeat(win: Window = window): () => void {
+  const beat = () => {
+    // A failed beat is not an error to put in front of the reader: the next
+    // one may land, and a server that is gone shows itself on the next real
+    // request. It is logged, not dropped.
+    apiFetch("/api/heartbeat", { method: "POST" }).catch((error: unknown) => {
+      console.warn("dsj ui heartbeat failed", error);
+    });
+  };
+  const onVisible = () => {
+    if (win.document.visibilityState === "visible") beat();
+  };
+  beat();
+  const timer = win.setInterval(beat, BEAT_MS);
+  win.document.addEventListener("visibilitychange", onVisible);
+  return () => {
+    win.clearInterval(timer);
+    win.document.removeEventListener("visibilitychange", onVisible);
+  };
+}

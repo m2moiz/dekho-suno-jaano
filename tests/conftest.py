@@ -55,6 +55,20 @@ def private_suno_lock(
     monkeypatch.setenv("DSJ_SUNO_LOCK", str(tmp_path_factory.mktemp("lock") / "suno.lock"))
 
 
+@pytest.fixture(autouse=True)
+def private_library(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test its own library, and with it its own `dsj ui` lock (#105, #112).
+
+    Without it a test that starts `dsj ui`, in-process or as a subprocess, would
+    write the owner's ~/Library/Application Support/dsj/ui.lock and find a real
+    `dsj ui` the owner has open, and a test that opens the library would read
+    and write the owner's index.
+    """
+    monkeypatch.setenv("DSJ_LIBRARY", str(tmp_path_factory.mktemp("library") / "library.db"))
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Give every slow-marked test the long timeout ceiling.
 

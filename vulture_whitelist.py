@@ -96,3 +96,7 @@ whitelist.schema  # dsj/checkpoint.py -- Fingerprint
 # uvicorn calls it by name, `dsj.ui.server:dev_app --factory`, from the
 # justfile's ui-dev recipe, which vulture does not read.
 whitelist.dev_app  # dsj/ui/server.py
+
+# Set by the idle watchdog, read inside uvicorn's own serve loop, which vulture
+# does not scan: uvicorn.Server polls `should_exit` and shuts down when it is True.
+whitelist.should_exit  # dsj/ui/server.py -- _watch

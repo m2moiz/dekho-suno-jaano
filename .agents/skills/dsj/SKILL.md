@@ -247,8 +247,16 @@ dsj ui --print-url
 | `--print-url` | print the URL and serve, without opening a browser |
 
 It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
-on stdout. It serves until Ctrl-C or `kill`, so start it with `&` if you need the shell
-back, and stop it by that pid. The library it shows is empty for now.
+on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` request needs
+that token as `Authorization: Bearer <token>`, and a request whose `Host` is not that
+loopback address is refused with 403, token or not. The page itself needs no token.
+
+It serves until Ctrl-C or `kill`, or until a minute passes with no page open: the page
+sends `POST /api/heartbeat` every 15 s, and a server nobody opens stops on its own.
+Start it with `&` if you need the shell back. A second `dsj ui` while one is running
+prints the running one's URL and exits 0 without binding a port; the running one's
+details are in `ui.lock` beside the library (`$DSJ_LIBRARY`'s folder when that is set).
+The library it shows is empty for now.
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.
