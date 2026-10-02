@@ -21,5 +21,7 @@ export default defineConfig({
   projects: [
     { name: "chromium", testDir: "tests/e2e", use: { ...devices["Desktop Chrome"] } },
     { name: "webkit", testDir: "tests/e2e", use: { ...devices["Desktop Safari"] } },
+    // Chromium only: the 16.7 ms baseline it is compared with was measured there.
+    { name: "perf", testDir: "tests/perf", use: { ...devices["Desktop Chrome"] } },
   ],
 });
