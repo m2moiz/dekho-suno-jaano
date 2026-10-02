@@ -5,20 +5,13 @@
 Urdu -- its 25 languages are European, and `ur` is not among the model card's
 tags. A voice note that mixes Urdu and English comes back as nothing usable.
 
-whisper-large-v3-turbo does read it, at a cost. Its speed, each figure with the
-command that reproduces it and the machine state it was measured in, because
-memory pressure alone has moved it threefold on this Mac (#139):
-
-- 3.22x realtime on code-switched Urdu with `--roman-urdu`: #148's public
-  fixture, 853.7s of audio in 265.4s wall clock, model load included, no
-  diarization, 72% memory free, on commit 372d10e's decode path.
-  `just urdu-fixture`, then
-  `dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize -o roman.json`.
-- 6.37x on English with no prompt and so no anchoring: the owner's control
-  recording (#149), 16.7 minutes in 157s including model load, extraction and
-  speaker labelling, 68% memory free with 15.9 of 17.4 GB swap in use, commit
-  3f6d659 (label `before-fixes`). A fresh label re-measures it:
-  `scratch/real_bench.py run --label <new> --only 153458`.
+whisper-large-v3-turbo does read it, at a cost: about 2 to 3x realtime on
+Urdu with `--roman-urdu`, about 5 to 6x on English, on a 16 GB M2 running one
+whisper at a time, model load included. Each figure, with its file, command,
+commit and the memory free while it ran, is in one place:
+.agents/skills/dsj/references/engines.md, "whisper speed". Memory pressure
+alone has moved it threefold on this Mac (#139), so quote it with the machine
+state or not at all.
 
 parakeet runs at ~13x. That gap, and whisper's habit of inventing words, is why
 this is a flag and not a replacement.
