@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import { useFinishedCount } from "@/features/transcribe/jobs";
+import { TranscribeControl } from "@/features/transcribe/TranscribeControl";
 import {
   durationLabel,
   engineLabel,
@@ -25,6 +27,9 @@ async function loadRecordings(): Promise<RecordingRow[]> {
 /** Every recording dsj knows, newest first, each with its transcripts (#156). */
 export function LibraryPage() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
+  // Read again when a transcription started from this page finishes (#113), so
+  // its transcript appears without a reload.
+  const finished = useFinishedCount();
   useEffect(() => {
     let live = true;
     loadRecordings().then(
@@ -40,7 +45,7 @@ export function LibraryPage() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [finished]);
 
   // No skeleton: the list is one local request, and a flash of placeholder is
   // worse than a few milliseconds of nothing (#57 section 11.7).
@@ -83,6 +88,7 @@ function Recording({ row }: { row: RecordingRow }) {
           <Transcript key={t.id} t={t} />
         ))}
       </ul>
+      <TranscribeControl recording={row} />
     </li>
   );
 }

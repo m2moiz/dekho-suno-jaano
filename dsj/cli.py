@@ -183,8 +183,8 @@ def suno(
     """Listen: transcribe media to a timestamped index."""
     from dsj import runlock
     from dsj.suno import Progress, clock, render_bar
+    from dsj.suno import roman_urdu as roman_urdu_settings
     from dsj.suno import transcribe as run_transcribe
-    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
 
     _stderr_logger("dsj.suno")
 
@@ -205,19 +205,11 @@ def suno(
         last_total = p.audio_total_s
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
-    # --roman-urdu is sugar over the two flags under it, and it is spelled as
-    # sugar rather than as a mode so that an explicit --language or --prompt
-    # beside it still wins. The prompt it sets is measured, not invented: see
-    # dsj/whisper.py.
+    # --roman-urdu is sugar over the flags under it, defined once in dsj/suno.py
+    # so that a run started from `dsj ui` gets exactly what this one does (#113).
     anchor_s = None
     if roman_urdu:
-        engine = "whisper" if engine == "parakeet" else engine
-        language = language or "ur"
-        prompt = prompt or ROMAN_URDU_PROMPT
-        # The bias does not survive an hour on whisper's own window threading,
-        # so the flag that asks for it also pays for keeping it. Measured; see
-        # dsj/whisper.py.
-        anchor_s = ANCHOR_CHUNK_S
+        engine, language, prompt, anchor_s = roman_urdu_settings(engine, language, prompt)
 
     # Resolved here, not in transcribe(): this file owns every default in the
     # project, and a default that lives in two places is a default that will

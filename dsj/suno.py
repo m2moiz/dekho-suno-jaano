@@ -27,6 +27,8 @@ __all__ = [
     "is_loop",
     "main",
     "render_bar",
+    "reports_progress",
+    "roman_urdu",
     "silences",
     "transcribe",
 ]
@@ -925,6 +927,43 @@ class Terminated(KeyboardInterrupt):
     """
 
 
+def roman_urdu(
+    engine: str, language: str | None, prompt: str | None
+) -> tuple[str, str, str, float]:
+    """What `--roman-urdu` turns a run's engine, language and prompt into, and its `anchor_s`.
+
+    One definition for `dsj suno` and for a run started from `dsj ui` (#113),
+    because transcribe() knows nothing of Roman Urdu: an app that passed only
+    `language="ur"` would get a worse Urdu transcript than the terminal, with
+    nothing to say so. Sugar over the flags under it rather than a mode, so an
+    explicit language or prompt beside it still wins. The prompt is measured,
+    not invented, and so is the window it is re-seeded every (dsj/whisper.py).
+    parakeet becomes whisper; sherpa is left alone, and transcribe() then
+    refuses the whisper options it does not take.
+    """
+    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
+
+    return (
+        "whisper" if engine == "parakeet" else engine,
+        language or "ur",
+        prompt or ROMAN_URDU_PROMPT,
+        ANCHOR_CHUNK_S,
+    )
+
+
+def reports_progress(engine: str, prompt: str | None, anchor_s: float | None) -> bool:
+    """Whether a run reports progress before it finishes.
+
+    parakeet and sherpa report after every chunk. whisper reports once at 0%
+    and then nothing until it is done, because mlx-whisper takes no progress
+    callback, except on an anchored run (`anchor_s` and `prompt`, which
+    `--roman-urdu` sets), which cuts the audio itself and reports per window.
+    A page showing a run must know which, or a bar waiting on whisper reads as
+    stuck (#113).
+    """
+    return engine != "whisper" or (anchor_s is not None and prompt is not None)
+
+
 def _write_last_status(status_path: Path | None, document: dict[str, object]) -> None:
     """Write the document a run ends on when it does not reach `done`.
 
@@ -1243,7 +1282,7 @@ def _transcribe(
                 # callback, and a bar that moved without evidence would be a
                 # bar that lies.
                 whisper_progress: Callable[[float, float], None] | None = None
-                if anchor_s is not None and prompt is not None:
+                if reports_progress(engine, prompt, anchor_s):
 
                     def _whisper_progress(done_s: float, total_s: float) -> None:
                         nonlocal audio_total_s

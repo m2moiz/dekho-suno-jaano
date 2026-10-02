@@ -50,7 +50,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -63,7 +63,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
-from dsj.ui.routes import recording
+from dsj.ui.jobs import Jobs
+from dsj.ui.routes import jobs, recording
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -94,14 +95,35 @@ class Heartbeat:
         """Start the count now, so a server no page ever opens still stops."""
         self._clock = clock
         self._last = clock()
+        self._holds = 0
+        self._lock = threading.Lock()
 
     def beat(self) -> None:
         """The page is still there."""
         self._last = self._clock()
 
     def idle_s(self) -> float:
-        """Seconds since the page was last heard from."""
+        """Seconds since the page was last heard from, or 0 while something holds it."""
+        if self._holds:
+            return 0.0
         return self._clock() - self._last
+
+    @contextlib.contextmanager
+    def hold(self) -> Generator[None]:
+        """Count as heard from for as long as the block runs, and for IDLE_S after.
+
+        A transcription started from the page (#113) can take an hour, and a
+        closed tab must not stop the server under it: the job would die with
+        the process, half done, its status file still saying `running`.
+        """
+        with self._lock:
+            self._holds += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._holds -= 1
+            self.beat()
 
 
 class _Guard:
@@ -187,7 +209,9 @@ def create_app(
     # this app may reach off the machine. /openapi.json stays, for #155.
     app = FastAPI(title="dsj", docs_url=None, redoc_url=None)
     app.state.heartbeat = Heartbeat()
+    app.state.jobs = Jobs(app.state.heartbeat.hold)
     app.include_router(recording.router)
+    app.include_router(jobs.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

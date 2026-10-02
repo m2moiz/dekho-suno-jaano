@@ -49,6 +49,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Engines
+         * @description Every engine, each with the reason it cannot run here, or none.
+         *
+         *     Asked again on every call rather than once at startup: installing an extra
+         *     and reopening the picker should show it, with no restart.
+         */
+        get: operations["engines_api_engines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jobs
+         * @description Every transcription this server has started, the first first.
+         */
+        get: operations["jobs_api_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recordings/{recording_id}/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe
+         * @description Start transcribing one recording of the library; answered once the run is queued.
+         *
+         *     The id is checked as text, as the transcript route checks it, so anything
+         *     but a plain number is the same 404 as an id the library never had.
+         */
+        post: operations["transcribe_api_recordings__recording_id__transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -73,11 +139,66 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Engine
+         * @description One engine the picker offers, and whether it can run on this machine.
+         */
+        Engine: {
+            name: components["schemas"]["EngineName"];
+            /** Reason */
+            reason: string | null;
+            /** Default Model */
+            default_model: string;
+        };
+        /** @enum {string} */
+        EngineName: "parakeet" | "whisper" | "sherpa";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * Job
+         * @description A transcription started from the page, as its last status frame and its outcome say.
+         */
+        Job: {
+            /** Id */
+            id: number;
+            /** Recording Id */
+            recording_id: number;
+            engine: components["schemas"]["EngineName"];
+            /** Model */
+            model: string;
+            /** Language */
+            language: string | null;
+            /** Reports Progress */
+            reports_progress: boolean;
+            /** Started At */
+            started_at: string;
+            state: components["schemas"]["JobState"];
+            /** Fraction */
+            fraction: number;
+            /** Audio Done S */
+            audio_done_s: number;
+            /** Audio Total S */
+            audio_total_s: number;
+            /** Elapsed S */
+            elapsed_s: number;
+            /** Speed */
+            speed: number;
+            /** Eta S */
+            eta_s: number | null;
+            /** Stalled S */
+            stalled_s: number | null;
+            /** Error */
+            error: string | null;
+            /** Transcript Id */
+            transcript_id: number | null;
+            /** Notes */
+            notes: string[];
+        };
+        /** @enum {string} */
+        JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
         /**
          * Recording
          * @description One recording, wherever it was last seen, with every transcript of it.
@@ -103,6 +224,40 @@ export interface components {
             missing: boolean;
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
+        };
+        /**
+         * TranscribeRequest
+         * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
+         */
+        TranscribeRequest: {
+            /** @default parakeet */
+            engine: components["schemas"]["EngineName"];
+            /** Model */
+            model?: string | null;
+            /** Language */
+            language?: string | null;
+            /** Prompt */
+            prompt?: string | null;
+            /**
+             * Roman Urdu
+             * @default false
+             */
+            roman_urdu: boolean;
+            /**
+             * Diarize
+             * @default true
+             */
+            diarize: boolean;
+            /**
+             * Require Diarize
+             * @default false
+             */
+            require_diarize: boolean;
+            /**
+             * Start Over
+             * @default false
+             */
+            start_over: boolean;
         };
         /**
          * Transcript
@@ -186,6 +341,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    engines_api_engines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"][];
+                };
+            };
+        };
+    };
+    jobs_api_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+        };
+    };
+    transcribe_api_recordings__recording_id__transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranscribeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Validation Error */
