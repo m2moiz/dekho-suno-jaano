@@ -100,3 +100,9 @@ whitelist.dev_app  # dsj/ui/server.py
 # Set by the idle watchdog, read inside uvicorn's own serve loop, which vulture
 # does not scan: uvicorn.Server polls `should_exit` and shuts down when it is True.
 whitelist.should_exit  # dsj/ui/server.py -- _watch
+
+# Read by reflection: the engines route turns each EngineChoice into the
+# Engine model through dataclasses.asdict, and pydantic fills Engine's
+# fields from it; FastAPI then serializes them. Nothing reads either as an
+# attribute (#113).
+whitelist.default_model  # dsj/ui/jobs.py EngineChoice, dsj/ui/schemas.py Engine

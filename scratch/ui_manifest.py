@@ -11,11 +11,15 @@ and `just check` recomputes it.
     uv run python scratch/ui_manifest.py write   # end of `just ui-build`
     uv run python scratch/ui_manifest.py check   # `just ui-fresh`, in `check`
 
-The inputs are every file under ui/ but node_modules, Playwright's output and
-dotfiles, not only ui/src/ and the two package files #114 named. Tailwind reads
-every file under ui/ for class names, tests included: a word in a test comment
-was measured to add a CSS rule to the build (2026-10-02). A hash over less than
-what the build reads would call a changed build fresh.
+The inputs are what the build reads: ui/src/, ui/index.html, the two configs
+`npm run build` uses (tsconfig.json for tsc, vite.config.ts for Vite) and the
+two package files. Not the tests: until #203 Tailwind read every file under
+ui/ for class names, and a word in a test comment was measured to add a CSS
+rule to the build (2026-10-02), so this hashed tests too and editing only a
+test asked for a rebuild. ui/src/index.css now limits Tailwind to ui/src/ and
+ui/index.html; a probe word in a test was measured, after that, to leave the
+built CSS byte for byte the same. Widen this list if the build ever reads
+another file: a hash over less than the build reads calls a changed build fresh.
 
 Standard library only, and no Node: `check` must work, and fail, on a machine
 with no ui/node_modules, since a check that cannot run must not pass.
@@ -31,21 +35,23 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST = ".build-manifest.json"
-# Directories under ui/ that are tool output or installed packages, not inputs.
-SKIPPED_DIRS = {"node_modules", "test-results", "playwright-report"}
+# What the build reads, under ui/: every file in these directories, and these files.
+INPUT_DIRS = ("src",)
+INPUT_FILES = ("index.html", "tsconfig.json", "vite.config.ts", "package.json", "package-lock.json")
 REMEDY = "run: just ui-build"
 
 
 def inputs(ui: Path) -> list[Path]:
-    """Every file the build can read, sorted by path so the hash is stable."""
+    """Every file the build reads, sorted by path so the hash is stable."""
     found = [
         path
-        for path in ui.rglob("*")
+        for folder in INPUT_DIRS
+        for path in (ui / folder).rglob("*")
         if path.is_file()
-        and not any(part in SKIPPED_DIRS for part in path.relative_to(ui).parts)
-        # .DS_Store, .npmrc: Finder litter and npm settings, never read by the build.
+        # .DS_Store: Finder litter, never read by the build.
         and not any(part.startswith(".") for part in path.relative_to(ui).parts)
     ]
+    found += [ui / name for name in INPUT_FILES if (ui / name).is_file()]
     return sorted(found, key=lambda path: path.relative_to(ui).as_posix())
 
 

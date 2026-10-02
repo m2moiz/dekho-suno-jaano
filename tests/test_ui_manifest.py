@@ -30,6 +30,8 @@ def repo(tmp_path: Path) -> Path:
     (ui / "tests" / "unit").mkdir(parents=True)
     (ui / "src" / "main.tsx").write_text("export const a = 1;\n")
     (ui / "tests" / "unit" / "a.test.ts").write_text("// a test\n")
+    (ui / "index.html").write_text("<div id=root></div>\n")
+    (ui / "vite.config.ts").write_text("export default {};\n")
     (ui / "package.json").write_text("{}\n")
     (ui / "package-lock.json").write_text("{}\n")
     (tmp_path / "dsj" / "ui" / "static").mkdir(parents=True)
@@ -49,7 +51,7 @@ def test_the_manifest_has_no_timestamp_so_an_unchanged_rebuild_leaves_it_alone(
     before = manifest.read_bytes()
     run(repo, "write")
     assert manifest.read_bytes() == before
-    assert json.loads(before)["inputs"] == 4
+    assert json.loads(before)["inputs"] == 5
 
 
 @pytest.mark.parametrize(
@@ -57,7 +59,8 @@ def test_the_manifest_has_no_timestamp_so_an_unchanged_rebuild_leaves_it_alone(
     [
         "src/main.tsx",              # the source itself
         "package-lock.json",         # a dependency moved
-        "tests/unit/a.test.ts",      # Tailwind reads tests for class names too
+        "index.html",                # the page, and a Tailwind source
+        "vite.config.ts",            # how it is built
         "src/new.ts",                # a file added
     ],
 )
@@ -79,14 +82,25 @@ def test_a_renamed_file_is_stale(repo: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "noise", ["node_modules/vite/index.js", "test-results/run.json", ".DS_Store", "src/.DS_Store"]
+    "noise",
+    [
+        # A test: since #203 Tailwind reads only src/ and index.html, so a test
+        # cannot change the build, and editing one needs no rebuild.
+        "tests/unit/a.test.ts",
+        "tests/unit/new.test.ts",
+        "vitest.config.ts",
+        "node_modules/vite/index.js",
+        "test-results/run.json",
+        ".DS_Store",
+        "src/.DS_Store",
+    ],
 )
-def test_installed_packages_test_output_and_dotfiles_are_not_inputs(
+def test_tests_installed_packages_test_output_and_dotfiles_are_not_inputs(
     repo: Path, noise: str
 ) -> None:
     path = repo / "ui" / noise
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("noise\n")
+    path.write_text((path.read_text() if path.exists() else "") + "noise\n")
     done = run(repo, "check")
     assert done.returncode == 0, done.stderr
 

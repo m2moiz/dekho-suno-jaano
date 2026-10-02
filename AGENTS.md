@@ -40,9 +40,11 @@ stale-build check, and `just verify` adds Playwright on chromium and webkit.
 1. **Commands.**
    - `just ui-dev` to develop: the API on 127.0.0.1:8721 with reload, and Vite on 5173.
      Open the Vite URL; Ctrl-C stops both.
-   - `just ui-build` before any commit that touches `ui/`, then commit what it wrote to
-     `dsj/ui/static/`. Every file under `ui/` counts, tests included, because Tailwind
-     reads them all for class names (#114).
+   - `just ui-build` before any commit that touches what the page is built from, then
+     commit what it wrote to `dsj/ui/static/`. That is `ui/src/`, `ui/index.html`,
+     `ui/vite.config.ts`, `ui/tsconfig.json` and the two package files; editing only a
+     test needs no rebuild, because Tailwind reads only `ui/src/` and `ui/index.html`
+     for class names (#114, #203).
    - `just api` after changing `dsj/ui/schemas.py` or a route (#155).
    - `just check` before calling anything done, not pytest and not `npm test` (#96).
    - A fresh clone needs `(cd ui && npm ci)` first: `just check` fails rather than skips
