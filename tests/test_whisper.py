@@ -261,6 +261,49 @@ def test_the_call_asks_for_words_and_silences_the_bar(monkeypatch: pytest.Monkey
     assert seen["initial_prompt"] == ROMAN_URDU_PROMPT
 
 
+def test_both_transcribe_calls_pass_the_anomaly_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The unanchored call and every anchored window get HALLUCINATION_SILENCE_S (#99).
+
+    Read when the call is made, not when the module is imported, because that
+    is how scratch/whisper_sweep.py measures a setting: it assigns the module
+    attribute and then runs dsj's own CLI. So the constant is set to a value
+    that is not mlx-whisper's default, and a call that dropped the keyword or
+    froze it at import would fail. Two paths, because `--roman-urdu` goes
+    through `_anchored` and `--engine whisper` alone does not: a value wired
+    into one of the two calls would pass every test that exercises the other.
+    `word_timestamps=True` is asserted beside it because the switch only runs
+    with word timestamps on.
+    """
+    monkeypatch.setattr(whisper_mod, "HALLUCINATION_SILENCE_S", 3.5)
+    seen: dict[str, Any] = {}
+    _stub_mlx_whisper(monkeypatch, _result(), seen)
+    transcribe_whisper(Path("a.wav"), language="en")
+
+    assert seen["hallucination_silence_threshold"] == 3.5
+    assert seen["word_timestamps"] is True
+
+    calls = _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+    transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    assert len(calls) == 3
+    for call in calls:
+        assert call["hallucination_silence_threshold"] == 3.5
+        assert call["word_timestamps"] is True
+
+
+def test_the_anomaly_threshold_is_off() -> None:
+    """Off is the measured choice: on, it removed real speech with the loops (#99).
+
+    None is mlx-whisper's own default and means the switch never runs. A
+    change here re-opens #99 and needs its measurement repeated first.
+    """
+    assert whisper_mod.HALLUCINATION_SILENCE_S is None
+
+
 def test_the_missing_extra_names_both_install_forms(monkeypatch: pytest.MonkeyPatch) -> None:
     """A None in sys.modules is what an absent module raises through."""
     monkeypatch.setitem(sys.modules, "mlx_whisper", None)

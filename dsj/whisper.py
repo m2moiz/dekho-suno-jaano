@@ -58,6 +58,7 @@ __all__ = [
     "ANCHOR_CHUNK_S",
     "ANCHOR_OVERLAP_S",
     "DEFAULT_WHISPER_MODEL",
+    "HALLUCINATION_SILENCE_S",
     "INSTALL_HINT",
     "ROMAN_URDU_PROMPT",
     "SAMPLE_RATE",
@@ -88,6 +89,19 @@ SAMPLE_RATE = 16000
 # requires `ANCHOR_CHUNK_S > ANCHOR_OVERLAP_S >= 1.0`; see its own validation.
 ANCHOR_CHUNK_S = 120.0
 ANCHOR_OVERLAP_S = 6.0
+
+# mlx-whisper's `hallucination_silence_threshold`, passed to both calls below.
+# None, its own default, leaves the switch off, and off is the measured choice
+# (#99, 2026-10-02). The switch drops a segment whose first words score as
+# unlikely, too short or too long and that sits between gaps in the word
+# timestamps; it never looks at loudness. At 2 s it removed the repetition
+# loops on recording-20260920-101117 and 1,000 to 1,400 real words with them,
+# and cut English recall on #148's public fixture from 87.8% to 82.5% (78.8%
+# at 5 s). It did nothing for text invented over the fixture's 60 s silent
+# gap: about 220 words at every setting. Loops are taken out after decoding
+# instead (#140). Kept as a constant, and plumbed through, so the setting can
+# be measured again: scratch/whisper_sweep.py sets it from outside per run.
+HALLUCINATION_SILENCE_S: float | None = None
 
 INSTALL_HINT = (
     'uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"'
@@ -275,6 +289,7 @@ def _anchored(
             language=language,
             initial_prompt=prompt,
             word_timestamps=True,
+            hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
             verbose=None,
         )
         offset = start / SAMPLE_RATE
@@ -384,6 +399,7 @@ def transcribe_whisper(
         # The whole point of choosing whisper here. merge.py's speaker vote is
         # per token, and without this whisper returns segment bounds only.
         word_timestamps=True,
+        hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
         # None, and NOT False. mlx-whisper reads this backwards from the way it
         # looks: `disable=verbose is not False`, so verbose=False is the value
         # that SHOWS its tqdm bar, and only None silences it. Observed -- the
