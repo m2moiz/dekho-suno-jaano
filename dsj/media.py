@@ -26,6 +26,7 @@ __all__ = [
     "loudness",
     "needs_conversion",
     "probe",
+    "video_codec",
 ]
 
 import json
@@ -325,6 +326,16 @@ def has_video(media: Path) -> bool:
     and raises when there is none -- an audio-only file is a perfectly good
     transcription input and a hopeless input to a change scan.
     """
+    return video_codec(media) is not None
+
+
+def video_codec(media: Path) -> str | None:
+    """The codec of `media`'s first picture stream, or None when it has none.
+
+    The name rather than a yes or no because the library keeps it (#105): a
+    browser plays h264 and may not play ProRes, and only the name can tell the
+    two apart later (#110).
+    """
     if not media.exists():
         raise FileNotFoundError(media)
     proc = subprocess.run(
@@ -343,7 +354,12 @@ def has_video(media: Path) -> bool:
     if proc.returncode != 0:
         raise MediaError(f"ffprobe could not read {media}: {proc.stderr.strip()}")
     info: dict[str, Any] = json.loads(proc.stdout)
-    return bool(info.get("streams"))
+    streams: list[dict[str, Any]] = info.get("streams") or []
+    if not streams:
+        return None
+    # A stream ffprobe cannot name is still a picture: has_video() said yes to
+    # it before this function existed, and must not start saying no.
+    return str(streams[0].get("codec_name") or "unknown")
 
 
 # How far before the target the coarse seek lands, in seconds. Big enough to
