@@ -281,8 +281,10 @@ def suno(
     except Exception as exc:
         # Record and re-raise: a detached watcher polling the heartbeat has no
         # other way to distinguish "died" from "not started yet". The traceback
-        # still reaches the terminal untouched.
-        if status:
+        # still reaches the terminal untouched. Not into a directory that does
+        # not exist: transcribe() refuses that status path up front, and trying
+        # here would raise over its refusal (#197).
+        if status and status.parent.is_dir():
             # Atomic for the same reason as the heartbeat, and more so: the
             # watcher polling for exactly this document is in a tight read loop,
             # which makes it the reader most likely to land inside a torn write.

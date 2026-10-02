@@ -974,6 +974,15 @@ def transcribe(
             f"cannot write {out}: the directory {out.parent} does not exist. "
             f"Create it first (mkdir -p {out.parent}) or pass another -o."
         )
+    # The same for the heartbeat (#197). Its first write came after the model
+    # loaded and a chunk decoded, and the CLI's handler then failed again
+    # writing "failed" into the same missing directory.
+    if status_path is not None and not status_path.parent.is_dir():
+        raise FileNotFoundError(
+            f"cannot write the status file {status_path}: the directory "
+            f"{status_path.parent} does not exist. Create it first "
+            f"(mkdir -p {status_path.parent}) or pass another --status."
+        )
     # Resolves the engine module and raises EngineUnavailable with the remedy
     # if its backend cannot import here. After this call, everything
     # engine-specific is an attribute of `eng_mod` -- this function never

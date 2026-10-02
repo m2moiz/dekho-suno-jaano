@@ -2047,3 +2047,81 @@ def test_an_out_in_a_missing_directory_is_refused_before_anything_loads(
     assert loaded == []
     assert not status.exists(), "a heartbeat was written, so the run got past the check"
     assert not missing.exists(), "refused, not created"
+
+
+def _loaders_that_record(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Both engines' loaders replaced by ones that note the call and load nothing."""
+    loaded: list[str] = []
+
+    def from_pretrained(model_id: str) -> None:
+        loaded.append(model_id)
+
+    def whisper_transcribe(audio: Any, **kwargs: Any) -> dict[str, Any]:
+        loaded.append(str(kwargs.get("path_or_hf_repo")))
+        return {"text": "", "segments": []}
+
+    monkeypatch.setattr("parakeet_mlx.from_pretrained", from_pretrained)
+    whisper_stub = ModuleType("mlx_whisper")
+    whisper_stub.transcribe = whisper_transcribe  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "mlx_whisper", whisper_stub)
+    return loaded
+
+
+@pytest.mark.parametrize("engine", ["parakeet", "whisper"])
+def test_a_status_in_a_missing_directory_is_refused_before_anything_loads(
+    engine: str, fake_media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused up front like -o (#197), and the refusal is the error the user sees.
+
+    Before, the run loaded its model and decoded a chunk, the first heartbeat
+    write failed, and the CLI's own handler then failed writing "failed" into
+    the same missing directory: the traceback was about the status file twice
+    over. Driven through the CLI so that handler is on trial too.
+    """
+    import dsj.suno as transcribe_mod
+
+    loaded = _loaders_that_record(monkeypatch)
+    missing = tmp_path / "nope"
+    out = tmp_path / "out.json"
+
+    with pytest.raises(FileNotFoundError) as refused:
+        transcribe_mod.main(
+            [str(fake_media), "-o", str(out), "--engine", engine,
+             "--status", str(missing / "status.json")]
+        )
+
+    said = str(refused.value)
+    assert f"the directory {missing} does not exist" in said
+    assert f"mkdir -p {missing}" in said
+    assert refused.value.__context__ is None, "the handler raised while handling the refusal"
+    assert loaded == []
+    assert not out.exists()
+    assert not missing.exists(), "refused, not created"
+
+
+def test_a_failing_run_still_writes_failed_and_its_own_error_to_a_valid_status(
+    fake_media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal above must not cost a run with a good --status its failure document.
+
+    A real failure through the real transcribe(): an -o in a missing directory
+    (#191). The status file names that error, not anything about itself.
+    """
+    import dsj.suno as transcribe_mod
+
+    loaded = _loaders_that_record(monkeypatch)
+    missing = tmp_path / "nope"
+    status = tmp_path / "status.json"
+
+    with pytest.raises(FileNotFoundError):
+        transcribe_mod.main(
+            [str(fake_media), "-o", str(missing / "out.json"), "--status", str(status)]
+        )
+
+    failed = json.loads(status.read_text())
+    assert failed["state"] == "failed"
+    assert failed["pid"] == os.getpid()
+    assert failed["error"].startswith("FileNotFoundError: ")
+    assert f"the directory {missing} does not exist" in failed["error"]
+    assert "pass another -o" in failed["error"]
+    assert loaded == []
