@@ -4,7 +4,18 @@
 // file takes it, wipes it from the address bar at once so it stays out of the
 // browser's history too, and sends it as a header on every request.
 
+import { ApiError, type AppError } from "@/features/errors/appError";
+
 const KEY = "dsj-token";
+
+/** What the page says when it was opened without its token. */
+export const NO_TOKEN: AppError = {
+  error: "NoToken",
+  message:
+    "This page was opened without its key, so it cannot reach dsj. Open the address " +
+    "`dsj ui` printed in the terminal, including the part after #.",
+  request: null,
+};
 const FRAGMENT = /^#t=([A-Za-z0-9_-]+)$/;
 
 let token: string | null = null;
@@ -30,10 +41,7 @@ export function takeToken(win: Window = window): string | null {
 /** fetch, with the token, for any /api or /media path on this server. */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   if (token === null) {
-    throw new Error(
-      "This page has no dsj ui token. Open the address `dsj ui` printed in the terminal, " +
-        "including the part after #.",
-    );
+    throw new ApiError(NO_TOKEN);
   }
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);

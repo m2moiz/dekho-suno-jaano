@@ -1,5 +1,6 @@
 import { ErrorBoundary } from "@/features/errors/ErrorBoundary";
 import { ShownErrorDialog } from "@/features/errors/ErrorDialog";
+import { LibraryPage } from "@/features/library/LibraryPage";
 import { ThemeControl } from "@/features/theme/ThemeControl";
 
 export function App() {
@@ -11,7 +12,7 @@ export function App() {
       </header>
       <main className="mx-auto max-w-2xl px-8 py-4">
         <ErrorBoundary>
-          <p className="text-muted-foreground">The library is empty.</p>
+          <LibraryPage />
         </ErrorBoundary>
       </main>
       <ShownErrorDialog />

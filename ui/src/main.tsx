@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "@/App";
 import { fromThrown, showError } from "@/features/errors/appError";
 import { CapabilityGate } from "@/features/errors/CapabilityGate";
-import { startHeartbeat, takeToken } from "@/features/session/session";
+import { NO_TOKEN, startHeartbeat, takeToken } from "@/features/session/session";
 import "@/index.css";
 
 // Anything thrown outside a render, in a handler or a promise nobody awaited,
@@ -15,13 +15,7 @@ window.addEventListener("unhandledrejection", (event) => showError(fromThrown(ev
 // Before anything renders, so the token is off the address bar at once (#112).
 const token = takeToken();
 if (token === null) {
-  showError({
-    error: "NoToken",
-    message:
-      "This page was opened without its key, so it cannot reach dsj. Open the address " +
-      "`dsj ui` printed in the terminal, including the part after #.",
-    request: null,
-  });
+  showError(NO_TOKEN);
 } else {
   startHeartbeat();
 }

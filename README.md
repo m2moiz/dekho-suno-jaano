@@ -485,9 +485,14 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
 ### ui: the app
 
 `dsj ui` opens the app in your browser: a page served from this machine, on
-`127.0.0.1` and a port the kernel picks. Today it only says the library is
-empty; listing, transcribing and reading recordings arrive with the rest of
-v0.3.0 ([#127](https://github.com/m2moiz/dekho-suno-jaano/issues/127)).
+`127.0.0.1` and a port the kernel picks. It lists every recording in the
+library ([below](#the-library)), newest first, and under each its transcripts:
+when each finished, which engine and model made it, its speakers and its marks.
+A transcript the library adopted rather than saw being made shows its engine
+as "unknown"; one never labelled says "speakers not labelled", which is not
+"1 speaker"; a recording whose file has moved stays listed, greyed, at the
+path it was last seen. Importing, transcribing and reading arrive with the rest
+of v0.3.0 ([#127](https://github.com/m2moiz/dekho-suno-jaano/issues/127)).
 
 ```bash
 dsj ui                # opens the browser

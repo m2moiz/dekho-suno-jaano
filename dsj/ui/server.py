@@ -36,7 +36,6 @@ __all__ = [
     "Heartbeat",
     "create_app",
     "dev_app",
-    "list_recordings",
     "lock_path",
     "serve",
 ]
@@ -64,6 +63,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
+from dsj.ui.routes import recording
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -158,11 +158,6 @@ async def failed(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
-def list_recordings() -> list[dict[str, object]]:
-    """Every recording dsj knows: none, until the page (#156) reads the store."""
-    return []
-
-
 def heartbeat() -> None:
     """The page is still open. The guard has already counted the request."""
 
@@ -192,7 +187,7 @@ def create_app(
     # this app may reach off the machine. /openapi.json stays, for #155.
     app = FastAPI(title="dsj", docs_url=None, redoc_url=None)
     app.state.heartbeat = Heartbeat()
-    app.add_api_route("/api/recordings", list_recordings, methods=["GET"])
+    app.include_router(recording.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

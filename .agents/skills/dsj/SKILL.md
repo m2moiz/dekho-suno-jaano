@@ -256,7 +256,10 @@ sends `POST /api/heartbeat` every 15 s, and a server nobody opens stops on its o
 Start it with `&` if you need the shell back. A second `dsj ui` while one is running
 prints the running one's URL and exits 0 without binding a port; the running one's
 details are in `ui.lock` beside the library (`$DSJ_LIBRARY`'s folder when that is set).
-The library it shows is empty for now.
+The page lists the library (`GET /api/recordings`: every recording, newest first, each
+with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_count`,
+`mark_count`, `language`) and serves one transcript's JSON unchanged at
+`GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.

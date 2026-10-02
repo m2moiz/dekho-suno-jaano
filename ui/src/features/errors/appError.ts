@@ -31,10 +31,12 @@ export async function fromResponse(response: Response, request: string): Promise
   if (isAppError(body)) {
     return { error: body.error, message: body.message, request };
   }
-  const detail =
+  // FastAPI's own replies (a 404, a 422) carry `detail`: a sentence, or a list.
+  const raw: unknown =
     typeof body === "object" && body !== null && "detail" in body
-      ? JSON.stringify((body as { detail: unknown }).detail)
+      ? (body as { detail: unknown }).detail
       : text;
+  const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
   return {
     error: `HTTP ${response.status}`,
     message: detail || response.statusText || "The server answered with no explanation.",
