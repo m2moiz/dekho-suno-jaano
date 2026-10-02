@@ -340,6 +340,35 @@ def test_adopting_again_keeps_what_the_run_recorded_and_reads_new_marks(
     assert adopted.mark_count == 2
 
 
+@pytest.mark.parametrize(
+    ("named", "stored"),
+    [({"engine": "sherpa"}, "sherpa"), ({}, None), ({"engine": "mlx-community/x"}, None)],
+)
+def test_adopting_reads_the_engine_the_transcript_names(
+    tmp_path: Path, library: Library, named: dict[str, str], stored: str | None
+) -> None:
+    """Since #172 a transcript names its engine; one before it, or a stray value, leaves NULL."""
+    path = _transcript(tmp_path / "a.json", _wav(tmp_path / "a.wav"), **named)
+    [adopted] = library.adopt([path]).transcripts
+    found = library.transcript(adopted)
+    assert found is not None
+    assert found.engine == stored
+
+
+def test_an_engine_a_run_recorded_wins_over_the_file_on_adopting_again(
+    tmp_path: Path, library: Library
+) -> None:
+    media = _wav(tmp_path / "a.wav")
+    path = _transcript(tmp_path / "a.json", media)
+    ran = library.record_run(path, engine="whisper")
+    _transcript(path, media, engine="parakeet")
+    [again] = library.adopt([path]).transcripts
+    assert again == ran.id
+    found = library.transcript(again)
+    assert found is not None
+    assert found.engine == "whisper"
+
+
 def test_record_run_refuses_an_engine_dsj_does_not_have(
     tmp_path: Path, library: Library
 ) -> None:

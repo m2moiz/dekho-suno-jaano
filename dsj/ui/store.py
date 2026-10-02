@@ -249,6 +249,17 @@ def _describe(media: Path) -> tuple[float | None, str | None, str | None]:
     return duration, audio, video
 
 
+def _engine_of(payload: dict[str, Any]) -> str | None:
+    """The engine the transcript names (#172), or None.
+
+    None for a transcript written before #172 and for one `dsj parho`
+    imported, which no engine wrote; also for any value that is not one of
+    dsj's engines, which the library would otherwise list as though it were.
+    """
+    engine = payload.get("engine")
+    return engine if isinstance(engine, str) and engine in ENGINES else None
+
+
 def _counts(payload: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
     """`diarized`, `speaker_count` and `mark_count`, each read as present or absent.
 
@@ -400,8 +411,8 @@ class Library:
 
         A transcript already in the library keeps its recording, its finish
         time, and the engine and language a run recorded; only what the file
-        says (model, speakers, marks) is read again, since `dsj dekho` may have
-        added marks since.
+        says (model, speakers, marks, and its engine where none was recorded)
+        is read again, since `dsj dekho` may have added marks since.
         """
         adoption = Adoption()
         for path in paths:
@@ -416,10 +427,10 @@ class Library:
     ) -> Transcript:
         """Index the transcript a run just wrote, with what only the run knows.
 
-        The engine and the language are not in the JSON on purpose (the comment
-        over `"model": model_id` in dsj/suno.py), and the model id cannot stand
-        in for the engine while #46 hands sherpa parakeet's id. So the run that
-        knows them says so here; a transcript only adopted keeps both NULL.
+        The language is not in the JSON, and a transcript written before #172
+        carries no `engine`, while the model id cannot stand in for one (#46
+        hands sherpa parakeet's id). So the run that knows them says so here;
+        an adopted transcript has the engine its file names, or NULL.
 
         A run writing over a transcript the library already has replaces that
         row's recording, finish time, engine and language: it is a new run.
@@ -538,19 +549,21 @@ class Library:
     ) -> int:
         diarized, speaker_count, mark_count = _counts(payload)
         cursor = self._db.execute(
-            "INSERT INTO transcripts (recording_id, json_path, finished_at, model, diarized, "
-            "speaker_count, mark_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (recording_id, str(path), finished_at, payload["model"], diarized, speaker_count,
-             mark_count),
+            "INSERT INTO transcripts (recording_id, json_path, finished_at, engine, model, "
+            "diarized, speaker_count, mark_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (recording_id, str(path), finished_at, _engine_of(payload), payload["model"],
+             diarized, speaker_count, mark_count),
         )
         return int(cast("int", cursor.lastrowid))
 
     def _refresh_transcript(self, transcript_id: int, payload: dict[str, Any]) -> None:
         diarized, speaker_count, mark_count = _counts(payload)
+        # COALESCE: an engine a run recorded stays; the file only fills one in.
         self._db.execute(
-            "UPDATE transcripts SET model = ?, diarized = ?, speaker_count = ?, mark_count = ? "
-            "WHERE id = ?",
-            (payload["model"], diarized, speaker_count, mark_count, transcript_id),
+            "UPDATE transcripts SET engine = COALESCE(engine, ?), model = ?, diarized = ?, "
+            "speaker_count = ?, mark_count = ? WHERE id = ?",
+            (_engine_of(payload), payload["model"], diarized, speaker_count, mark_count,
+             transcript_id),
         )
 
     def _recording_for(self, media: Path) -> int:

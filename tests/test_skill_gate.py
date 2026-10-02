@@ -457,7 +457,7 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
     assert not second.stdout, "suno writes nothing to stdout"
 
     payload = json.loads(out.read_text())
-    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
+    assert set(payload) == {"audio", "engine", "model", "text", "unclear", "sentences"}
     assert payload["audio"] == str(tone)
 
     # 3. The heartbeat ends in a terminal state. `state`, never `fraction`: fraction
@@ -478,7 +478,7 @@ def test_the_documented_workflow_runs(tmp_path: Path) -> None:
     assert dekho.returncode == 0, dekho.stderr
     document = json.loads(marked.read_text())
     assert set(document) == {
-        "audio", "model", "text", "unclear", "sentences", "marks", "marks_meta"
+        "audio", "engine", "model", "text", "unclear", "sentences", "marks", "marks_meta"
     }
     assert len(document["marks"]) == 2, document["marks"]
     for mark in document["marks"]:

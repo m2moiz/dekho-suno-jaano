@@ -30,8 +30,8 @@ into subtitles or text for tools that are not dsj, and `parho` (read) turns a ca
 file those tools made into a transcript, in place of `suno`. The sixth, `ui`, is for a
 person rather than an agent: it opens the app in a browser.
 
-The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
-`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+The transcript is one JSON object. Its top-level keys are `audio`, `engine`, `model`,
+`text`, `unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
 and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
 and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
 field is in [references/payload.md](references/payload.md).

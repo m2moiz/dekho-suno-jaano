@@ -333,8 +333,8 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 ) -> None:
     """The transcript a whisper run leaves behind is the same document.
 
-    Downstream -- dekho, and any agent reading the index -- must not be able to
-    tell which engine wrote it apart from the model id. The checkpoint check is
+    Downstream -- dekho, and any agent reading the index -- reads the same keys
+    whichever engine wrote it, and `engine` says which one did (#172). The checkpoint check is
     the other half: the result whisper banks beside the output (#171) is gone
     once the run has finished, so nothing stale is left for a later run to find.
     """
@@ -343,7 +343,8 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     payload = transcribe(fake_media, out, engine="whisper", diarize=False)
 
-    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
+    assert set(payload) == {"audio", "engine", "model", "text", "unclear", "sentences"}
+    assert payload["engine"] == "whisper"
     assert payload["model"] == whisper_mod.DEFAULT_WHISPER_MODEL
     assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
         "t": 0.0,

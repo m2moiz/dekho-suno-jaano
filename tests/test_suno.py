@@ -845,7 +845,7 @@ def test_no_diarize_output_is_the_old_schema_exactly(
     payload = transcribe(fake_media, out, diarize=False)
 
     assert calls == []
-    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
+    assert set(payload) == {"audio", "engine", "model", "text", "unclear", "sentences"}
     assert set(payload["sentences"][0]) == {"start", "end", "text", "tokens"}
 
 
@@ -1416,7 +1416,7 @@ def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
     payload = transcribe(fake_media, out, diarize=False)
 
     assert json.loads(out.read_text()) == payload
-    assert list(payload) == ["audio", "model", "text", "unclear", "sentences"]
+    assert list(payload) == ["audio", "engine", "model", "text", "unclear", "sentences"]
     assert [s["text"] for s in payload["sentences"]] == [" We looked at it.", " Then we left."]
     assert payload["text"] == "We looked at it. Then we left."
     assert payload["unclear"] == [{"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}]
@@ -1654,6 +1654,8 @@ def test_sherpa_tokens_carry_the_decoders_end_and_confidence(
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="sherpa", diarize=False)
 
+    # Named, because `model` is only a directory under sherpa (#172).
+    assert payload["engine"] == "sherpa"
     tokens = [t for s in payload["sentences"] for t in s["tokens"]]
     assert [(t["t"], t["w"], t["e"], t["c"]) for t in tokens] == [
         (0.0, " see", 0.24, 0.5),

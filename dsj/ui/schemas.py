@@ -47,8 +47,8 @@ class Transcript(BaseModel):
 
     id: int
     finished_at: str
-    # None for a transcript adopted from before the library: the model id does
-    # not say which engine ran it (#156).
+    # None for an adopted transcript that names no engine: one written before
+    # #172, or imported by `dsj parho`. The model id does not say (#156).
     engine: str | None
     model: str
     # True when speaker labelling ran, False when it did not, None when unknown.

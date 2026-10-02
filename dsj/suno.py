@@ -1425,9 +1425,12 @@ def _transcribe(
             # The source the user handed us, never the temp wav -- this JSON is
             # an index into that file and has to keep pointing at it.
             "audio": str(media),
-            # No separate engine field: the model id already names it, and
-            # tests/test_suno.py pins this key set precisely so a downstream
-            # reader can rely on it.
+            # Which engine wrote it (#172). The model id alone did not say:
+            # under sherpa it is whatever directory the run was given, and a
+            # token's `c` means something different under each engine, so a
+            # reader tinting by it has to know which. Ahead of `model`, so the
+            # speaker keys still land straight after `model` (_with_speakers).
+            "engine": engine,
             "model": model_id,
             "text": transcription.text,
             # Always written, `[]` when nothing was taken out, so that a

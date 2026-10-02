@@ -517,6 +517,7 @@ the browser's per-port storage, survives the new port each launch gets.
 ```jsonc
 {
   "audio": "/path/to/recording.mov",   // the SOURCE, not a temp wav
+  "engine": "parakeet",                // parakeet, whisper or sherpa; absent before #172
   "model": "mlx-community/parakeet-tdt-0.6b-v3",
   "speakers": ["SPEAKER_00", "SPEAKER_01"],   // only when diarization ran
   "diarization": "senko 0.1.0",               // absent if it did not
