@@ -108,6 +108,11 @@ dsj suno recording.mov -o transcript.json
 Progress renders on stderr. **Nothing goes to stdout**, so empty stdout says nothing
 about whether it worked.
 
+A run that finishes also adds its recording and transcript to the library `dsj ui`
+lists (`$DSJ_LIBRARY` when set), with no `ui` extra needed. If the library cannot be
+written, stderr says `transcript not added to the library at <path>` with the error's
+class, the transcript is kept, and the exit code is still 0.
+
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
 anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
 `--roman-urdu` and about 5 to 6x on English (measured per file in
@@ -260,7 +265,8 @@ nobody opens stops on its own. A transcription started from the page holds it up
 Start it with `&` if you need the shell back. A second `dsj ui` while one is running
 prints the running one's URL and exits 0 without binding a port; the running one's
 details are in `ui.lock` beside the library (`$DSJ_LIBRARY`'s folder when that is set).
-The page lists the library (`GET /api/recordings`: every recording, newest first, each
+The page lists the library, which holds every finished `dsj suno` run and every job
+started from the page (`GET /api/recordings`: every recording, newest first, each
 with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_count`,
 `mark_count`, `language`) and serves one transcript's JSON unchanged at
 `GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.

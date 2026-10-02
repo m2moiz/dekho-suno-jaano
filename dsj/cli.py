@@ -149,6 +149,34 @@ def _raise_terminated(_signum: int, _frame: FrameType | None) -> None:
     raise Terminated
 
 
+def _record_in_library(out: Path, engine: str, language: str | None) -> None:
+    """Add a finished run to the library, so `dsj ui` lists it (#57, #156).
+
+    The owner's answer, on 2 Oct 2026, to #127's open adoption question: a
+    transcript made in the terminal shows up in the app. Here and not in
+    transcribe(), because the app's own jobs call transcribe() and record their
+    run themselves (dsj/ui/jobs.py); in both places, every app job would be
+    recorded twice.
+
+    Every failure is caught, unlike _CALLERS_TO_FIX: the transcript is already
+    written and is the truth, and the library is only an index over it, so a
+    library that cannot be opened or written costs the app's list one row and
+    never the run. The warning names the library's file and the error's class.
+    The store is plain sqlite3 (dsj/ui/__init__.py), so this needs no `ui` extra.
+    """
+    from dsj.ui.store import Library, library_path
+
+    try:
+        with Library.open() as library:
+            library.record_run(out, engine=engine, language=language)
+    except Exception as exc:
+        print(
+            f"transcript not added to the library at {library_path()}, so `dsj ui` will "
+            f"not list it: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 @app.command("suno")
 def suno(
     media: Annotated[Path, typer.Argument(help="video or audio file; a .mov is the normal case")],
@@ -292,6 +320,7 @@ def suno(
     if tty:
         print(file=sys.stderr)
     elapsed = time.monotonic() - started
+    _record_in_library(out, engine, language)
     # The done frame's total, read off the frame rather than recomputed, so
     # this line and the status file cannot name two lengths for one run (#52).
     # It used to be rebuilt from the last sentence: `done: 0:00 audio` for

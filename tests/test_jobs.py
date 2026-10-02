@@ -217,9 +217,13 @@ def test_a_run_from_the_page_writes_what_dsj_suno_writes_and_adds_a_library_row(
 
     rows = client.get("/api/recordings").json()
     (row,) = [r for r in rows if r["id"] == recording_id]
-    (transcript,) = row["transcripts"]
-    assert transcript["id"] == job["transcript_id"]
+    # The terminal run above records itself too (#208), so the recording has
+    # two transcripts, one row each: the job was recorded once, not twice.
+    (transcript,) = [t for t in row["transcripts"] if t["id"] == job["transcript_id"]]
     assert transcript["engine"] == "parakeet"
+    with Library.open() as library:
+        paths = [t.json_path for t in library.transcripts(recording_id)]
+    assert sorted(paths) == sorted([written.resolve(), terminal.resolve()])
 
 
 def test_progress_moves_once_per_finished_chunk(

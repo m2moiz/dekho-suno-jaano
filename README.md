@@ -615,7 +615,12 @@ Two things about this shape are deliberate:
 ### The library
 
 The app (`dsj ui`, v0.3.0) remembers every recording and transcript in one
-SQLite file, created the first time it is opened:
+SQLite file, created the first time it is opened. Every `dsj suno` run that
+finishes adds its recording and its transcript to it, in the terminal as in the
+app, so a transcript made with `dsj suno` is listed the next time the app opens.
+That needs no `ui` extra. If the library cannot be written (a newer dsj made
+it, say), the run says so in one line on stderr, keeps the transcript and still
+exits 0. The file is:
 
 - on a Mac, `~/Library/Application Support/dsj/library.db`
 - elsewhere, `$XDG_DATA_HOME/dsj/library.db` (`~/.local/share/dsj/library.db`)
