@@ -776,6 +776,22 @@ def _label_speakers(
         # no way to tell that from a recording with one speaker.
         logger.warning("diarization skipped: %s", exc)
         return payload
+    except Exception as exc:
+        # Not something the boundary foresaw, so it keeps its own type; but the
+        # transcript above it is complete, and exiting 1 over it would make a
+        # script or agent driving dsj throw a finished transcript away. senko's
+        # clustering dying inside numba's cache save (#186) was the case that
+        # did. Only the diarizer's call is covered: a bug in the merge below
+        # still takes the run down. Exception, not BaseException, so Ctrl-C
+        # still stops the run.
+        if require:
+            raise
+        logger.warning(
+            "speaker labelling failed, transcript left unlabelled: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return payload
 
     speakers = label_sentences(payload["sentences"], result.turns)
     labelled = _with_speakers(

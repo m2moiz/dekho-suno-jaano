@@ -9,9 +9,11 @@ a file senko will not open, a diarizer that finds nobody -- arrives at the calle
 as one exception type it can catch in one place.
 
 Deliberately narrow, though. A `TypeError` from a bug in this code or in the
-merge is NOT converted; it propagates and takes the run down. A missing
-dependency should be quiet, a bug should be loud, and a bare `except Exception`
-cannot tell them apart.
+merge is NOT converted; it propagates out of `speaker_turns` with its own type.
+A missing dependency should be quiet, a bug should be loud, and a bare `except
+Exception` cannot tell them apart. The caller, dsj/suno.py, still keeps the
+transcript when one does propagate (#186): it logs the type by name and leaves
+the run unlabelled, and only `--require-diarize` turns it into a failure.
 
 senko installs 29 packages including scikit-learn, scipy, umap-learn and
 coremltools, and only runs on CoreML, so it is an extra rather than a core
@@ -27,7 +29,12 @@ __all__ = [
     "speaker_turns",
 ]
 
+import atexit
+import functools
+import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
@@ -150,7 +157,54 @@ def _import_senko() -> ModuleType:
         # command for something already installed, with the loader error, the
         # only useful line, thrown away.
         raise DiarizationUnavailable(_will_not_load(exc)) from exc
+    _use_private_numba_cache()
     return senko
+
+
+def _use_private_numba_cache() -> None:
+    """Point numba's compile cache at this process's own directory (#186).
+
+    umap and pynndescent, which senko's clustering runs on, compile with numba
+    and save what they compiled to an on-disk cache. With a cache that earlier
+    processes had written, that save raised `ReferenceError: underlying object
+    has vanished` while re-pickling the cache index (numba/numba#9348, open):
+    observed in every one of five labelling runs of clip360.wav in which senko
+    imported numba, each while pynndescent saved a function keyed on another
+    compiled function passed in as an argument. Why the referent vanishes is not
+    reproduced outside pynndescent, so this removes the condition rather than
+    the cause: a directory no other process has written. It costs a compile per run instead
+    of a cache hit; scratch/diarize_cache_cost.py measures both.
+
+    Set after `import senko`, not before: senko.config assigns NUMBA_CACHE_DIR
+    itself, to ~/.cache/senko/numba_cache, overwriting whatever was there. And
+    before `senko.Diarizer()`: that is where umap and pynndescent are first
+    imported, and numba fixes each function's cache directory when the function
+    is defined. Both the environment and numba's live config are set, because
+    numba re-reads the environment at every compile. A process that imported
+    umap before this point keeps the cache it had.
+    """
+    # senko.config imports numba, so only a stand-in senko arrives here
+    # without it, and then there is no compile cache to point anywhere.
+    if "numba" not in sys.modules:
+        return
+    from numba.core import config
+
+    os.environ["NUMBA_CACHE_DIR"] = _numba_cache_dir()
+    config.reload_config()
+
+
+@functools.cache
+def _numba_cache_dir() -> str:
+    """One empty directory per process, removed when the process exits.
+
+    Per process rather than per call: numba keeps the directory it was given
+    for as long as the compiled functions live, which is the rest of the
+    process, so deleting it after one call would only have numba recreate it
+    and leave it behind.
+    """
+    path = tempfile.mkdtemp(prefix="dsj-numba-")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 def _will_not_load(exc: ImportError) -> str:

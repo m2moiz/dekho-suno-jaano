@@ -766,19 +766,86 @@ def test_require_diarize_makes_the_failure_fatal(
     assert "speakers" not in json.loads(out.read_text())
 
 
-def test_a_bug_in_diarization_is_not_swallowed(
+# The two shapes of crash #186 is about: the one numba's cache save raised on a
+# real run, and a generic one standing for whatever else senko may throw.
+DIARIZER_CRASHES = [
+    ReferenceError("underlying object has vanished"),
+    RuntimeError("senko fell over"),
+]
+
+
+@pytest.mark.parametrize("crash", DIARIZER_CRASHES, ids=lambda e: type(e).__name__)
+def test_a_diarizer_crash_leaves_the_unlabelled_transcript_and_exits_0(
     fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     fake_turns: Callable[..., list[Path]],
+    capsys: pytest.CaptureFixture[str],
+    crash: Exception,
 ) -> None:
-    """An unexpected exception from the diarizer propagates.
+    """A crash the boundary did not foresee still may not cost the ASR run (#186).
 
-    Same narrowness as the boundary itself: only DiarizationUnavailable
-    degrades. A TypeError here is a bug in dsj and must be loud.
+    Through main(), because the promise is about the exit code a script sees,
+    and stderr rather than caplog because the CLI's logger does not propagate.
+    """
+    import dsj.suno as transcribe_mod
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(raises=crash)
+    out = tmp_path / "out.json"
+
+    code = transcribe_mod.main([str(fake_media), "-o", str(out)])
+
+    assert code == 0
+    on_disk = json.loads(out.read_text())
+    assert on_disk["sentences"][0]["text"] == "see this column here."
+    assert "speaker" not in on_disk["sentences"][0]
+    assert "speakers" not in on_disk
+    assert "diarization" not in on_disk
+    # Named: which pass failed, and the exception's own type and message.
+    assert (
+        f"speaker labelling failed, transcript left unlabelled: {type(crash).__name__}: {crash}"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("crash", DIARIZER_CRASHES, ids=lambda e: type(e).__name__)
+def test_require_diarize_makes_a_diarizer_crash_fatal(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    crash: Exception,
+) -> None:
+    import dsj.suno as transcribe_mod
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(raises=crash)
+    out = tmp_path / "out.json"
+
+    with pytest.raises(type(crash)):
+        transcribe_mod.main([str(fake_media), "-o", str(out), "--require-diarize"])
+
+    assert "speakers" not in json.loads(out.read_text())
+
+
+def test_a_bug_in_the_merge_is_not_swallowed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the diarizer's own call degrades; a bug in dsj's merge stays loud.
+
+    A TypeError there is dsj's, raised after senko has answered.
     """
     fake_parakeet(tokens=_tokens())
-    fake_turns(raises=TypeError("unsupported operand"))
+    fake_turns(**_one_speaker())
+
+    def broken(*_args: Any, **_kwargs: Any) -> list[int]:
+        raise TypeError("unsupported operand")
+
+    monkeypatch.setattr("dsj.merge.label_sentences", broken)
 
     with pytest.raises(TypeError):
         transcribe(fake_media, tmp_path / "out.json")

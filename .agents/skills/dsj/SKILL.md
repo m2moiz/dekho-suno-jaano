@@ -338,9 +338,9 @@ twenty lines down:
 99999.0s is past the end of this 230.7s recording.
 ```
 
-Diarization is the one pass that fails soft: if it cannot run, the transcript is still
-written and still correct, a `diarization skipped:` warning goes to stderr, and the exit
-code is 0. Detect it in the payload rather than the log, because `speakers` and
+Diarization is the one pass that fails soft: if it cannot run or crashes, the transcript
+is still written and still correct, a `diarization skipped:` or `speaker labelling
+failed` warning goes to stderr, and the exit code is 0. Detect it in the payload rather than the log, because `speakers` and
 `diarization` are absent when the pass did not run. `--require-diarize` turns that into
 a failure instead.
 

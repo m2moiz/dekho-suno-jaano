@@ -167,9 +167,10 @@ key, not for the length of the list:
 jq 'has("diarization")' transcript.json
 ```
 
-Diarization is fail-soft. If senko cannot run, the transcript is still written, still
-correct, and simply carries no labels, and a `diarization skipped: ...` line goes to
-stderr. `--require-diarize` turns that into a failure instead.
+Diarization is fail-soft. If senko cannot run, or crashes while it runs, the transcript
+is still written, still correct, and simply carries no labels, and a `diarization
+skipped: ...` or `speaker labelling failed, ...` line goes to stderr. `--require-diarize`
+turns that into a failure instead.
 
 ## Marks, added by `dekho`
 
