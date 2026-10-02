@@ -51,9 +51,13 @@ practice means every `.mov`, `.mp4` and `.m4a`.
 every invocation needs a prefix:
 
 ```bash
-uv sync --extra parakeet --extra diarize
+uv sync --extra parakeet --extra whisper --extra diarize
 uv run dsj suno recording.mov -o transcript.json
 ```
+
+That is the `mac` bundle's set. `uv sync` installs exactly the extras on its line and
+**uninstalls every other one**, so keep one sync line and add `--extra <name>` to it. A
+bare `uv sync`, or `uv sync --extra <one>`, takes away the engines you already had.
 
 `python -m dsj.suno` and `python -m dsj.dekho` are the same code and still work.
 `python -m dsj` does not exist.

@@ -12,6 +12,9 @@
 
 ---
 
+> **Driving dsj from an agent?** Read [.agents/skills/dsj/SKILL.md](.agents/skills/dsj/SKILL.md)
+> first. The transcript format is in [.agents/skills/dsj/references/payload.md](.agents/skills/dsj/references/payload.md).
+
 **An hour of screen recording, made answerable.** `dsj` turns a recording into
 a timestamped transcript that acts as an *index into the video* — so an agent
 reads cheap text, notices a moment that only makes sense visually, and pulls
@@ -86,8 +89,10 @@ the interesting part.
 ## Requirements
 
 - **A platform with an engine bundle.** The core is portable Python, but the
-  speech engines are not: on macOS both ASR engines run through Metal
-  ([`parakeet-mlx`][pmlx] and `mlx-whisper`), which is Apple Silicon only.
+  speech engines are not. Of the three, the two Mac engines run through Metal
+  ([`parakeet-mlx`][pmlx] and `mlx-whisper`), which is Apple Silicon only. The
+  third, `sherpa`, runs the same parakeet weights through ONNX wherever
+  sherpa-onnx publishes wheels, which is what lets dsj run on a phone.
   Installing dsj means choosing a bundle -- there is deliberately no default,
   because a dsj with no engine transcribes nothing.
 - **Python 3.12 or 3.13.** Capped deliberately. The diarize extra reaches
@@ -110,12 +115,32 @@ Pick the bundle for your machine. On a Mac:
 uv tool install "dsj[mac] @ git+https://github.com/m2moiz/dekho-suno-jaano"
 ```
 
-That puts `dsj` on your `PATH` with both engines and the diarizer. There is no
+That puts `dsj` on your `PATH` with both Mac engines and the diarizer. There is no
 bare install line on purpose: `uv tool install dsj` succeeds but carries no
 engine, and the first `dsj suno` tells you which extra to add.
 
 Model weights (~2.4 GB) download on first run and are cached by
 `huggingface_hub`.
+
+Off the Mac, the `android` bundle carries the third engine, `sherpa`, and nothing
+else. It has no speaker labelling, because the diarizer is CoreML and has no
+Android path:
+
+```bash
+uv tool install "dsj[android] @ git+https://github.com/m2moiz/dekho-suno-jaano"
+```
+
+Each bundle is a set of extras, and each extra installs alone when a bundle
+carries more than you want:
+
+| Extra | Pulls in | For |
+|---|---|---|
+| `dsj[mac]` | `parakeet`, `whisper`, `diarize` | The working Mac setup |
+| `dsj[android]` | `sherpa` | The phone |
+| `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
+| `dsj[whisper]` | `mlx-whisper` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch |
+| `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
+| `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -123,13 +148,35 @@ invocation is prefixed with `uv run`:
 
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
-cd dsj
-uv sync                      # or: uv sync --extra diarize
+cd dekho-suno-jaano
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
 uv run dsj suno recording.mov -o transcript.json
 ```
 
+That sync line is the one CI runs. `uv sync` installs exactly the extras on its
+line and **uninstalls every other one**, so keep one line and add to it: a bare
+`uv sync`, or `uv sync --extra <one>`, takes away the engines you already had.
+
 Every command below is written bare (`dsj ...`), which is what an installed
 copy gives you. From a clone, prefix each one with `uv run`.
+
+### On a phone: Termux and proot
+
+sherpa-onnx ships manylinux wheels, which need glibc, and Termux is built on
+Android's own C library, bionic. So the install does not go in Termux itself: it
+goes inside a proot container running a glibc Linux on the phone, and the
+`dsj[android]` line above runs there.
+
+`--engine sherpa` then needs an explicit `--model <directory>`, because the
+default it is handed is parakeet's Hugging Face id, not a directory ([#46](https://github.com/m2moiz/dekho-suno-jaano/issues/46)), and
+nothing in this repo yet says where to download that directory ([#47](https://github.com/m2moiz/dekho-suno-jaano/issues/47)).
+
+What has run on a phone, as of this writing: on 2026-08-26, at commit `eb6e06f`,
+`dsj suno --engine sherpa` transcribed a five-minute recording on a OnePlus 15
+inside proot-distro Ubuntu, and an interrupted run resumed from its checkpoint.
+The `dsj[android]` install line as it stands now has not been run on a phone and
+recorded, and neither has an hour-long recording ([#32](https://github.com/m2moiz/dekho-suno-jaano/issues/32)). CI cannot run Termux, so
+this record is kept by hand.
 
 ## Usage
 
@@ -167,7 +214,7 @@ Progress renders live on stderr:
 | `--no-diarize` | skip speaker labelling |
 | `--require-diarize` | fail rather than degrade if labelling cannot run |
 | `--model ID` | override the ASR model; the default follows `--engine` |
-| `--engine parakeet\|whisper` | which ASR backend (default `parakeet`) |
+| `--engine parakeet\|whisper\|sherpa` | which ASR backend (default `parakeet`) |
 | `--language CODE` | whisper only: ISO code, e.g. `ur`. Detected if omitted |
 | `--prompt TEXT` | whisper only: seeds the decoder; biases spelling and script |
 | `--roman-urdu` | whisper, Urdu, written in Latin. Sets the two flags above |
@@ -237,12 +284,39 @@ The per-file numbers, with the command, commit and memory state of each, are in
 three cost more the longer the recording, which is why parakeet stays the
 default.
 
+**Never delete a transcript to force a re-run.** dsj replaces `-o` atomically
+and only once transcription has finished, so a run that stops earlier leaves
+the old file as it was. With no checkpoint, an interrupted whisper retry leaves
+nothing behind, so if the old file was deleted first, both are gone: that is how
+a finished transcript was lost on 2026-09-22. Write the retry to a new path and
+replace the old file yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
 It is part of the `mac` bundle; standalone installs can pick it alone
 (mlx-whisper pulls torch, ~250 MB):
 
 ```bash
 uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"
 ```
+
+**sherpa, where MLX does not run.** `--engine sherpa` runs the same parakeet
+weights through their ONNX export instead of MLX, so it works wherever
+sherpa-onnx has wheels, which is how dsj transcribes on a phone (see
+[On a phone](#on-a-phone-termux-and-proot)). Like parakeet it transcribes in
+chunks and checkpoints each one, so an interrupted run resumes. It needs an
+explicit `--model <directory>` ([#46](https://github.com/m2moiz/dekho-suno-jaano/issues/46), [#47](https://github.com/m2moiz/dekho-suno-jaano/issues/47)):
+
+```bash
+dsj suno recording.m4a -o transcript.json --engine sherpa --model /path/to/model-dir
+```
+
+No phone speed is published here yet; [#32](https://github.com/m2moiz/dekho-suno-jaano/issues/32) measures one properly, on an
+hour-long recording.
 
 **Long runs.** An hour of audio is not something you sit and watch, so detach it
 and poll the heartbeat:
@@ -688,8 +762,10 @@ dsj/            the package
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
-  asr.py           the one shape both ASR engines return
+  asr.py           the one shape every ASR engine returns
+  parakeet.py      the parakeet engine, the default, on MLX
   whisper.py       the whisper engine, and why Roman Urdu is a prompt
+  sherpa.py        the sherpa engine: parakeet's weights on ONNX, for the phone
   diarize.py       the fail-soft senko boundary
   atomic.py        write-or-do-not-write, for files a reader may be watching
 tests/             fast unit tests, plus the two slow end-to-end gates

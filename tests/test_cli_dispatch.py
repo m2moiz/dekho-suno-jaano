@@ -267,14 +267,18 @@ def test_the_installed_console_script_works() -> None:
     """The entry point itself, not just the function behind it.
 
     A `[project.scripts]` typo is invisible to every test that imports main()
-    directly -- and the console script is the whole point of this file.
+    directly -- and the console script is the whole point of this file. So the
+    script must run, and its help must offer the three verbs by the names a
+    user types. Until #51 this checked the names from before the 2026-08-11
+    rename, and passed only because those words sit in the new verbs'
+    descriptions.
     """
     proc = subprocess.run(
         ["uv", "run", "dsj", "--help"], capture_output=True, text=True, check=False,
         cwd=Path(__file__).resolve().parent.parent,
     )
     assert proc.returncode == 0, proc.stderr
-    for verb in ("transcribe", "mark", "frame"):
+    for verb in ("suno", "dekho", "dikhao"):
         assert verb in proc.stdout, proc.stdout
 
 

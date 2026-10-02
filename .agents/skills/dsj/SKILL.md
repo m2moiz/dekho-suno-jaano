@@ -29,9 +29,25 @@ Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikh
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
 file those tools made into a transcript, in place of `suno`.
 
+The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
+`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
+and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
+field is in [references/payload.md](references/payload.md).
+
 ## Before the first command
 
+**On a Mac, run dsj in the Mac's own shell.** If your shell is a Linux sandbox or VM with
+a Mac checkout mounted into it, `uname -s` prints `Linux` rather than `Darwin`: stop, and
+do not run `uv run`, `uv sync` or `just` against that checkout. uv finds a `.venv` whose
+interpreter link points at a macOS path it cannot see, deletes the whole `.venv`, and
+rebuilds it for Linux. That breaks the Mac's install, including a job already running
+there, and the Linux rebuild cannot run the Mac engines anyway. The phone bundle is a
+separate install inside its own proot container; see
+[references/engines.md](references/engines.md).
+
 ```bash
+uname -s        # Darwin, on the Mac a clone of this repo was made for
 dsj --version
 dsj --help
 ```
@@ -50,6 +66,18 @@ installs the command at `.venv/bin/dsj` and links it nowhere. An installed copy 
 missing command means a missing install.
 
 `ffmpeg` must be on `PATH` for anything that is not already a 16 kHz mono wav.
+
+**The checkout may not be yours alone.** Another session may be running dsj, or editing
+it, from the same clone. Run `git status` before you start and before you stop, and never
+touch a file it already shows as modified. Stop only a job you started, by its pid: `$!`
+when you started it with `&`, or the `pid` its `--status` file records. Never
+`pkill -f 'dsj suno'`, which matches every dsj run on the machine, another session's
+included.
+
+**If a usage task turns into changing dsj**, even when you were asked to, file an issue
+for the change before running the patched tool, and put a measurement, with the command
+that produced it, behind any constant you introduce. Then gate it as
+[Changing dsj itself](#changing-dsj-itself) says.
 
 ## The five verbs
 
@@ -338,6 +366,22 @@ way, once.
 `--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
 none at all, so an interrupted whisper run always starts over.
 
+**Never delete a transcript to force a re-run.** dsj replaces `--out` atomically and
+only once transcription has finished, so a run that stops earlier leaves the old file
+exactly as it was. The only way to lose it is to delete it first: on 2026-09-22 a
+script removed a finished transcript, started a whisper re-run, and the run was stopped
+14 minutes in, leaving neither. Write the retry to a new path, and replace the old file
+yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
+This matters most under whisper, which `--roman-urdu` uses: with no checkpoint, an
+interrupted retry leaves nothing behind.
+
 ## When something fails
 
 | Exit | Meaning |
@@ -366,6 +410,13 @@ a failure instead.
 
 Every error class, its message, and its remedy are in
 [references/failures.md](references/failures.md).
+
+## Changing dsj itself
+
+From a clone, the check that a change works is `uv run just check`, never `uv run
+pytest` alone. `just check` runs the type checker, ruff and the fast tests; pytest skips
+the type checker, so a green pytest is no evidence. Paste the line `just check` ends
+with before calling the change done.
 
 ## References
 

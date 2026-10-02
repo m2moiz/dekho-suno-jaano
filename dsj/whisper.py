@@ -122,9 +122,13 @@ ANCHOR_OVERLAP_S = 6.0
 # be measured again: scratch/whisper_sweep.py sets it from outside per run.
 HALLUCINATION_SILENCE_S: float | None = None
 
+# From a clone the hint cannot be a whole `uv sync` line: `uv sync` uninstalls
+# every extra it is not given, so `uv sync --extra whisper` alone would take
+# parakeet and the diarizer away (#170). It names the flag to add instead.
 INSTALL_HINT = (
-    'uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"'
-    " (or `uv sync --extra whisper` from a clone)"
+    '`uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"`,'
+    " or from a clone add `--extra whisper` to the `uv sync` line you already use"
+    " (`uv sync` uninstalls every extra it is not given)"
 )
 
 # Not a magic incantation -- a worked example of the output wanted, which is
@@ -155,7 +159,7 @@ def available() -> str | None:
     if "mlx_whisper" in sys.modules:
         return None
     if find_spec("mlx_whisper") is None:
-        return f"mlx-whisper is not installed. Install it with `{INSTALL_HINT}`."
+        return f"mlx-whisper is not installed. Install it with {INSTALL_HINT}."
     return None
 
 
@@ -475,7 +479,7 @@ def transcribe_whisper(
     except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
         raise WhisperUnavailable(
             f"the whisper engine needs mlx-whisper, which is an optional extra. "
-            f"Install it with `{INSTALL_HINT}`, or use the default "
+            f"Install it with {INSTALL_HINT}, or use the default "
             f"`--engine parakeet`."
         ) from exc
 
@@ -553,7 +557,7 @@ def redecoder(
         )
     except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
         raise WhisperUnavailable(
-            f"retrying a loop needs mlx-whisper. Install it with `{INSTALL_HINT}`."
+            f"retrying a loop needs mlx-whisper. Install it with {INSTALL_HINT}."
         ) from exc
 
     transcribe = cast(
