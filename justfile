@@ -28,10 +28,11 @@ typecheck:
 # argv lists, comment-dense blocks -- and running one is a whole-tree diff
 # nobody asked for.
 #
-# The frontend is held by the same command (#157): tsc over ui/, the API types
-# against the Python models (#155), and vitest. Each fails, never skips, when
-# ui/node_modules is missing. Browsers are not here; they are in `verify`.
-check: typecheck ui-typecheck api-fresh
+# The frontend is held by the same command (#157): the committed build against
+# its sources (#114), tsc over ui/, the API types against the Python models
+# (#155), and vitest. None of them skips when ui/node_modules is missing.
+# Browsers are not here; they are in `verify`.
+check: ui-fresh typecheck ui-typecheck api-fresh
     uv run ruff check .
     {{ quote(just_executable()) }} ui-test
     uv run pytest
@@ -51,7 +52,7 @@ check: typecheck ui-typecheck api-fresh
 # Then everything `check` runs on the frontend, and the browser tests in real
 # chromium and Playwright's webkit (ui/playwright.config.ts says what they do
 # not cover).
-verify: typecheck ui-typecheck api-fresh urdu-fixture
+verify: ui-fresh typecheck ui-typecheck api-fresh urdu-fixture
     uv run ruff check .
     {{ quote(just_executable()) }} ui-test
     uv run pytest -m "slow or not slow" --cov=dsj --cov-report=term-missing:skip-covered --cov-fail-under=90
@@ -83,9 +84,17 @@ mutate:
 # committed, so `uv tool install` ships it and needs no Node (#57 section 8).
 # `npm ci`, not `npm install`: the lockfile decides what is built, and a build
 # that quietly re-resolved a dependency would commit code nobody chose.
-# Whether the committed copy is stale is #114's check, not this recipe's.
+# The manifest is written AFTER the build, because Vite's emptyOutDir wipes
+# dsj/ui/static/ first; `ui-fresh` (in `check`) reads it (#114).
 ui-build:
     cd ui && npm ci && npm run build
+    uv run python scratch/ui_manifest.py write
+
+# Fails, naming `just ui-build`, when anything under ui/ changed since the
+# committed page was built. Hashes files and needs no Node, so it has nothing
+# to skip on: it runs, and fails, without ui/node_modules too.
+ui-fresh:
+    uv run python scratch/ui_manifest.py check
 
 # The API with --reload on 127.0.0.1:8721, and Vite's dev server on 5173
 # passing /api and /media through to it (ui/vite.config.ts). Open the Vite URL.
