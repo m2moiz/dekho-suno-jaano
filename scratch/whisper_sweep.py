@@ -115,6 +115,12 @@ def run_one(run: dict[str, Any], audio_root: Path) -> None:
 
 
 def measure(label: str, target: str) -> None:
+    # real_bench transcribes a label that has no transcript, with its own default
+    # flags. A failed run must not be filled in that way under its own label.
+    name = "podcast" if target == "fixture" else target
+    if not (RUNS / label / f"{name}.json").exists():
+        print(f"{label}: no transcript, not measured", flush=True)
+        return
     bench = [sys.executable, str(REPO / "scratch" / "real_bench.py")]
     if target == "fixture":
         cmd = [*bench, "fixture", "--label", label]
