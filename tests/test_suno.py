@@ -1949,3 +1949,41 @@ def test_parakeet_and_sherpa_sentences_are_never_merged() -> None:
     before = Transcription(text="We went. Then stop.", sentences=[first, inside])
 
     assert _without_overlaps(before, merge=False) is before
+
+
+@pytest.mark.parametrize("engine", ["parakeet", "whisper"])
+def test_an_out_in_a_missing_directory_is_refused_before_anything_loads(
+    engine: str, fake_media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused up front, naming the directory and the fix (#191).
+
+    On 2026-10-02 a whisper run decoded for 441 s, then died on a temp file the
+    user never named; parakeet failed sooner only because its first checkpoint
+    write comes sooner. Both engines' loaders are replaced by ones that record
+    the call, so "before anything loads" is asserted, not inferred.
+    """
+    loaded: list[str] = []
+
+    def from_pretrained(model_id: str) -> None:
+        loaded.append(model_id)
+
+    def whisper_transcribe(audio: Any, **kwargs: Any) -> dict[str, Any]:
+        loaded.append(str(kwargs.get("path_or_hf_repo")))
+        return {"text": "", "segments": []}
+
+    monkeypatch.setattr("parakeet_mlx.from_pretrained", from_pretrained)
+    whisper_stub = ModuleType("mlx_whisper")
+    whisper_stub.transcribe = whisper_transcribe  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "mlx_whisper", whisper_stub)
+    missing = tmp_path / "nope" / "final"
+    status = tmp_path / "status.json"
+
+    with pytest.raises(FileNotFoundError) as refused:
+        transcribe(fake_media, missing / "out.json", engine=engine, status_path=status)
+
+    said = str(refused.value)
+    assert f"the directory {missing} does not exist" in said
+    assert f"mkdir -p {missing}" in said
+    assert loaded == []
+    assert not status.exists(), "a heartbeat was written, so the run got past the check"
+    assert not missing.exists(), "refused, not created"

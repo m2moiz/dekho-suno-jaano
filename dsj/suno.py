@@ -879,6 +879,17 @@ def transcribe(
             "--language and --prompt are whisper's; parakeet takes neither. "
             "Add --engine whisper, or drop them."
         )
+    # Before the engine loads or a second of audio is decoded (#191). The first
+    # write to `out` comes at parakeet's first checkpoint, and whisper's only
+    # at the very end: on 2026-10-02 a whisper run decoded for 441 s and then
+    # died on a temp file the user never named. Refused, not created, as
+    # dikhao refuses a frame into a missing directory: a typo in `-o` would
+    # otherwise put the transcript somewhere nobody looks.
+    if not out.parent.is_dir():
+        raise FileNotFoundError(
+            f"cannot write {out}: the directory {out.parent} does not exist. "
+            f"Create it first (mkdir -p {out.parent}) or pass another -o."
+        )
     # Resolves the engine module and raises EngineUnavailable with the remedy
     # if its backend cannot import here. After this call, everything
     # engine-specific is an attribute of `eng_mod` -- this function never
