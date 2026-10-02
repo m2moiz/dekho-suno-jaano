@@ -103,6 +103,11 @@ the interesting part.
   error. `tests/test_install_gate.py` runs the install below and checks it.
 - **ffmpeg** on `PATH`, for anything that is not already a 16 kHz mono WAV.
 - [`uv`][uv] for dependency management.
+- **For `dsj ui` only: Safari 17.2, Chrome 105 or Firefox 140**, or newer. The
+  reader paints the word being spoken with the CSS Custom Highlight API, which
+  older browsers lack without any error; the app checks for it before it shows
+  anything and names what is missing instead of loading a page that quietly
+  does nothing. Floors from `@mdn/browser-compat-data` 8.1.2.
 
 [pmlx]: https://github.com/senstella/parakeet-mlx
 [uv]: https://docs.astral.sh/uv/

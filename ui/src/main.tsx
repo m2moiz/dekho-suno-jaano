@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/App";
 import { fromThrown, showError } from "@/features/errors/appError";
+import { CapabilityGate } from "@/features/errors/CapabilityGate";
 import { startHeartbeat, takeToken } from "@/features/session/session";
 import "@/index.css";
 
@@ -31,6 +32,8 @@ if (root === null) {
 }
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <CapabilityGate>
+      <App />
+    </CapabilityGate>
   </StrictMode>,
 );
