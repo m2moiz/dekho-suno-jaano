@@ -58,8 +58,15 @@ distinct: whisper writing one letter or a short phrase over and over, up to abou
 times in one window. On four of the owner's recordings loops covered 133 to 752 seconds a
 file, over audio as loud as the speech around them, so most mark speech whisper failed to
 read, not silence. The text is no guide to what was said there, so it is left out of
-`sentences` and `text`, and the span stays here so the gap is not read as a pause. To know
-what was said, listen to the span or transcribe it again. On the five whisper transcripts
+`sentences` and `text`, and the span stays here so the gap is not read as a pause. Under
+whisper each loop span is first decoded again on its own, with 2 s either side, once
+without the prompt at temperature 0 and, if that loops too, once with the run's prompt at
+temperature 0.4. The first attempt with no loop and more than five words inside the span
+replaces the loop in `sentences`, cut to the span; a loop that survives both is recorded
+here. On four of the owner's transcripts the two attempts recovered 29 of the 38 loop
+spans they tried, 649 of 787 loop seconds, at 28 to 90 s of extra wall time a file. A
+recovered span reads like any other sentence, and whether its words are right is not yet
+measured. To know what was said in a span listed here, listen to it. On the five whisper transcripts
 the rule was measured on, every sentence it matched was a loop. It runs under every
 engine; on a parakeet transcript of a 17-minute English call it matched nothing.
 
@@ -241,7 +248,7 @@ sees half of one. It is not a log and not JSONL.
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string | `extracting`, `running`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
+| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
 | `audio_done_s`, `audio_total_s` | float seconds | Of audio, not wall clock. |
 | `elapsed_s` | float seconds | Wall clock **for the current phase**, not for the run. Extraction and transcription each restart it, because one runs at about 1000x realtime and the other at about 13x, so a shared clock would make both speeds meaningless. |
 | `resumed_from_s` | float seconds | Audio a previous run already transcribed. `0.0` otherwise. |
@@ -279,6 +286,7 @@ How often each state is written:
 | `extracting` | About twice a second, and only when the input is not already a 16 kHz mono wav |
 | `running` (parakeet, sherpa) | Once per chunk, so once per 105 seconds of audio |
 | `running` (whisper) | With `--roman-urdu`, once per window of about two minutes: dsj cuts the windows itself. Any other whisper run, **once, at 0%**, then nothing until transcription ends: mlx-whisper takes no progress callback |
+| `retrying` | whisper only, and only when it wrote a repetition loop over audio that is not silent: once before the first loop span is decoded again, then once after each. `audio_done_s` and `audio_total_s` count the seconds of those loop spans, not the recording, so `fraction` and `eta_s` describe the retry |
 | `diarizing` | **Exactly twice**, at the start and the end. Senko has no per-chunk callback and inventing a bar would be a lie |
 | `done` | Once |
 

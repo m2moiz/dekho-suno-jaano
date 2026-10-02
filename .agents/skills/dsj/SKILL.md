@@ -250,6 +250,8 @@ jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fracti
 ```
 
 `state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`.
+A whisper run that wrote a repetition loop passes through `retrying` after `running`,
+while each loop span is decoded again.
 The file is one JSON object rewritten in full and replaced atomically, so a reader never
 sees half of one.
 

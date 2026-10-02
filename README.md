@@ -253,7 +253,8 @@ jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
 ```
 
 `state` moves `extracting → running → diarizing → done`, or `failed` with an
-`error`. The file is written atomically, so a reader never sees half of one.
+`error`. A whisper run that wrote a repetition loop passes through `retrying`
+while it decodes each loop span again. The file is written atomically, so a reader never sees half of one.
 
 **Interruptions are cheap.** A checkpoint is written beside the output every
 chunk. Re-running the same command resumes from it, even if the recording was

@@ -1696,3 +1696,28 @@ def test_without_silence_nothing_is_taken_out(
     assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON, LOOP_REASON]
     assert len(payload["sentences"]) == 3
     assert payload["sentences"][1]["text"] == " Bye now. Thanks for watching."
+
+
+def test_parakeet_never_decodes_a_loop_again(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+) -> None:
+    """The retry is whisper's (#183): a parakeet loop goes straight to `unclear`."""
+
+    def refuse(*_: Any, **__: Any) -> Any:
+        raise AssertionError("parakeet asked for a retry")
+
+    monkeypatch.setattr("dsj.suno.redecoder", refuse)
+    fake_parakeet(tokens=[])
+    _merge_with_a_loop(monkeypatch)
+    states: list[str] = []
+
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False, on_progress=capture)
+
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON]
+    assert "retrying" not in states

@@ -19,6 +19,7 @@ __all__ = [
     "LOUDNESS_FRAME_S",
     "NO_SPEECH_REASON",
     "OVERLAP_S",
+    "RETRY_LOOPS",
     "Progress",
     "clock",
     "is_loop",
@@ -51,7 +52,7 @@ from dsj.atomic import atomic_write_text
 # these in costs nothing to a run that never asks for the engine, and it
 # keeps `--help` able to print the defaults.
 from dsj.parakeet import DEFAULT_MODEL
-from dsj.whisper import DEFAULT_WHISPER_MODEL
+from dsj.whisper import DEFAULT_WHISPER_MODEL, redecoder
 from dsj.whisper import SAMPLE_RATE as WHISPER_SAMPLE_RATE
 
 if TYPE_CHECKING:
@@ -440,6 +441,121 @@ def _without_silence(
     return (
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
         unclear,
+    )
+
+
+# Decoding a loop span again (#183). A loop is not a fixed property of the
+# audio: two identical runs on 094234 gave 86 and 343 loop seconds (#100). So
+# after a whisper run, each loop sentence over audio that is not silence is cut
+# out with RETRY_PAD_S either side and decoded alone, first with RETRY_PLAIN,
+# then, only if that loops or returns RETRY_MIN_WORDS words or fewer, with
+# RETRY_WARM. The first result with no loop sentence and more than
+# RETRY_MIN_WORDS words inside the span replaces the loop; a span both fail
+# stays a loop and goes to `unclear` as before. Under --roman-urdu the two are
+# language ur with no prompt at temperature 0, and the Roman prompt at
+# temperature 0.4.
+#
+# Measured 2026-10-02 by scratch/redecode_probe.py (#183): 38 loop spans, 818
+# loop seconds, of four 120 s anchored turbo transcripts of the owner's
+# recordings 101117, 094234 (two runs) and 171500. Each option alone recovered
+# 18 to 24 spans; plain then warm recovered 29 spans and 665 s (81%). Plain
+# first because it recovered the most on its own (24 spans, 531 s); warm
+# second because on 171500, mostly English, plain looped on 4 of 9 spans where
+# the prompted settings did not. Each retry took 1 to 10 s on a 30 s clip.
+# The same four transcripts through this code (scratch/retry_loops_run.py):
+# 29 of the 38 spans it retried recovered, 649 of 787 loop seconds, 1,703
+# words added, 28 to 90 s of wall time a file. Not yet measured: whether the
+# recovered text is right (#182 is the check).
+#
+# parakeet and sherpa never retry: is_loop catches nothing they write, and
+# neither has a second set of settings to try. RETRY_LOOPS = False turns it
+# off.
+RETRY_LOOPS = True
+RETRY_PAD_S = 2.0
+RETRY_MIN_WORDS = 5
+RETRY_PLAIN: dict[str, Any] = {"initial_prompt": None, "temperature": 0.0}
+RETRY_WARM: dict[str, Any] = {"temperature": 0.4}
+
+type Decode = Callable[[float, float, dict[str, Any]], list[Sentence]]
+
+
+def _within(sentences: list[Sentence], start: float, end: float) -> list[Sentence]:
+    """`sentences` cut to the words that start in [start, end), each ending by `end`.
+
+    A retry decodes RETRY_PAD_S either side of the span so whisper hears the
+    words around it whole, and those words are already in the sentences on
+    either side. Kept, they would be written twice.
+    """
+    out: list[Sentence] = []
+    for s in sentences:
+        tokens = [
+            t | {"e": min(cast("float", t.get("e", t["t"])), end)}
+            for t in cast("list[dict[str, Any]]", s["tokens"])
+            if start <= t["t"] < end
+        ]
+        if tokens:
+            out.append(
+                {
+                    "start": min(t["t"] for t in tokens),
+                    "end": max(t["e"] for t in tokens),
+                    "text": "".join(str(t["w"]) for t in tokens),
+                    "tokens": with_char_offsets(tokens),
+                }
+            )
+    return out
+
+
+def _retried(
+    transcription: Transcription,
+    stretches: list[tuple[float, float]],
+    decoder: Callable[[], Decode],
+    report: Callable[[Progress, str], None],
+) -> Transcription:
+    """`transcription` with each loop decoded again, and replaced where the retry reads.
+
+    Done after _without_silence and before _without_loops: a loop over silence
+    has already left as no speech, and a loop sentence whose span still crosses
+    a silent stretch is not retried either, so no retry can write over silence.
+    `decoder` is called once, and only when there is a loop to retry, because
+    it loads the audio. Each replacement is cut to the loop's span (_within),
+    so it never overlaps the sentences either side; the result is put back in
+    time order all the same, because a neighbour can start inside the span.
+
+    Reports state "retrying" once before the first span and once after each,
+    counting loop seconds, so a long run does not look stuck.
+    """
+    inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
+    sentences = transcription.sentences
+    todo = [
+        i
+        for i, s in enumerate(sentences)
+        if is_loop(str(s["text"])) and not any(s["start"] < b and a < s["end"] for a, b in inner)
+    ]
+    if not todo:
+        return transcription
+    total = sum(sentences[i]["end"] - sentences[i]["start"] for i in todo)
+    started = time.monotonic()
+    report(Progress(0.0, total, 0.0), "retrying")
+    decode = decoder()
+    done = 0.0
+    replaced: dict[int, list[Sentence]] = {}
+    for i in todo:
+        start, end = cast("float", sentences[i]["start"]), cast("float", sentences[i]["end"])
+        for options in (RETRY_PLAIN, RETRY_WARM):
+            decoded = decode(start - RETRY_PAD_S, end + RETRY_PAD_S, options)
+            got = _within(decoded, start, end)
+            looped = any(is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded)
+            words = sum(len(_WORD.findall(str(s["text"]))) for s in got)
+            if not looped and words > RETRY_MIN_WORDS:
+                replaced[i] = got
+                break
+        done += end - start
+        report(Progress(done, total, time.monotonic() - started), "retrying")
+    if not replaced:
+        return transcription
+    kept = [r for i, s in enumerate(sentences) for r in replaced.get(i, [s])]
+    return _in_time_order(
+        Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept)
     )
 
 
@@ -832,12 +948,25 @@ def transcribe(
         # loop, and both can emit a sentence that starts before the one printed
         # ahead of it. Text first, so the order is rebuilt from the final text.
         # Silence before loops, so a loop over silence is reported as no
-        # speech (#181); both last, so `unclear` comes out in the same order as
+        # speech (#181), and before the retry, so no loop over silence is
+        # decoded again (#183); both last, so `unclear` comes out in the same order as
         # `sentences`.
         transcription, no_speech = _without_silence(
             _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription))),
             stretches,
         )
+        # whisper's loops get one more decode each before they are given up
+        # on (#183); the chunk engines write none to retry.
+        if spec.kind == "file" and RETRY_LOOPS:
+            whisper_model = model_id
+            transcription = _retried(
+                transcription,
+                stretches,
+                lambda: redecoder(
+                    audio, model_id=whisper_model, language=language, prompt=prompt
+                ),
+                report,
+            )
         transcription, loops = _without_loops(transcription)
         unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 

@@ -14,6 +14,7 @@ import json
 import shutil
 import subprocess
 import sys
+import wave
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -752,3 +753,170 @@ def test_a_whisper_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
 
     [sentence] = json.loads(out.read_text())["sentences"]
     assert (sentence["start"], sentence["end"]) == (0.2, 1.4)
+
+
+# --- decoding a loop span again (#183) --------------------------------------
+
+
+def _words_seg(words: list[tuple[float, float, str]]) -> dict[str, Any]:
+    """One whisper segment of several timed words."""
+    return {
+        "start": words[0][0],
+        "end": words[-1][1],
+        "text": "".join(w for _, _, w in words),
+        "words": [{"word": w, "start": a, "end": b, "probability": 0.9} for a, b, w in words],
+    }
+
+
+# A loop from 10.0 to 18.5 s between two real sentences; the second starts
+# inside the loop's span, as a neighbour after a loop can.
+_LOOP = _words_seg([(10.0 + i, 10.5 + i, " na") for i in range(9)])
+_BEFORE = _words_seg([(0.0, 0.5, " We"), (0.5, 1.0, " began.")])
+_AFTER = _words_seg([(18.0, 18.2, " Then"), (18.2, 18.4, " stop.")])
+_MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
+
+# The retry decodes 8.0 to 20.5 s, so its clip clock is 8 s behind the
+# recording's. A word in the pad on each side (9.0 and 19.0 s) is a neighbour's,
+# decoded again. Seven distinct words fall inside the span, and the last one,
+# from 18.3 s, ends past it at 19.0 s.
+_READ = {
+    "segments": [
+        _words_seg(
+            [(1.0, 1.4, " began.")]
+            + [(2.5 + i, 3.0 + i, f" w{i}") for i in range(6)]
+        ),
+        _words_seg([(10.3, 11.0, " last"), (11.0, 11.5, " stop.")]),
+    ]
+}
+_LOOPED = {"segments": [_words_seg([(2.0 + i * 0.5, 2.4 + i * 0.5, " na") for i in range(9)])]}
+_SHORT = {"segments": [_words_seg([(3.0, 3.5, " one"), (3.5, 4.0, " two")])]}
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """The first retry reads, so it replaces the loop and the second is never tried."""
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN, _READ])
+    states: list[str] = []
+
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
+        prompt=ROMAN_URDU_PROMPT, diarize=False, on_progress=capture,
+    )
+
+    assert len(calls) == 2
+    retry = calls[1]
+    assert retry["n_samples"] == int(20.5 * 16000) - int(8.0 * 16000)
+    assert retry["initial_prompt"] is None
+    assert retry["temperature"] == 0.0
+    assert retry["language"] == "ur"
+    assert retry["condition_on_previous_text"] is False
+    assert retry["word_timestamps"] is True
+    assert payload["unclear"] == []
+    tokens = [(t["t"], t["e"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    assert tokens == [
+        (0.0, 0.5, " We"),
+        (0.5, 1.0, " began."),
+        *[(10.5 + i, 11.0 + i, f" w{i}") for i in range(6)],
+        (18.0, 18.2, " Then"),
+        (18.2, 18.4, " stop."),
+        (18.3, 18.5, " last"),
+    ]
+    starts = [s["start"] for s in payload["sentences"]]
+    assert starts == sorted(starts)
+    assert payload["text"] == "We began. w0 w1 w2 w3 w4 w5 Then stop. last"
+    assert states.count("retrying") == 2
+    assert states.index("running") < states.index("retrying") < states.index("done")
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+@pytest.mark.parametrize("first", [_LOOPED, _SHORT], ids=["loops", "five-words-or-fewer"])
+def test_the_warm_retry_runs_only_when_the_plain_one_fails(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path, first: dict[str, Any]
+) -> None:
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN, first, _READ])
+
+    payload = transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
+        prompt=ROMAN_URDU_PROMPT, diarize=False,
+    )
+
+    assert len(calls) == 3
+    assert calls[2]["temperature"] == 0.4
+    assert calls[2]["initial_prompt"] == ROMAN_URDU_PROMPT
+    assert payload["unclear"] == []
+    assert " w0" in payload["text"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_span_both_retries_fail_on_stays_unclear(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN, _LOOPED, _SHORT])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 3
+    assert payload["unclear"] == [
+        {"start": 10.0, "end": 18.5, "reason": "repetition loop", "words": 9}
+    ]
+    assert payload["text"] == "We began. Then stop."
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_the_retry_can_be_switched_off(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("dsj.suno.RETRY_LOOPS", False)
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 1
+    assert [u["reason"] for u in payload["unclear"]] == ["repetition loop"]
+
+
+def test_a_loop_over_silence_is_never_decoded_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Silence is no speech, not a failed read, so there is nothing to retry (#181).
+
+    One loop lies inside 20 s of -60 dB noise and leaves as no speech. The other
+    has words on both sides of the silence and none inside it, so the silence
+    rule keeps it, and its span still crosses the silence: decoding it again
+    could write words over the silence, so it stays a loop.
+    """
+    from dsj import media as media_mod
+    from dsj.suno import NO_SPEECH_REASON
+
+    rate = 16000
+    rng = np.random.default_rng(183)
+    tone = np.sin(2 * np.pi * 220 * np.arange(5 * rate) / rate) * 0.1
+    noise = rng.standard_normal(20 * rate) * 10 ** (-60 / 20)
+    samples = np.concatenate([tone, noise, tone])
+    wav = tmp_path / "in.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.round(samples * 32767).astype("<i2").tobytes())
+    assert media_mod.loudness(wav, 0.1).size == 300
+
+    over_silence = _words_seg([(10.0 + i, 10.5 + i, " na") for i in range(9)])
+    across = _words_seg(
+        [(1.0 + i * 0.5, 1.4 + i * 0.5, " ha") for i in range(4)]
+        + [(26.0 + i * 0.5, 26.4 + i * 0.5, " ha") for i in range(4)]
+    )
+    calls = _stub_anchored(monkeypatch, 30 * rate, [{"segments": [across, over_silence]}])
+
+    payload = transcribe(wav, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 1
+    assert [(u["reason"], u["words"]) for u in payload["unclear"]] == [
+        ("repetition loop", 8),
+        (NO_SPEECH_REASON, 9),
+    ]

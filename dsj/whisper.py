@@ -68,10 +68,11 @@ __all__ = [
     "SAMPLE_RATE",
     "WhisperUnavailable",
     "available",
+    "redecoder",
     "transcribe_whisper",
 ]
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -432,3 +433,57 @@ def transcribe_whisper(
     return Transcription(
         text=str(result.get("text", "")).strip(), sentences=_sentences_from(segments, 0.0)
     )
+
+
+def redecoder(
+    audio: Path, *, model_id: str, language: str | None, prompt: str | None
+) -> Callable[[float, float, Mapping[str, Any]], list[dict[str, Any]]]:
+    """A function that decodes `start_s` to `end_s` of `audio` again, for a loop span (#183).
+
+    The audio is loaded once, here, by the loader `_anchored` uses, so a clip
+    is the same samples the main pass decoded. Each call cuts one clip and
+    decodes it alone with `condition_on_previous_text=False`: the text around a
+    loop is what fed it, so nothing from outside the clip goes in. The call
+    otherwise starts from the run's own settings, `language` and `prompt`, and
+    `options` overrides them (dsj/suno.py: RETRY_PLAIN, RETRY_WARM).
+
+    Returns payload sentences on the recording's clock, as `_sentences_from`
+    builds them.
+
+    Raises:
+        WhisperUnavailable: if mlx-whisper is not installed.
+    """
+    try:
+        import mlx_whisper
+        from mlx_whisper.audio import (
+            load_audio as _load_audio,  # pyright: ignore[reportUnknownVariableType]  # mlx has no stubs
+        )
+    except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
+        raise WhisperUnavailable(
+            f"retrying a loop needs mlx-whisper. Install it with `{INSTALL_HINT}`."
+        ) from exc
+
+    transcribe = cast(
+        "Callable[..., dict[str, Any]]",
+        mlx_whisper.transcribe,  # pyright: ignore[reportUnknownMemberType]
+    )
+    data = cast("Any", _load_audio)(str(audio), sr=SAMPLE_RATE)
+
+    def decode(start_s: float, end_s: float, options: Mapping[str, Any]) -> list[dict[str, Any]]:
+        a = max(0, int(start_s * SAMPLE_RATE))
+        b = min(len(data), int(end_s * SAMPLE_RATE))
+        settings: dict[str, Any] = {
+            "path_or_hf_repo": model_id,
+            "language": language,
+            "initial_prompt": prompt,
+            "word_timestamps": True,
+            "condition_on_previous_text": False,
+            "hallucination_silence_threshold": HALLUCINATION_SILENCE_S,
+            "verbose": None,
+        } | dict(options)
+        result = transcribe(data[a:b], **settings)
+        return _sentences_from(
+            cast("list[dict[str, Any]]", result.get("segments") or []), a / SAMPLE_RATE
+        )
+
+    return decode
