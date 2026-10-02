@@ -17,6 +17,16 @@ filed by any route is picked up before you see the list.
 Priority is P0 to P2. Effort is S (one pass), M (one session), L (spans sessions).
 <!-- gh-work:end -->
 
+## Citing code in issues and docs
+
+Cite code inside a file that is actively edited, `dsj/suno.py` above all, by an `rg`
+pattern that finds it, not by a line number: `rg -n 'def write_status' dsj/suno.py`.
+Lines move under every change, and a stale line number still lands on real, plausible
+code, so nothing tells the reader it is wrong. A line number may sit beside the pattern
+as a hint. Run the pattern before writing it down, because patterns die too: the one
+issues used for the token serializer stopped matching when it moved into `_token()`
+(#134).
+
 ## Driving dsj itself
 
 Read [.agents/skills/dsj/SKILL.md](.agents/skills/dsj/SKILL.md) before running `dsj`.
