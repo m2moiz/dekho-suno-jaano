@@ -17,6 +17,12 @@ filed by any route is picked up before you see the list.
 Priority is P0 to P2. Effort is S (one pass), M (one session), L (spans sessions).
 <!-- gh-work:end -->
 
+## Working a milestone
+
+Follow the runbook, [docs/runbook.md](docs/runbook.md): find the plan issue, check the
+tree, claim without colliding with another session, gate every change, and close with a
+release.
+
 ## The gate
 
 Before calling any change done, run `uv run just check` and paste the line it ends

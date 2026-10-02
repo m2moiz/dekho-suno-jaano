@@ -25,6 +25,7 @@ a fully green test suite.
 | [tooling-gaps.md](tooling-gaps.md) | The 16 practices and 3 tool tiers this project is built to. A general Python checklist, not a jaano one. |
 | [resume-gate-design.md](resume-gate-design.md) | How you test a resume that silently restarts, given it produces byte-identical output either way. |
 | [mutmut-triage.md](mutmut-triage.md) | Every mutant the suite fails to kill, and why each one is accepted. Read this before adding a suppression. |
+| [runbook.md](runbook.md) | How a session executes a milestone end to end, from its plan issue to the release, and the traps earlier sessions fell into. |
 
 ## The one idea they share
 
