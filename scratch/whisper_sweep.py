@@ -8,7 +8,7 @@ laptop. An agent waiting on that spends quota on every check-in; this script
 spends none, and the orchestrator reads scratch/real_bench/results.md at the end.
 
     export DSJ_REAL_AUDIO="$HOME/Library/CloudStorage/GoogleDrive-m.moiz1995@gmail.com/My Drive/Hi-Q Recordings"
-    uv run python scratch/whisper_sweep.py
+    uv run python scratch/whisper_sweep.py scratch/sweeps/<plan>.json
 
 The setting is applied from outside: each run is a fresh process that sets
 `dsj.whisper.HALLUCINATION_SILENCE_S` and then calls dsj's own CLI, so no code
@@ -30,25 +30,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 RUNS = REPO / "scratch" / "real_bench" / "runs"
 FIXTURE = REPO / "scratch" / "urdu_cs" / "podcast.wav"
 MIN_FREE_PCT = 30
 
-# (label, threshold or None for off, target). Targets are a recording name from
-# scratch/real_bench.py's SET, or "fixture". Labels from earlier single runs
-# (loops-before, off-repeat, threshold-2, threshold-5) are kept as repeat 1 and 2;
-# these add the repeats and the checks a choice needs.
-PLAN: list[tuple[str, float | None, str]] = [
-    ("sweep-off-r3", None, "recording-20260920-101117"),
-    ("sweep-t2-r2", 2.0, "recording-20260920-101117"),
-    ("sweep-t2-r3", 2.0, "recording-20260920-101117"),
-    ("sweep-t5-r2", 5.0, "recording-20260920-101117"),
-    ("sweep-t5-r3", 5.0, "recording-20260920-101117"),
-    ("sweep-t5-r1", 5.0, "fixture"),
-    ("sweep-t2-r1", 2.0, "recording-20260922-153458"),
-]
+# A plan is a JSON list of runs, one object each:
+#   {"label": "...", "target": "<recording name from real_bench's SET> | fixture",
+#    "overrides": {"<dsj.whisper attribute>": value}, "flags": [...]}
+# `overrides` are set on dsj.whisper before dsj's CLI runs; `flags` replace the
+# target's default flags. The #99 sweep used HALLUCINATION_SILENCE_S; #100 uses
+# ANCHOR_CHUNK_S and an unanchored prompt; #33 uses --model.
 FLAGS = {
     "recording-20260922-153458": ["--engine", "whisper"],
     "fixture": ["--roman-urdu", "--no-diarize"],
@@ -80,7 +74,9 @@ def commit() -> str:
     return f"{head}-dirty" if dirty else head
 
 
-def run_one(label: str, threshold: float | None, target: str, audio_root: Path) -> None:
+def run_one(run: dict[str, Any], audio_root: Path) -> None:
+    label, target = str(run["label"]), str(run["target"])
+    overrides: dict[str, Any] = dict(run.get("overrides") or {})
     folder = RUNS / label
     name = "podcast" if target == "fixture" else target
     out = folder / f"{name}.json"
@@ -96,19 +92,20 @@ def run_one(label: str, threshold: float | None, target: str, audio_root: Path) 
     wait_for_memory()
     folder.mkdir(parents=True, exist_ok=True)
     args = ["suno", str(audio), "-o", str(out), "--status", str(folder / f"{name}.status.json"),
-            *FLAGS.get(target, DEFAULT_FLAGS)]
+            *(list(run["flags"]) if "flags" in run else FLAGS.get(target, DEFAULT_FLAGS))]
     code = (
         "import sys, dsj.whisper as w; "
-        f"w.HALLUCINATION_SILENCE_S = {threshold!r}; "
+        + "".join(f"w.{k} = {v!r}; " for k, v in overrides.items())
+        +
         "from dsj.cli import main; sys.exit(main(sys.argv[1:]))"
     )
-    print(f"{label}: threshold={threshold} on {name} ({free_pct()}% memory free)", flush=True)
+    print(f"{label}: {overrides or 'defaults'} on {name} ({free_pct()}% memory free)", flush=True)
     started = time.monotonic()
     with (folder / f"{name}.log").open("w") as log:
         rc = subprocess.run(["uv", "run", "python", "-c", code, *args], cwd=REPO,
                             stdout=log, stderr=subprocess.STDOUT).returncode
     wall = time.monotonic() - started
-    meta = {"wall_s": wall, "returncode": rc, "args": args, "threshold": threshold,
+    meta = {"wall_s": wall, "returncode": rc, "args": args, "overrides": overrides,
             "commit": commit()}
     (folder / f"{name}.bench.json").write_text(json.dumps(meta, indent=2))
     print(f"{label}: exit {rc} in {wall / 60:.1f} min", flush=True)
@@ -130,10 +127,13 @@ def main() -> int:
     root = Path(folder).expanduser()
     if not FIXTURE.exists():
         sys.exit(f"{FIXTURE} is missing; run `just urdu-fixture` first")
-    for label, threshold, target in PLAN:
-        run_one(label, threshold, target, root)
-    for label, _, target in PLAN:
-        measure(label, target)
+    if len(sys.argv) != 2:
+        sys.exit("usage: whisper_sweep.py PLAN.json")
+    plan = json.loads(Path(sys.argv[1]).read_text())
+    for run in plan:
+        run_one(run, root)
+    for run in plan:
+        measure(str(run["label"]), str(run["target"]))
     return 0
 
 
