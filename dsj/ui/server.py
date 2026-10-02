@@ -57,12 +57,13 @@ from pathlib import Path
 from typing import cast
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dsj.ui import UIUnavailable
+from dsj.ui.errors import STATUS, describe
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -136,7 +137,12 @@ class _Guard:
             given = headers.get(b"authorization", b"")
             if not secrets.compare_digest(given, self.expected):
                 await JSONResponse(
-                    {"detail": "Unauthorized"},
+                    {
+                        "error": "Unauthorized",
+                        "message": "This request did not carry the dsj ui token. Open the "
+                        "address `dsj ui` printed, including the part after #.",
+                        "request": path,
+                    },
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
                 )(scope, receive, send)
@@ -144,6 +150,12 @@ class _Guard:
             # Any request from the page shows it is open, not only the beat.
             self.heartbeat.beat()
         await self.app(scope, receive, send)
+
+
+async def failed(request: Request, exc: Exception) -> JSONResponse:
+    """Any error a route raises, as the one shape the page's error dialog reads (#82)."""
+    status, body = describe(exc, request.url.path)
+    return JSONResponse(body, status_code=status)
 
 
 def list_recordings() -> list[dict[str, object]]:
@@ -184,6 +196,12 @@ def create_app(
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    # dsj's own errors are answered quietly with their status. Anything else
+    # takes the Exception handler, which Starlette runs in its outermost layer
+    # and then re-raises, so the traceback still reaches the terminal.
+    for cls in STATUS:
+        app.add_exception_handler(cls, failed)
+    app.add_exception_handler(Exception, failed)
     # No CORSMiddleware, ever (rule 4). Its absence is the defence.
     app.add_middleware(_Guard, hosts=hosts, token=token, heartbeat=app.state.heartbeat)
     return app, token

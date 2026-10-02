@@ -1,15 +1,18 @@
-export function App({ hasToken }: { hasToken: boolean }) {
+import { ErrorBoundary } from "@/features/errors/ErrorBoundary";
+import { ShownErrorDialog } from "@/features/errors/ErrorDialog";
+
+export function App() {
   return (
-    <main className="mx-auto max-w-2xl p-8 font-sans">
-      <h1 className="text-2xl font-semibold">dsj</h1>
-      {hasToken ? (
-        <p className="mt-4 text-muted-foreground">The library is empty.</p>
-      ) : (
-        <p className="mt-4">
-          This page was opened without its key. Open the address <code>dsj ui</code> printed in
-          the terminal, including the part after <code>#</code>.
-        </p>
-      )}
-    </main>
+    <div className="min-h-dvh font-sans">
+      <header className="mx-auto flex max-w-2xl items-center px-8 pt-8">
+        <h1 className="text-2xl font-semibold">dsj</h1>
+      </header>
+      <main className="mx-auto max-w-2xl px-8 py-4">
+        <ErrorBoundary>
+          <p className="text-muted-foreground">The library is empty.</p>
+        </ErrorBoundary>
+      </main>
+      <ShownErrorDialog />
+    </div>
   );
 }
