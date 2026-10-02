@@ -27,6 +27,7 @@ from dsj.diarize import DiarizationUnavailable
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
+from dsj.ui.jobs import NotStarted
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
 
@@ -46,6 +47,8 @@ STATUS: dict[type[Exception], int] = {
     MarkError: 422,
     NotATranscript: 422,
     NotTheSameRecording: 422,
+    # Gone from where the library last saw it, or in a cloud-synced folder (#113).
+    NotStarted: 422,
     # Another transcription holds the machine; the request was fine, the moment was not.
     AlreadyRunning: 409,
     # ffmpeg failed on the file in a way nobody named. Genuinely unexpected.

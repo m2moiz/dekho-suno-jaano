@@ -21,6 +21,7 @@ from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream, 
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe, status_of
+from dsj.ui.jobs import NotStarted
 from dsj.ui.server import create_app
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
@@ -84,6 +85,7 @@ def build(cls: type[BaseException]) -> BaseException:
         (MarkError, 422),
         (NotATranscript, 422),
         (NotTheSameRecording, 422),
+        (NotStarted, 422),
         (AlreadyRunning, 409),
         (MediaError, 500),
     ],
@@ -107,7 +109,7 @@ def test_the_table_above_is_the_whole_table() -> None:
     tested = {
         EngineUnavailable, WhisperUnavailable, DiarizationUnavailable, FFmpegNotFound,
         UIUnavailable, NoAudioStream, NoVideoStream, MarkError, NotATranscript,
-        NotTheSameRecording, AlreadyRunning, MediaError,
+        NotTheSameRecording, NotStarted, AlreadyRunning, MediaError,
     }
     assert set(STATUS) == tested
 

@@ -57,13 +57,16 @@ from typing import Annotated
 
 import typer
 
+from dsj.asr import EngineUnavailable
+
 # Module level, not lazy. These are DEFAULTS, and a lazily-resolved default
 # cannot appear in --help: the first version of this file used 0 as a "not
 # given" sentinel and Typer duly advertised `[default: 0]` for a budget whose
 # real default is 150. Measured cost of the import: ~90ms, inside the noise of
 # `dsj --help` at 120-200ms. The heavy workers below stay lazy.
 from dsj.dekho import DEFAULT_BUDGET, DEFAULT_DELTA, DEFAULT_FPS, DEFAULT_MIN_GAP_S
-from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, Terminated
+from dsj.media import FFmpegNotFound
+from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, RunRefused, Terminated
 
 app = typer.Typer(
     add_completion=False,
@@ -125,6 +128,12 @@ def _stderr_logger(name: str) -> None:
     logger.propagate = False
 
 
+# The failures of `dsj suno` that are its caller's to fix, each already a
+# sentence carrying its remedy: a mistake in the arguments (RunRefused), and an
+# engine or ffmpeg that is not installed. Listed, never `Exception`: everything
+# else is a bug in dsj and keeps its traceback (#200).
+_CALLERS_TO_FIX: tuple[type[Exception], ...] = (RunRefused, EngineUnavailable, FFmpegNotFound)
+
 # EX_TEMPFAIL from sysexits.h, "try again later": the run did not fail, it
 # never started, and the same command will work once the other run is over.
 EXIT_ALREADY_RUNNING = 75
@@ -183,8 +192,8 @@ def suno(
     """Listen: transcribe media to a timestamped index."""
     from dsj import runlock
     from dsj.suno import Progress, clock, render_bar
+    from dsj.suno import roman_urdu as roman_urdu_settings
     from dsj.suno import transcribe as run_transcribe
-    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
 
     _stderr_logger("dsj.suno")
 
@@ -205,19 +214,11 @@ def suno(
         last_total = p.audio_total_s
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
-    # --roman-urdu is sugar over the two flags under it, and it is spelled as
-    # sugar rather than as a mode so that an explicit --language or --prompt
-    # beside it still wins. The prompt it sets is measured, not invented: see
-    # dsj/whisper.py.
+    # --roman-urdu is sugar over the flags under it, defined once in dsj/suno.py
+    # so that a run started from `dsj ui` gets exactly what this one does (#113).
     anchor_s = None
     if roman_urdu:
-        engine = "whisper" if engine == "parakeet" else engine
-        language = language or "ur"
-        prompt = prompt or ROMAN_URDU_PROMPT
-        # The bias does not survive an hour on whisper's own window threading,
-        # so the flag that asks for it also pays for keeping it. Measured; see
-        # dsj/whisper.py.
-        anchor_s = ANCHOR_CHUNK_S
+        engine, language, prompt, anchor_s = roman_urdu_settings(engine, language, prompt)
 
     # Resolved here, not in transcribe(): this file owns every default in the
     # project, and a default that lives in two places is a default that will
@@ -252,7 +253,7 @@ def suno(
     except runlock.AlreadyRunning as busy:
         if sigterm_installed:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        print(busy, file=sys.stderr)
+        print(f"dsj: {busy}", file=sys.stderr)
         raise typer.Exit(EXIT_ALREADY_RUNNING) from None
 
     started = time.monotonic()
@@ -278,6 +279,12 @@ def suno(
         # `wait` and anything already reading 143 see what they saw before.
         # A Ctrl-C passes through too, and Typer turns it into exit 130.
         raise SystemExit(143) from None
+    except _CALLERS_TO_FIX as exc:
+        # One line, not a traceback (#200). transcribe() has already written
+        # `failed` to --status. Anything not listed is a bug in dsj, and keeps
+        # its traceback.
+        print(f"dsj: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from None
     finally:
         os.close(held)
         if sigterm_installed:
@@ -425,8 +432,9 @@ def parho(
     # and further from the typo.
     if not media.exists():
         raise FileNotFoundError(media)
-    # utf-8-sig: caption files from Windows tools often open with a BOM.
-    payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
+    # utf-8-sig: caption files from Windows tools often open with a BOM. The
+    # recording by its absolute path, as `dsj suno` names it (#201).
+    payload = parse(source.read_text(encoding="utf-8-sig"), str(media.resolve()))
     atomic_write_text(out, json.dumps(payload))
     return 0
 

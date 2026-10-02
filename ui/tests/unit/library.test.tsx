@@ -65,7 +65,12 @@ const ROWS: RecordingRow[] = [
 
 function serve(rows: unknown, status = 200) {
   fetchMock.mockReset();
-  fetchMock.mockImplementation(async () => Response.json(rows, { status }));
+  // Each row asks once for the jobs already running (#113); none are.
+  fetchMock.mockImplementation(async (request: Request) =>
+    new URL(request.url).pathname === "/api/jobs"
+      ? Response.json([])
+      : Response.json(rows, { status }),
+  );
   return fetchMock;
 }
 

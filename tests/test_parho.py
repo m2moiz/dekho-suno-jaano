@@ -297,3 +297,17 @@ def test_parho_then_likho_gives_back_the_same_vtt(tmp_path: Path) -> None:
     assert main(["parho", str(recording), str(captions), "-o", str(out)]) == 0
     assert main(["likho", str(out), "-o", str(again)]) == 0
     assert again.read_text() == captions.read_text()
+
+
+def test_parho_names_the_recording_by_its_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`dsj parho rec.wav c.srt -o t.json` from the folder holding rec.wav (#201)."""
+    (tmp_path / "rec.wav").touch()
+    (tmp_path / "c.srt").write_text(to_srt(_native()))
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["parho", "rec.wav", "c.srt", "-o", "t.json"]) == 0
+
+    audio = json.loads((tmp_path / "t.json").read_text())["audio"]
+    assert audio == str((tmp_path / "rec.wav").resolve())

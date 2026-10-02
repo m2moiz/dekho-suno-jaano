@@ -30,8 +30,8 @@ into subtitles or text for tools that are not dsj, and `parho` (read) turns a ca
 file those tools made into a transcript, in place of `suno`. The sixth, `ui`, is for a
 person rather than an agent: it opens the app in a browser.
 
-The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
-`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+The transcript is one JSON object. Its top-level keys are `audio`, `engine`, `model`,
+`text`, `unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
 and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
 and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
 field is in [references/payload.md](references/payload.md).
@@ -444,13 +444,14 @@ decode ends leaves nothing behind.
 | Exit | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | An uncaught exception, printed as a traceback on stderr |
+| 1 | `suno`: a mistake you can put right (a missing input or output directory, a bad `--engine`, an engine not installed), printed as one line, `dsj: <message>`. Anything else: an uncaught exception, printed as a traceback on stderr |
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
 | 130 | Interrupted by Ctrl-C. For `suno`, re-run to resume; under whisper only a run stopped after its decode resumes |
 | 143 | Stopped by `kill`. The same as 130 otherwise |
 | 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 
-**Read the last line of stderr, not the first.** A failure is a traceback, and when
+**Read the last line of stderr, not the first.** A failure you caused is that one
+line; any other failure is a traceback, and when
 ffmpeg is involved its own log prints above the exception, so the useful sentence can be
 twenty lines down:
 

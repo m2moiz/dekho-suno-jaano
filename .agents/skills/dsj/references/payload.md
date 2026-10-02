@@ -17,11 +17,12 @@ which is a sample index. There are no milliseconds anywhere.
 
 ## The transcript, written by `suno`
 
-Five keys, always, in this order:
+Six keys, always, in this order:
 
 ```json
 {
   "audio": "/path/to/recording.mov",
+  "engine": "parakeet",
   "model": "mlx-community/parakeet-tdt-0.6b-v3",
   "text": "the whole transcript as one string",
   "unclear": [{"start": 134.1, "end": 161.8, "reason": "repetition loop", "words": 223}],
@@ -39,8 +40,9 @@ Five keys, always, in this order:
 
 | Key | Type | Notes |
 |---|---|---|
-| `audio` | string | The path you passed, verbatim. Not resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. |
-| `model` | string | The resolved model id. There is no separate `engine` key; the model id names the engine. |
+| `audio` | string | The recording's absolute path: the one you passed, resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. Transcripts written before #201 hold the path as it was typed, which can be relative to whatever folder that run started in. |
+| `engine` | string | Which engine wrote it: `parakeet`, `whisper` or `sherpa`. Absent from transcripts written before it existed (#172) and from those `dsj parho` imports, which no engine wrote; for those, tell the engine from `model` with the table below. |
+| `model` | string | The resolved model id. Under sherpa it is the model directory the run was given, so it does not always name the engine; `engine` does. |
 | `text` | string | Whole transcript, one string: every sentence's `text` joined, outer whitespace stripped. |
 | `unclear` | array | Stretches dsj took out of `sentences` because what the engine returned there is not a transcript, earliest first. `[]` when there were none. Below. |
 | `sentences` | array | Can be `[]` for silent media. That is a valid transcript, not a failure. |
@@ -106,9 +108,9 @@ Inside a token:
 | `c` | float, 0 to 1 | How sure the model was of the token; higher is surer. Rounded to 3 places. What it is computed from depends on the engine, below, so a threshold tuned on one engine does not carry to another. |
 | `charOffset` | int | Where `w` starts in the sentence's `text`, so `text[charOffset:charOffset + len(w)]` is `w`. It maps a click or a selection on rendered text back to a token. Counted in code points, as Python's `len` counts; JavaScript counts UTF-16 units, and the two differ for any character outside the Basic Multilingual Plane, such as an emoji. Written under every engine, and absent from transcripts written before it existed. |
 
-**Every engine writes `e` and `c`, and they mean different things under each.** There is
-no `engine` key; `model` names the engine, and this table says what its token times and
-confidences are:
+**Every engine writes `e` and `c`, and they mean different things under each.** `engine`
+says which wrote the file, and this table says what its token times and confidences are.
+On a transcript with no `engine`, the `model` column is how to tell:
 
 | Engine | `model` | `t` and `e` | `c` |
 |---|---|---|---|
@@ -148,6 +150,7 @@ gains one field after its `end`:
 ```json
 {
   "audio": "...",
+  "engine": "...",
   "model": "...",
   "speakers": ["SPEAKER_00", "SPEAKER_01"],
   "diarization": "senko 0.1.0",

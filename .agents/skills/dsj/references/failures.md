@@ -13,22 +13,28 @@
 
 ## Exit codes
 
-There are four, and no others. dsj defines no exit-code enum, so every domain failure
-lands in the same bucket.
-
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | Success | |
-| 1 | Any uncaught exception, printed as a Python traceback on stderr | Read the last line. It names the class and carries the remedy. |
+| 1 | `suno`: a mistake you can put right, printed as one line, `dsj: <message>`. A missing input, an `-o` or `--status` in a directory that does not exist, an unknown `--engine`, whisper's options on parakeet, an engine or ffmpeg that is not installed | Read the line. It carries the remedy. |
+| 1 | Anything else, printed as a Python traceback on stderr. On `suno` that is a bug in dsj | Read the last line. It names the class and carries the remedy. |
 | 2 | A usage error from the argument parser | You got the flags wrong. Run `dsj <verb> --help`. |
+| 75 | `suno` only: another `suno` is already running on this machine. Nothing was started | Wait for the pid stderr names to finish, then run it again. |
 | 130 | Interrupted with Ctrl-C or SIGINT | For `suno` on parakeet or sherpa this is safe and resumable. Re-run the same command. |
+| 143 | Stopped by `kill` | The same as 130. |
 
 `--help` exits 0 on every command, `dsj --version` exits 0, and a bare `dsj` with no
 arguments prints help and exits 2.
 
 ## The one rule: read the last line of stderr
 
-A failure is a traceback, so the useful sentence is at the **bottom**, not the top. When
+A `suno` failure you caused is one line that starts `dsj: ` (#200), and nothing else:
+
+```
+dsj: cannot write /tmp/nope-dir/x.json: the directory /tmp/nope-dir does not exist. Create it first (mkdir -p /tmp/nope-dir) or pass another -o.
+```
+
+Anything else is a traceback, so the useful sentence is at the **bottom**, not the top. When
 ffmpeg is involved its own log is printed above the exception, which can be twenty lines
 of noise ahead of the one line that tells you what happened:
 
@@ -60,7 +66,7 @@ never empty on a successful `suno` either. Branch on the exit code, then read st
 and exits 1, not 2:
 
 ```
-ValueError: unknown engine 'bogus', expected one of parakeet, whisper, sherpa
+dsj: unknown engine 'bogus', expected one of parakeet, whisper, sherpa
 ```
 
 ## Engine and install failures
@@ -108,7 +114,7 @@ has no `index.html`. `just ui-build` writes it, and needs Node; an install never
 | `NoVideoStream` | The file has no picture, so `dekho` and `dikhao` have nothing to scan or seek. |
 | `MediaError` on extraction | Carries ffmpeg's own log plus the exact command to reproduce it by hand. |
 | `MediaError` on a frame | Either `<t>s is past the end of this <duration>s recording.` or, when the timestamp was in range, `ffmpeg read the file but produced no frame; its log is above.` |
-| `FileNotFoundError` | The path does not exist. It is a bare path with no other text. |
+| `FileNotFoundError` | The path does not exist. `suno` says so in one line, `dsj: <path> does not exist.`, before any model loads; `dekho` and `dikhao` raise it with the bare path as its whole text. |
 
 One inconsistency worth knowing: the sherpa engine calls ffmpeg directly rather than
 through the shared boundary, so on a machine with no ffmpeg that path raises a bare
@@ -153,21 +159,21 @@ has no wheel for, and the fix is a reinstall pinned to Python 3.12.
 | Class | Trigger |
 |---|---|
 | `MarkError` | `dekho -t` was pointed at a file that is not a JSON object: `<path> is not a transcript: expected a JSON object, found list. Pass the file dsj suno wrote.` |
-| `ValueError` | `--language` or `--prompt` passed with parakeet: `--language and --prompt are whisper's; parakeet takes neither. Add --engine whisper, or drop them.` |
+| `BadOption`, a `ValueError` | `--language` or `--prompt` passed with parakeet, printed as `dsj: --language and --prompt are whisper's; parakeet takes neither. Add --engine whisper, or drop them.` |
+| `MissingPath`, a `FileNotFoundError` | `suno`'s input is not there, or its `-o` or `--status` is in a directory that does not exist. One line, `dsj: ...`, naming the `mkdir -p` that fixes it. |
 | `ValueError` | `--fps` not positive, or `--budget`, `--min-gap` or `--delta` negative |
 | `ValueError` | A negative timestamp or a `--width` of less than zero on `dikhao` |
 
 ## Detecting failure from a `--status` file
 
-The failure document has only two keys:
+The failure document has only three keys:
 
 ```json
-{"state": "failed", "error": "FileNotFoundError: /nope.mov"}
+{"state": "failed", "pid": 4242, "error": "MissingPath: /nope.mov does not exist."}
 ```
 
 No `fraction`, no `audio_done_s`, no `eta_s`. A poller that reads those unconditionally
 crashes exactly when the run it is watching has failed. Read `state` first, every time.
 
-The document is only written when the failure passes through the command line. A library
-caller using `dsj.suno.transcribe(...)` directly gets no failure document, and the last
-frame written stays whatever it was.
+`dsj.suno.transcribe(...)` writes it itself (#103), so a library caller that passes a
+`status_path` gets it too, not only the command line.
