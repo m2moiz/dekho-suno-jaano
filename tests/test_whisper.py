@@ -391,7 +391,7 @@ def test_roman_urdu_sets_the_engine_the_language_and_the_prompt(
 
     seen: dict[str, object] = {}
 
-    def fake(media: Path, out: Path, model: str = "", **kw: object) -> dict[str, object]:
+    def fake(_media: Path, _out: Path, model: str = "", **kw: object) -> dict[str, object]:
         seen.update({"model": model, **kw})
         return {"sentences": []}
 
