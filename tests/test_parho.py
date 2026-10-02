@@ -141,6 +141,14 @@ def test_json_is_a_dsj_transcript_passed_through_and_pointed_at_the_recording() 
     assert next(iter(back)) == "audio"
 
 
+def test_json_keeps_the_unclear_spans_and_needs_none() -> None:
+    """`unclear` (#140) rides through an import; a transcript from before it still loads."""
+    spans = [{"start": 70.0, "end": 90.0, "reason": "repetition loop", "words": 200}]
+    marked = _native() | {"unclear": spans}
+    assert parse(json.dumps(marked), "r.mov")["unclear"] == spans
+    assert "unclear" not in parse(json.dumps(_native()), "r.mov")
+
+
 def test_keys_come_in_the_order_suno_writes_them() -> None:
     back = parse(to_vtt(_native()), "r.mov")
     assert list(back) == ["audio", "model", "speakers", "diarization", "text", "sentences"]

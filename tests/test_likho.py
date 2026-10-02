@@ -128,6 +128,19 @@ def test_an_old_transcript_exports_in_time_order_without_word_tags() -> None:
     assert "First<00:01:01.400>." in to_vtt(_old())
 
 
+def test_unclear_spans_change_no_export() -> None:
+    """A transcript with `unclear` (#140) exports as one without it: the spans are not cues.
+
+    The loops are already out of `sentences`, so there is nothing to subtitle,
+    and an old transcript without the key is the case the test above covers.
+    """
+    span = {"start": 70.0, "end": 90.0, "reason": "repetition loop", "words": 200}
+    marked = _old() | {"unclear": [span]}
+    assert to_srt(marked) == to_srt(_old())
+    assert to_vtt(marked) == to_vtt(_old())
+    assert to_txt(marked) == to_txt(_old())
+
+
 def test_text_its_tokens_do_not_spell_is_written_untimed() -> None:
     """Before #106 a sentence's text and its tokens could disagree. The text wins, untagged."""
     payload = _old()

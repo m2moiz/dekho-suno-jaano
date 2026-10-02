@@ -11,6 +11,8 @@ a word of any transcript. Numbers only.
     uv run python scratch/real_bench.py baseline
     uv run python scratch/real_bench.py run --label silence-threshold
     uv run python scratch/real_bench.py run --label try2 --only 101117 -- --prompt "..."
+    uv run python scratch/real_bench.py run --label plain-threshold --unanchored
+    uv run python scratch/real_bench.py fixture --label silence-threshold
 
 `baseline` measures the transcripts the 22 Sep session left in
 $DSJ_REAL_AUDIO/transcripts/. It runs no model; nearly all its time is ffmpeg
@@ -26,6 +28,21 @@ picks up where it stopped, and transcribing again takes a new label. That is
 its replacement exists. It also refuses to start a file while any other
 `dsj suno` is running, because two at once froze this machine (#136).
 
+`run --unanchored` gives the Urdu files `--engine whisper --language ur
+--prompt <ROMAN_URDU_PROMPT>` in place of `--roman-urdu`: the same prompt with
+no anchoring, which `--roman-urdu` always turns on (#140's conditions 1 and 3).
+
+`fixture` runs the same measurements on #148's public recording,
+scratch/urdu_cs/podcast.wav (`just urdu-fixture` builds it), transcribed with
+`--roman-urdu --no-diarize` into scratch/real_bench/runs/<label>/podcast.json
+under the same never-overwrite rule. `fixture --transcript PATH` measures a
+transcript that already exists instead. Its extra columns count the words
+whose start falls inside each of the fixture's three quiet gaps (10, 30 and
+60 s): audio with no speech in it, so every word there was invented. A loop
+dsj took out (#140) keeps a word count and a span but no word times, so its
+words are counted into a gap in proportion to how much of its span lies in it.
+That recording is public, so unlike the five files its text may be read.
+
 Every table is printed and appended to scratch/real_bench/results.md, which is
 gitignored along with the rest of scratch/'s data.
 
@@ -34,10 +51,17 @@ Columns:
 - urdu%: seconds in sentences more than 30% Urdu script, over seconds in all
   sentences. Uses scratch/urdu_script_share.py's is_urdu, so the two agree.
 - -loops: the same with repetition loops removed. This is the drift number.
-  On recording-20260922-171500 the two differ by 41 points, because its loops
-  are one Urdu letter repeated (#100, #140).
-- loop s: seconds in loop sentences, meaning more than six words and at most
-  two distinct ones. The rule the 22 Sep session used.
+  On recording-20260922-171500 the two differ by 48 points, because its loops
+  are one Urdu letter repeated (#100, #140). Since #140 dsj takes loops out of
+  `sentences` itself and keeps no text for them, so on a transcript written
+  since then urdu% and -loops are the same number.
+- words: words in the transcript, loops included: on a transcript written
+  since #140, the words left in `sentences` plus each `unclear` loop's count.
+- loop s: seconds in loop sentences, and since #140 in the payload's
+  `unclear` loop spans; see dsj.suno.is_loop for the rule. It is wider than
+  the one the 22 Sep session used, which missed loops that cycle three or more
+  words, so its baseline numbers are higher than the ones first published on
+  #149 (#140).
 - loop dB, speech dB: median per-second loudness inside loop sentences and
   inside every other sentence. Close numbers mean the loops are not over
   silence (#99).
@@ -72,11 +96,17 @@ from typing import Any
 import numpy as np
 from urdu_script_share import is_urdu
 
+from dsj.suno import LOOP_REASON, is_loop
+from dsj.whisper import ROMAN_URDU_PROMPT
+
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "scratch" / "real_bench"
 SAMPLE_RATE = 16000
 QUIET_DB = -45.0
 CONTROL = "recording-20260922-153458"
+FIXTURE = REPO / "scratch" / "urdu_cs"
+# --roman-urdu without the anchoring it always turns on (dsj/cli.py).
+UNANCHORED = ("--engine", "whisper", "--language", "ur", "--prompt", ROMAN_URDU_PROMPT)
 WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)?")
 
 
@@ -104,6 +134,7 @@ class Row:
     model: str
     minutes: float
     sentences: int
+    words: int
     urdu_pct: float
     urdu_pct_no_loops: float
     loop_s: float
@@ -112,12 +143,6 @@ class Row:
     quiet_pct: float | None
     speed: float | None
     agree_pct: float | None
-
-
-def is_loop(text: str) -> bool:
-    """A repetition loop: more than six words, at most two distinct."""
-    words = text.split()
-    return len(words) > 6 and len(set(words)) <= 2
 
 
 def loudness(audio: Path) -> np.ndarray:
@@ -161,6 +186,30 @@ def words(sentences: list[dict[str, Any]]) -> list[str]:
     return [w.lower() for s in sentences for w in WORD.findall(s.get("text") or "")]
 
 
+def loop_spans(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every repetition loop in a transcript, old or new, as dicts with `start` and `end`.
+
+    Before #140 the loops sat in `sentences` and are found there by is_loop.
+    Since #140 dsj takes them out itself and records each in the payload's
+    `unclear` list with its span and word count but not its text, so they are
+    read from there too. A transcript has one or the other, never both, so
+    nothing is counted twice.
+    """
+    sentences: list[dict[str, Any]] = payload["sentences"]
+    return [s for s in sentences if is_loop(s.get("text") or "")] + loops_taken(payload)
+
+
+def loops_taken(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The loops dsj took out of `sentences` itself (#140); none before it."""
+    unclear: list[dict[str, Any]] = payload.get("unclear") or []
+    return [u for u in unclear if u.get("reason") == LOOP_REASON]
+
+
+def loop_words(payload: dict[str, Any]) -> int:
+    """Words in the loops dsj took out of `sentences`, from `unclear`; 0 before #140."""
+    return sum(int(u["words"]) for u in loops_taken(payload))
+
+
 def agreement(reference: Path, sentences: list[dict[str, Any]]) -> float:
     ref = words(json.loads(reference.read_text())["sentences"])
     hyp = words(sentences)
@@ -174,7 +223,7 @@ def measure(
 ) -> Row:
     payload = json.loads(transcript.read_text())
     sentences: list[dict[str, Any]] = payload["sentences"]
-    loops = [s for s in sentences if is_loop(s.get("text") or "")]
+    loops = loop_spans(payload)
     rest = [s for s in sentences if not is_loop(s.get("text") or "")]
     db = loudness(audio)
     loop_db, quiet = median_db(db, loops)
@@ -185,6 +234,7 @@ def measure(
         model=str(payload.get("model", "?")).rsplit("/", 1)[-1],
         minutes=len(db) / 60,
         sentences=len(sentences),
+        words=len(words(sentences)) + loop_words(payload),
         urdu_pct=urdu_pct(sentences),
         urdu_pct_no_loops=urdu_pct(rest),
         loop_s=sum(s["end"] - s["start"] for s in loops),
@@ -213,20 +263,38 @@ def commit() -> str:
 
 
 def other_runs() -> list[str]:
-    found = subprocess.run(["pgrep", "-f", "dsj suno"], capture_output=True, text=True).stdout
+    """PIDs of running `dsj suno` processes.
+
+    Anchored to a path separator or a space before `dsj` and a space after
+    `suno`, so it finds `uv run dsj suno x.m4a` and `.venv/bin/dsj suno x.m4a`
+    but not a shell whose own command line only mentions the words, such as a
+    watcher running `pgrep -f 'dsj suno'`, which blocked every run until it
+    exited.
+    """
+    found = subprocess.run(["pgrep", "-f", "(^|[ /])dsj suno "], capture_output=True, text=True).stdout
     return found.split()
 
 
-def transcribe(rec: Recording, audio: Path, folder: Path, extra: list[str]) -> None:
+def transcribe(name: str, audio: Path, folder: Path, flags: list[str]) -> None:
     """One `dsj suno` run into `folder`, with its wall time and command beside it."""
-    cmd = ["uv", "run", "dsj", "suno", str(audio), "-o", str(folder / f"{rec.name}.json"),
-           "--status", str(folder / f"{rec.name}.status.json"), *rec.flags, *extra]
+    cmd = ["uv", "run", "dsj", "suno", str(audio), "-o", str(folder / f"{name}.json"),
+           "--status", str(folder / f"{name}.status.json"), *flags]
     started = time.monotonic()
-    with (folder / f"{rec.name}.log").open("w") as log:
+    with (folder / f"{name}.log").open("w") as log:
         code = subprocess.run(cmd, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode
     meta = {"wall_s": time.monotonic() - started, "returncode": code,
             "args": cmd[4:], "commit": commit()}
-    (folder / f"{rec.name}.bench.json").write_text(json.dumps(meta, indent=2))
+    (folder / f"{name}.bench.json").write_text(json.dumps(meta, indent=2))
+
+
+def start(name: str, audio: Path, folder: Path, flags: list[str]) -> None:
+    """transcribe(), unless another `dsj suno` is running (#136)."""
+    busy = other_runs()
+    if busy:
+        sys.exit(f"refusing to start {name}: dsj suno is already running "
+                 f"as PID {', '.join(busy)}, and two at once froze this machine (#136)")
+    folder.mkdir(parents=True, exist_ok=True)
+    transcribe(name, audio, folder, flags)
 
 
 def fmt(value: float | None, spec: str) -> str:
@@ -237,12 +305,12 @@ def table(title: str, rows: list[Row]) -> str:
     lines = [
         f"## {title}",
         "",
-        "| file | lang | model | min | sent | urdu% | -loops | loop s | loop dB | speech dB | quiet% | x rt | agree% |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| file | lang | model | min | sent | words | urdu% | -loops | loop s | loop dB | speech dB | quiet% | x rt | agree% |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         lines.append(
-            f"| {r.name.removeprefix('recording-')} | {r.language} | {r.model} | {r.minutes:.1f} | {r.sentences} "
+            f"| {r.name.removeprefix('recording-')} | {r.language} | {r.model} | {r.minutes:.1f} | {r.sentences} | {r.words} "
             f"| {r.urdu_pct:.0f} | {r.urdu_pct_no_loops:.0f} | {r.loop_s:.0f} "
             f"| {fmt(r.loop_db, '.1f')} | {fmt(r.speech_db, '.1f')} | {fmt(r.quiet_pct, '.0f')} "
             f"| {fmt(r.speed, '.2f')} | {fmt(r.agree_pct, '.1f')} |"
@@ -263,19 +331,22 @@ def baseline(root: Path, chosen: list[Recording]) -> list[Row]:
             for rec in chosen]
 
 
-def run(root: Path, label: str, chosen: list[Recording], extra: list[str]) -> list[Row]:
+def flags_for(rec: Recording, unanchored: bool) -> list[str]:
+    if unanchored and "--roman-urdu" in rec.flags:
+        return [*(f for f in rec.flags if f != "--roman-urdu"), *UNANCHORED]
+    return list(rec.flags)
+
+
+def run(
+    root: Path, label: str, chosen: list[Recording], extra: list[str], unanchored: bool
+) -> list[Row]:
     folder = OUT / "runs" / label
     rows: list[Row] = []
     for rec in chosen:
         out = folder / f"{rec.name}.json"
         if not out.exists():
-            busy = other_runs()
-            if busy:
-                sys.exit(f"refusing to start {rec.name}: dsj suno is already running "
-                         f"as PID {', '.join(busy)}, and two at once froze this machine (#136)")
             print(f"transcribing {rec.name} ({rec.role}) ...", flush=True)
-            folder.mkdir(parents=True, exist_ok=True)
-            transcribe(rec, audio_of(root, rec), folder, extra)
+            start(rec.name, audio_of(root, rec), folder, [*flags_for(rec, unanchored), *extra])
         meta_path = folder / f"{rec.name}.bench.json"
         meta: dict[str, Any] = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         if not out.exists():
@@ -286,6 +357,84 @@ def run(root: Path, label: str, chosen: list[Recording], extra: list[str]) -> li
     return rows
 
 
+@dataclass(frozen=True)
+class FixtureRow:
+    name: str
+    words: int
+    urdu_pct: float
+    urdu_pct_no_loops: float
+    loop_s: float
+    gap_words: tuple[int, ...]
+    speed: float | None
+
+
+def measure_fixture(transcript: Path, wall_s: float | None) -> FixtureRow:
+    truth = json.loads((FIXTURE / "ground_truth.json").read_text())
+    gaps = [(g["start"], g["end"]) for g in truth["segments"] if g["kind"] == "gap"]
+    payload = json.loads(transcript.read_text())
+    sentences: list[dict[str, Any]] = payload["sentences"]
+    starts = [float(t["t"]) for s in sentences for t in s.get("tokens") or []]
+    rest = [s for s in sentences if not is_loop(s.get("text") or "")]
+    taken = loops_taken(payload)
+    return FixtureRow(
+        name=str(transcript.relative_to(REPO)) if transcript.is_relative_to(REPO) else str(transcript),
+        words=len(words(sentences)) + loop_words(payload),
+        urdu_pct=urdu_pct(sentences),
+        urdu_pct_no_loops=urdu_pct(rest),
+        loop_s=sum(s["end"] - s["start"] for s in loop_spans(payload)),
+        gap_words=tuple(
+            sum(1 for t in starts if a <= t < b) + round(sum(share_in(u, a, b) * u["words"] for u in taken))
+            for a, b in gaps
+        ),
+        speed=float(truth["duration_s"]) / wall_s if wall_s else None,
+    )
+
+
+def share_in(span: dict[str, Any], a: float, b: float) -> float:
+    """How much of `span` lies inside [a, b), as a fraction of its length.
+
+    A loop dsj took out keeps its word count but not its word times, so its
+    words are spread evenly over its span to count how many fell in a gap.
+    """
+    length = span["end"] - span["start"]
+    if length <= 0:
+        return 1.0 if a <= span["start"] < b else 0.0
+    return max(0.0, min(span["end"], b) - max(span["start"], a)) / length
+
+
+def fixture_table(title: str, row: FixtureRow) -> str:
+    gaps = " | ".join(str(n) for n in row.gap_words)
+    return (
+        f"## {title}\n\n"
+        "| transcript | words | urdu% | -loops | loop s | words in 10 s gap | 30 s gap | 60 s gap | x rt |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        f"| {row.name} | {row.words} | {row.urdu_pct:.0f} | {row.urdu_pct_no_loops:.0f} "
+        f"| {row.loop_s:.0f} | {gaps} | {fmt(row.speed, '.2f')} |\n"
+    )
+
+
+def fixture(label: str | None, transcript: str | None, extra: list[str]) -> str:
+    """Transcribe #148's fixture under `label`, or measure `transcript`; return the table."""
+    if transcript:
+        path = Path(transcript).resolve()
+        return fixture_table(f"fixture, {path.name} as it stands", measure_fixture(path, None))
+    assert label is not None
+    audio = FIXTURE / "podcast.wav"
+    if not audio.exists():
+        sys.exit(f"{audio} is missing; build it with `just urdu-fixture` (#148)")
+    folder = OUT / "runs" / label
+    out = folder / "podcast.json"
+    if not out.exists():
+        print(f"transcribing {audio.name} (#148's fixture) ...", flush=True)
+        start("podcast", audio, folder, ["--roman-urdu", "--no-diarize", *extra])
+    meta_path = folder / "podcast.bench.json"
+    meta: dict[str, Any] = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    if not out.exists():
+        sys.exit(f"podcast: dsj exited {meta.get('returncode')}, see {folder / 'podcast.log'}")
+    title = f"fixture, {label} · commit {meta.get('commit', commit())} · extra flags: {' '.join(extra) or 'none'}"
+    return fixture_table(title, measure_fixture(out, meta.get("wall_s")))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -294,8 +443,23 @@ def main(argv: list[str]) -> int:
     go = sub.add_parser("run", help="transcribe the set with dsj suno, then measure")
     go.add_argument("--label", required=True, help="folder under scratch/real_bench/runs/")
     go.add_argument("--only", help="substring of one file name, e.g. 101117")
+    go.add_argument("--unanchored", action="store_true",
+                    help="the Roman Urdu prompt without --roman-urdu's anchoring")
     go.add_argument("extra", nargs=argparse.REMAINDER, help="after --: extra dsj suno flags")
+    fx = sub.add_parser("fixture", help="transcribe or measure #148's public fixture")
+    which = fx.add_mutually_exclusive_group(required=True)
+    which.add_argument("--label", help="folder under scratch/real_bench/runs/")
+    which.add_argument("--transcript", help="measure this transcript of podcast.wav instead")
+    fx.add_argument("extra", nargs=argparse.REMAINDER, help="after --: extra dsj suno flags")
     args = parser.parse_args(argv)
+
+    if args.command == "fixture":
+        text = fixture(args.label, args.transcript, [a for a in args.extra if a != "--"])
+        print(text)
+        OUT.mkdir(parents=True, exist_ok=True)
+        with (OUT / "results.md").open("a") as fh:
+            fh.write(text + "\n")
+        return 0
 
     folder = os.environ.get("DSJ_REAL_AUDIO")
     if not folder:
@@ -310,8 +474,9 @@ def main(argv: list[str]) -> int:
         record(f"baseline, 22 Sep transcripts · {stamp} · commit {commit()}", baseline(root, chosen))
     else:
         extra = [a for a in args.extra if a != "--"]
-        title = f"{args.label} · {stamp} · commit {commit()} · extra flags: {' '.join(extra) or 'none'}"
-        record(title, run(root, args.label, chosen, extra))
+        anchoring = " · unanchored" if args.unanchored else ""
+        title = f"{args.label} · {stamp} · commit {commit()}{anchoring} · extra flags: {' '.join(extra) or 'none'}"
+        record(title, run(root, args.label, chosen, extra, args.unanchored))
     return 0
 
 

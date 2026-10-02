@@ -261,6 +261,49 @@ def test_the_call_asks_for_words_and_silences_the_bar(monkeypatch: pytest.Monkey
     assert seen["initial_prompt"] == ROMAN_URDU_PROMPT
 
 
+def test_both_transcribe_calls_pass_the_anomaly_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The unanchored call and every anchored window get HALLUCINATION_SILENCE_S (#99).
+
+    Read when the call is made, not when the module is imported, because that
+    is how scratch/whisper_sweep.py measures a setting: it assigns the module
+    attribute and then runs dsj's own CLI. So the constant is set to a value
+    that is not mlx-whisper's default, and a call that dropped the keyword or
+    froze it at import would fail. Two paths, because `--roman-urdu` goes
+    through `_anchored` and `--engine whisper` alone does not: a value wired
+    into one of the two calls would pass every test that exercises the other.
+    `word_timestamps=True` is asserted beside it because the switch only runs
+    with word timestamps on.
+    """
+    monkeypatch.setattr(whisper_mod, "HALLUCINATION_SILENCE_S", 3.5)
+    seen: dict[str, Any] = {}
+    _stub_mlx_whisper(monkeypatch, _result(), seen)
+    transcribe_whisper(Path("a.wav"), language="en")
+
+    assert seen["hallucination_silence_threshold"] == 3.5
+    assert seen["word_timestamps"] is True
+
+    calls = _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+    transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    assert len(calls) == 3
+    for call in calls:
+        assert call["hallucination_silence_threshold"] == 3.5
+        assert call["word_timestamps"] is True
+
+
+def test_the_anomaly_threshold_is_off() -> None:
+    """Off is the measured choice: on, it removed real speech with the loops (#99).
+
+    None is mlx-whisper's own default and means the switch never runs. A
+    change here re-opens #99 and needs its measurement repeated first.
+    """
+    assert whisper_mod.HALLUCINATION_SILENCE_S is None
+
+
 def test_the_missing_extra_names_both_install_forms(monkeypatch: pytest.MonkeyPatch) -> None:
     """A None in sys.modules is what an absent module raises through."""
     monkeypatch.setitem(sys.modules, "mlx_whisper", None)
@@ -289,7 +332,7 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     payload = transcribe(fake_media, out, engine="whisper", diarize=False)
 
-    assert set(payload) == {"audio", "model", "text", "sentences"}
+    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
     assert payload["model"] == whisper_mod.DEFAULT_WHISPER_MODEL
     assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
         "t": 0.0,
@@ -348,7 +391,7 @@ def test_roman_urdu_sets_the_engine_the_language_and_the_prompt(
 
     seen: dict[str, object] = {}
 
-    def fake(media: Path, out: Path, model: str = "", **kw: object) -> dict[str, object]:
+    def fake(_media: Path, _out: Path, model: str = "", **kw: object) -> dict[str, object]:
         seen.update({"model": model, **kw})
         return {"sentences": []}
 
@@ -653,8 +696,8 @@ def test_anchor_s_must_exceed_overlap_s(monkeypatch: pytest.MonkeyPatch) -> None
     Left unguarded, `step = anchor_s - overlap_s` goes to zero or negative:
     `range(0, total, 0)` raises a confusing `range() arg 3 must not be zero`,
     and a negative step iterates zero times, silently returning no transcript
-    for the whole file. Neither is what should happen when the ratio the
-    116s measurement (#100, unverified) justifies gets retuned.
+    for the whole file. Neither is what should happen when ANCHOR_CHUNK_S,
+    set from #100's window measurements, gets retuned.
     """
     _stub_mlx_whisper(monkeypatch, _result())
 

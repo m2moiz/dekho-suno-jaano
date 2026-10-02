@@ -71,17 +71,39 @@ fallback: if the chosen engine cannot run, nothing is transcribed and the run ex
 
 | | parakeet | whisper | sherpa |
 |---|---|---|---|
-| Speed | About 13x realtime | About 1.4x realtime | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
+| Speed | About 13x realtime | About 1.7 to 3x on Urdu with `--roman-urdu`, about 5 to 6x on English. Per file in [whisper speed](#whisper-speed) | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
 | Platform | Apple Silicon, Metal | Apple Silicon, Metal | Anywhere sherpa-onnx has wheels |
 | Languages | 25, all European. No Urdu | Whatever whisper reads, including Urdu | Same weights as parakeet |
 | Checkpoint and resume | Yes | **No.** An interrupted run starts over | Yes |
-| Progress reporting | Per chunk | **One frame at 0%**, then nothing until the end | Per chunk |
+| Progress reporting | Per chunk | With `--roman-urdu`, per window of about two minutes. Otherwise **one frame at 0%**, then nothing until transcription ends | Per chunk |
 | Speaker labels | With the diarize extra | With the diarize extra | Not on the android bundle |
 | Needs `--model` | No | No | **Yes**, see below |
 
 parakeet is the default because it is roughly ten times faster and does not hallucinate
 over silence. All three are fine for a voice note; only the chunked ones are right for an
 hour of lecture.
+
+### whisper speed
+
+Every whisper speed figure in this repo, in one place. Wall clock from start to written
+transcript, model load and audio extraction included, `whisper-large-v3-turbo`, on a 16 GB
+M2 running one whisper at a time. Memory pressure alone has moved these threefold (issue
+#139), so each carries the machine state it was measured in.
+
+| audio | command | commit | speed | memory free at the low point |
+|---|---|---|---|---|
+| owner's 094234, Urdu, 27.9 min | `dsj suno <file> --roman-urdu` | `2f66fce` | 2.98x, 2.63x (two runs) | not logged |
+| owner's 162033, Urdu, 22.0 min | `dsj suno <file> --roman-urdu` | `2f66fce` | 2.90x | 28 to 29% |
+| owner's 171500, Urdu, 28.1 min | `dsj suno <file> --roman-urdu` | `9506685` | 2.19x | not logged |
+| owner's 101117, Urdu and English, 13.1 min | `dsj suno <file> --roman-urdu` | `8ff5871` | 1.71x | 77% at the start, low point not logged |
+| public fixture, Urdu and English, 854 s | `dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize` | `06d0576` | 3.41x (earlier 3.22x) | not logged |
+| owner's 153458, English, 16.7 min | `dsj suno <file> --engine whisper` | `2f66fce` | 5.31x (earlier 6.37x) | 39% |
+
+The owner's recordings are private and ran with speaker labelling, so their times include
+it; the fixture ran with `--no-diarize`. `9506685` differs from `2f66fce` only in
+`scratch/`, and `8ff5871` only in comments and docs, so the decode path is the same. `scratch/real_bench.py run --label <new> --only
+<name>` re-measures an owner's file, and `scratch/real_bench.py fixture --label <new>` the
+fixture.
 
 ## Urdu, and anything parakeet cannot read
 
@@ -96,15 +118,49 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 `--engine parakeet` to whisper for you. Roman Urdu is a **prompt**, not a setting: whisper
 writes Urdu in Urdu script by default, and seeding the decoder with a Roman Urdu example
 makes it emit Latin, which its own condition-on-previous-text then carries across
-windows. Measured on 116 seconds of Urdu speech, 275 of 277 words came back in Latin, with
+windows. On the public fixture below, 3% of the text comes back in Urdu script, with
 English words left in English where they were spoken in English.
+
+On long recordings the prompt is pushed out of whisper's context after 22 to 105 seconds,
+so `--roman-urdu` cuts the audio into 120-second windows and re-seeds each one. That
+window is measured, on the owner's two recordings that drift most (issue #100,
+2026-10-02, turbo, `dsj suno <file> --roman-urdu`, the 30-second rows with
+`ANCHOR_CHUNK_S` set to 30 by `scratch/whisper_sweep.py`):
+
+| recording | window | runs | words | Urdu script | loop seconds |
+|---|---|---:|---|---|---|
+| 101117, 13.1 min | none (22 Sep) | 1 | 1,181 | 81% | 196 |
+| | 120 s | 3 | 1,427 · 1,332 · 1,460 | 59 · 47 · 47% | 174 · 166 · 164 |
+| | 30 s | 2 | 1,141 · 1,061 | 13 · 6% | 487 · 321 |
+| 094234, 27.9 min | none (22 Sep) | 1 | 2,786 | 98% | 171 |
+| | 120 s | 2 | 3,251 · 3,102 | 39 · 44% | 86 · 343 |
+| | 30 s | 2 | 3,095 · 2,632 | 10 · 7% | 291 · 562 |
+
+A shorter window keeps more text in Latin and loses words, so the window stays at 120
+seconds. Expect some Urdu script in a long `--roman-urdu` transcript; the owner accepts it,
+because the target is complete text, not Roman spelling.
 
 `--prompt` takes your own text instead. `--language` and `--prompt` are whisper's alone;
 passing either with parakeet is an error rather than a silent no-op.
 
-The model matters more than it looks. The full `whisper-large-v3` ignores the prompt
-outright and takes about two and a half times as long, so `whisper-large-v3-turbo` is the
-default here and changing it means re-measuring.
+The model matters more than it looks. Measured on the public Urdu-English fixture
+(`just urdu-fixture`, 854 seconds, 1,293 English words in the hand-checked reference), one
+run each, one whisper at a time on a 16 GB M2 (issue #33, 2026-10-02):
+
+| model | flags | English words recovered | Urdu script | speed |
+|---|---|---:|---:|---:|
+| `whisper-large-v3-turbo` | `--roman-urdu` | 89.6% | 3% | 3.41x |
+| `whisper-large-v3-turbo` | `--engine whisper --language ur` | 12.3% | 78% | 1.99x |
+| `whisper-large-v3-mlx` (full) | `--roman-urdu` | 59.4% | 63% | 0.50x, 23% memory free |
+| `whisper-large-v3-mlx` (full) | `--engine whisper --language ur` | 54.9% | 61% | 0.96x, 26% memory free |
+
+```bash
+dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model mlx-community/whisper-large-v3-mlx
+```
+
+Every run passed `--no-diarize`. The full model writes most of its text in Urdu script
+whatever the prompt says, so `whisper-large-v3-turbo` is the default here and changing it
+means re-measuring.
 
 ## sherpa, Android, and the proot constraint
 

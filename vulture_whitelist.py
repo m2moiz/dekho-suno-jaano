@@ -67,3 +67,11 @@ whitelist.from_stdin  # tests/test_whisper.py
 # and chunking.py is rarely one of them, so a branch that touches an engine
 # sees its declaration as unused.
 whitelist.min_chunk_samples  # dsj/asr.py, dsj/parakeet.py, dsj/sherpa.py
+
+# The same blind spot, for a test double. _SherpaRecognizer and _SherpaStream
+# stand in for sherpa_onnx's, and dsj/sherpa.py:146-148 calls all three. A
+# branch that changes tests/test_suno.py and not dsj/sherpa.py scans the fakes
+# without their caller and reports them unused.
+whitelist.create_stream  # tests/test_suno.py
+whitelist.accept_waveform  # tests/test_suno.py
+whitelist.decode_stream  # tests/test_suno.py

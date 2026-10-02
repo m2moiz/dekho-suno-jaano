@@ -22,10 +22,12 @@ Two things it does not measure, so read the output with them in mind:
 2. Repetition loops count as speech, in whichever script they are written.
    A Latin loop ("ho ho ho ho ...") reads as more Roman; a loop of one Urdu
    letter repeated reads as more Urdu. On recording-20260922-171500 that
-   second kind is 671 of the file's 1,684 seconds: the share is 56% with the
-   loops in and 15% with them out, so that file's number is mostly loops,
-   not drift. On the three Sunday files removing loops moves the share by
-   one to three points. Separate the two before reading this as drift (#140).
+   second kind is 727 of the 1,392 seconds its sentences cover: the share is
+   56% with the loops in and 8% with them out, so that file's number is
+   mostly loops, not drift. On the three Sunday files removing loops moves
+   the share by one to six points. Separate the two before reading this as
+   drift: scratch/real_bench.py's -loops column does, with its is_loop rule
+   (#140).
 
     uv run python scratch/urdu_script_share.py path/to/recording-*.json
 

@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.2.0
+  version: 0.2.1
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -80,8 +80,10 @@ Progress renders on stderr. **Nothing goes to stdout**, so empty stdout says not
 about whether it worked.
 
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
-anything else outside that set, use whisper, which is about 1.4x realtime, writes no
-checkpoint, and reports no progress between start and finish:
+anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
+`--roman-urdu` and about 5 to 6x on English (measured per file in
+[references/engines.md](references/engines.md#whisper-speed)) and writes no checkpoint. A `--roman-urdu` run reports progress once per window of about two minutes;
+any other whisper run reports 0% and then nothing until transcription ends:
 
 ```bash
 dsj suno voice-note.m4a -o transcript.json --roman-urdu

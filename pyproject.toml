@@ -1,6 +1,6 @@
 [project]
 name = "dsj"
-version = "0.2.0"
+version = "0.2.1"
 description = "Make a long screen recording answerable: a timestamped transcript indexes the video, frames are retrieved on demand."
 readme = "README.md"
 # Capped, not open-ended, and the reason is measured rather than assumed.
@@ -154,7 +154,9 @@ filterwarnings = [
 # result could not be read. The carve-out now has a NAMED OBSERVER rather than
 # a habit: `just verify` runs everything and is the session-close gate, and CI
 # runs the fast lane on every push once a remote exists.
-markers = ["slow: loads the ASR model or the diarizer; run via `just verify`"]
+markers = [
+    "slow: loads the ASR model or the diarizer, or reads a built fixture; run via `just verify`",
+]
 
 [tool.ruff]
 line-length = 100

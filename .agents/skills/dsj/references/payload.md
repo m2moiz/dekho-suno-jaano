@@ -17,13 +17,14 @@ which is a sample index. There are no milliseconds anywhere.
 
 ## The transcript, written by `suno`
 
-Four keys, always, in this order:
+Five keys, always, in this order:
 
 ```json
 {
   "audio": "/path/to/recording.mov",
   "model": "mlx-community/parakeet-tdt-0.6b-v3",
   "text": "the whole transcript as one string",
+  "unclear": [{"start": 134.1, "end": 161.8, "reason": "repetition loop", "words": 223}],
   "sentences": [
     {
       "start": 12.34,
@@ -41,7 +42,31 @@ Four keys, always, in this order:
 | `audio` | string | The path you passed, verbatim. Not resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. |
 | `model` | string | The resolved model id. There is no separate `engine` key; the model id names the engine. |
 | `text` | string | Whole transcript, one string: every sentence's `text` joined, outer whitespace stripped. |
+| `unclear` | array | Stretches dsj took out of `sentences` because what the engine returned there is not a transcript, earliest first. `[]` when there were none. Below. |
 | `sentences` | array | Can be `[]` for silent media. That is a valid transcript, not a failure. |
+
+Inside an `unclear` entry:
+
+| Field | Type | Notes |
+|---|---|---|
+| `start`, `end` | float seconds | The span of the sentence that was taken out, in whole milliseconds like a sentence's. |
+| `reason` | string | Why. Today always `repetition loop`. |
+| `words` | int | How many words the engine wrote there. The words themselves are not kept. |
+
+**A repetition loop** is a sentence of more than six words, at most a third of them
+distinct: whisper writing one letter or a short phrase over and over, up to about 220
+times in one window. On four of the owner's recordings loops covered 133 to 752 seconds a
+file, over audio as loud as the speech around them, so most mark speech whisper failed to
+read, not silence; on the public fixture one sat over 60 s of near-silence instead. The text is no guide to what was said
+there, so it is left out of `sentences` and `text`, and the span stays here so the gap is
+not read as a pause. To know what was said, listen to the span or transcribe it again.
+On the five whisper transcripts the rule was measured on, every sentence it matched was a
+loop. It runs under every engine; on a parakeet transcript of a 17-minute English call it
+matched nothing.
+
+**Test for the key.** Transcripts written before it existed have no `unclear`, and their
+loops are still in `sentences`. Imports from SRT and VTT have none either: nothing checked
+them.
 
 Inside a sentence:
 
@@ -181,6 +206,9 @@ jq -r 'if has("speakers") then [.sentences[].speaker] | group_by(.) | map({s: .[
 
 # plain text, no timings
 jq -r '.text' t.json
+
+# where the transcript has nothing usable, and why
+jq -r '(.unclear // [])[] | "\(.start)-\(.end)  \(.reason)  \(.words) words"' t.json
 ```
 
 **`sentences` runs earliest first, and so do the `tokens` inside each one**, under every
@@ -240,7 +268,7 @@ How often each state is written:
 |---|---|
 | `extracting` | About twice a second, and only when the input is not already a 16 kHz mono wav |
 | `running` (parakeet, sherpa) | Once per chunk, so once per 105 seconds of audio |
-| `running` (whisper) | **Once, at 0%**, then nothing until the end. Whisper owns its own window loop and exposes no hook |
+| `running` (whisper) | With `--roman-urdu`, once per window of about two minutes: dsj cuts the windows itself. Any other whisper run, **once, at 0%**, then nothing until transcription ends: mlx-whisper takes no progress callback |
 | `diarizing` | **Exactly twice**, at the start and the end. Senko has no per-chunk callback and inventing a bar would be a lie |
 | `done` | Once |
 

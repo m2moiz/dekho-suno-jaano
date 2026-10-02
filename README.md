@@ -184,23 +184,57 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 Roman Urdu is a **prompt**, not a setting. whisper writes Urdu in Urdu script by
 default; seeding the decoder with a Roman Urdu example makes it emit Latin, and
 whisper's own condition-on-previous-text carries that across windows, for as
-long as the prompt survives (it does not on long recordings, see below).
-**UNVERIFIED, no reproducing script in this repo (m2moiz/dekho-suno-jaano#100):**
-measured on 116s of Urdu speech, 275 of 277 words were claimed to come back in
-Latin, English words left in English where they were spoken in English, which
-is the point, for speech that switches mid-sentence. `--roman-urdu` is that
-prompt plus `--language ur`; `--prompt` takes your own.
+long as the prompt survives. On the public fixture below, 3% of the text comes
+back in Urdu script, with English words left in English where they were spoken
+in English, which is the point, for speech that switches mid-sentence.
+`--roman-urdu` is that prompt plus `--language ur`; `--prompt` takes your own.
 
-The model matters more than it looks. The full `whisper-large-v3` ignores the
-prompt outright — 280 of 280 words in Urdu script, and 218s rather than 85s for
-the same clip. Turbo is the default here for that reason, and changing it means
-re-measuring.
+On long recordings the prompt is pushed out of whisper's context after 22 to
+105 seconds, so `--roman-urdu` re-seeds it every 120 seconds. Measured on the
+owner's two recordings where it drifts most, whisper-large-v3-turbo
+(m2moiz/dekho-suno-jaano#100):
 
-Two things the whisper engine does not do: it writes **no checkpoint**, so an
-interrupted run starts over, and it reports **no progress** between start and
-finish — it owns its own window loop and exposes no hook to bank or count one
-from. It runs at ~1.4x realtime against parakeet's ~13x. All three are fine for
-a voice note and wrong for an hour of lecture, which is why parakeet stays the
+| recording | window | runs | words | Urdu script | loop seconds |
+|---|---|---:|---|---|---|
+| 101117, 13.1 min | none (22 Sep) | 1 | 1,181 | 81% | 196 |
+| | 120s | 3 | 1,427 · 1,332 · 1,460 | 59 · 47 · 47% | 174 · 166 · 164 |
+| | 30s | 2 | 1,141 · 1,061 | 13 · 6% | 487 · 321 |
+| 094234, 27.9 min | none (22 Sep) | 1 | 2,786 | 98% | 171 |
+| | 120s | 2 | 3,251 · 3,102 | 39 · 44% | 86 · 343 |
+| | 30s | 2 | 3,095 · 2,632 | 10 · 7% | 291 · 562 |
+
+Each run is `dsj suno <file> --roman-urdu`, the 30s rows with `ANCHOR_CHUNK_S`
+set to 30 by `scratch/whisper_sweep.py`. A shorter window keeps more of the text
+in Latin and loses words, so the window stays at 120s: the goal is complete
+text, and Urdu script in the output is accepted.
+
+The model matters more than it looks. On the public Urdu-English fixture
+(`just urdu-fixture`, 854s), one run each with `--roman-urdu`
+(m2moiz/dekho-suno-jaano#33):
+
+| model | English words recovered | Urdu script | speed |
+|---|---:|---:|---:|
+| `whisper-large-v3-turbo` | 89.6% | 3% | 3.41x realtime |
+| `whisper-large-v3-mlx` (full) | 59.4% | 63% | 0.50x, with 23% of memory free |
+
+```bash
+dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>
+```
+
+The full model writes most of its text in Urdu script whatever the prompt says.
+Turbo is the default here for that reason, and changing it means re-measuring.
+
+The whisper engine writes **no checkpoint**, so an interrupted run starts over:
+it owns its own window loop and exposes no hook to bank one from. How much
+progress it reports depends on the run. `--roman-urdu` cuts the audio into
+two-minute windows itself and reports after each one. Any other whisper run,
+`--prompt` and `--language` included, reports 0% and then **nothing until
+transcription ends**, because mlx-whisper takes no progress callback. It runs
+at about 1.7 to 3x realtime on Urdu with `--roman-urdu` and about 5 to 6x on
+English, against parakeet's ~13x, on a 16 GB M2 running one whisper at a time.
+The per-file numbers, with the command, commit and memory state of each, are in
+[engines.md](.agents/skills/dsj/references/engines.md#whisper-speed). All
+three cost more the longer the recording, which is why parakeet stays the
 default.
 
 It is part of the `mac` bundle; standalone installs can pick it alone
@@ -332,6 +366,9 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
   "speakers": ["SPEAKER_00", "SPEAKER_01"],   // only when diarization ran
   "diarization": "senko 0.1.0",               // absent if it did not
   "text": "the whole transcript as one string",
+  // stretches taken out of `sentences`: whisper looping on one letter or phrase.
+  // [] when there were none; absent from transcripts written before it existed
+  "unclear": [{"start": 134.1, "end": 161.8, "reason": "repetition loop", "words": 223}],
   "sentences": [
     {
       "start": 12.34,

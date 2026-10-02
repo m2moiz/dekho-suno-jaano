@@ -5,17 +5,23 @@
 Urdu -- its 25 languages are European, and `ur` is not among the model card's
 tags. A voice note that mixes Urdu and English comes back as nothing usable.
 
-whisper-large-v3-turbo does read it, at a cost: measured on 116s of Urdu speech
-it took 84.7s (~1.4x realtime) against parakeet's ~13x. That is fine for a voice
-note and would not be for an hour of lecture, which is why this is a flag and
-not a replacement.
+whisper-large-v3-turbo does read it, at a cost: about 1.7 to 3x realtime on
+Urdu with `--roman-urdu`, about 5 to 6x on English, on a 16 GB M2 running one
+whisper at a time, model load included. Each figure, with its file, command,
+commit and the memory free while it ran, is in one place:
+.agents/skills/dsj/references/engines.md, "whisper speed". Memory pressure
+alone has moved it threefold on this Mac (#139), so quote it with the machine
+state or not at all.
+
+parakeet runs at ~13x. That gap, and whisper's habit of inventing words, is why
+this is a flag and not a replacement.
 
 ROMAN URDU IS A PROMPT, NOT A SETTING. whisper transcribes Urdu in Urdu script
 by default. Seeding the decoder with a Roman Urdu `initial_prompt` makes it emit
 Roman instead, and it carries across windows through whisper's own
-condition-on-previous-text. UNVERIFIED -- no reproducing script in this repo,
-see #100: over the same 116s, 275 of 277 words were claimed to come back in
-Latin, the two exceptions single words inside otherwise-Roman sentences.
+condition-on-previous-text. On #148's public fixture `--roman-urdu` leaves 3%
+of the text in Urdu script (#33's row below), and a slow test in
+tests/test_urdu_fixture.py fails if that share goes above 15%.
 
 THAT ONLY HOLDS FOR SHORT AUDIO, and not because the seed reaches only the
 first window and nothing past it. `initial_prompt` is folded into an
@@ -33,10 +39,21 @@ fourth file's transcript no longer exists (#137). `anchor_s` re-seeds the
 prompt per window and bounds how far this can drift; `--roman-urdu` sets it.
 See `_anchored`.
 
-That trick is model-specific, and the difference is not subtle. The full
-whisper-large-v3 ignores the prompt completely -- 280 of 280 words in Urdu
-script, in 218s rather than 85s. Hence the default here is turbo, and changing
-it means re-measuring rather than assuming.
+That trick is model-specific, and the difference is not subtle. Measured on
+#148's public fixture (854s, 1,293 English words in the hand-checked
+reference), one run each, one whisper at a time on a 16 GB M2 (#33,
+2026-10-02):
+
+- whisper-large-v3-turbo, `--roman-urdu`: 89.6% of the reference's English
+  words recovered, 3% of the text in Urdu script, 3.41x realtime.
+- whisper-large-v3-mlx, the full model, `--roman-urdu`: 59.4%, 63%, 0.50x, with 23% of
+  memory free and 12.1 GB of swap in use while it ran.
+
+`just urdu-fixture`, then
+`dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>`.
+The full model writes most of its text in Urdu script whatever the prompt
+says, at 4 and 8 bits too, so the default here is turbo (DEFAULT_WHISPER_MODEL);
+changing it means re-running that comparison rather than assuming.
 """
 
 from __future__ import annotations
@@ -45,6 +62,7 @@ __all__ = [
     "ANCHOR_CHUNK_S",
     "ANCHOR_OVERLAP_S",
     "DEFAULT_WHISPER_MODEL",
+    "HALLUCINATION_SILENCE_S",
     "INSTALL_HINT",
     "ROMAN_URDU_PROMPT",
     "SAMPLE_RATE",
@@ -59,6 +77,11 @@ from typing import Any, cast
 
 from dsj.asr import Transcription, with_char_offsets
 
+# turbo, on #33's measurement (module docstring): on #148's fixture with
+# `--roman-urdu` it recovered 89.6% of the English words with 3% of its text in
+# Urdu script, at 3.41x realtime; the full whisper-large-v3 recovered 59.4%
+# with 63% in Urdu script, at 0.50x. The full model's 4-bit and 8-bit builds
+# stayed at 61 to 67% Urdu script, so precision is not what separates them.
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
 # whisper's own front end resamples to 16 kHz mono whatever it is handed, so
@@ -67,14 +90,36 @@ DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16000
 
 # The window the Roman Urdu prompt is re-seeded at, and how much of it is
-# decoded twice. 120s because the bias was measured to survive 116s unaided --
-# UNVERIFIED, no reproducing script in this repo, see #100 -- and shortening it
-# buys anchoring at the price of the continuity whisper is good at. The overlap
+# decoded twice. 120s is the best window measured (#100, 2026-10-02): fifteen
+# turbo runs on the owner's two drift recordings, 101117 and 094234, through
+# scratch/whisper_sweep.py, which sets this constant before `dsj suno <file>
+# --roman-urdu` runs. Of the windows tried (120, 60, 30s), 120s gave the most
+# words on both files and the fewest loop seconds on 101117. 30s cut Urdu
+# script to under 13% on both, and lost 10 to 22% of the words and about
+# doubled the loop seconds doing it; 60s sat between, its two runs 18 points
+# apart. Unaided, the Roman bias died 22 to 105s into four recordings, so a
+# 120s window does drift in its back half (47 to 59% Urdu script on 101117, 39
+# to 44% on 094234). That is accepted: the owner decided on 2026-10-02 that
+# Urdu script in the output is fine, and the target is complete text, not
+# Roman spelling. The overlap
 # is there so a word spoken across a boundary is whole in at least one window;
 # `_anchored` keeps each segment in exactly one of them. `_anchored` also
 # requires `ANCHOR_CHUNK_S > ANCHOR_OVERLAP_S >= 1.0`; see its own validation.
 ANCHOR_CHUNK_S = 120.0
 ANCHOR_OVERLAP_S = 6.0
+
+# mlx-whisper's `hallucination_silence_threshold`, passed to both calls below.
+# None, its own default, leaves the switch off, and off is the measured choice
+# (#99, 2026-10-02). The switch drops a segment whose first words score as
+# unlikely, too short or too long and that sits between gaps in the word
+# timestamps; it never looks at loudness. At 2 s it removed the repetition
+# loops on recording-20260920-101117 and 1,000 to 1,400 real words with them,
+# and cut English recall on #148's public fixture from 87.8% to 82.5% (78.8%
+# at 5 s). It did nothing for text invented over the fixture's 60 s silent
+# gap: about 220 words at every setting. Loops are taken out after decoding
+# instead (#140). Kept as a constant, and plumbed through, so the setting can
+# be measured again: scratch/whisper_sweep.py sets it from outside per run.
+HALLUCINATION_SILENCE_S: float | None = None
 
 INSTALL_HINT = (
     'uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"'
@@ -198,7 +243,8 @@ def _anchored(
     can also force an earlier reset, dropping the seed sooner than the token
     budget alone would. On a voice note that is invisible -- the bias it set
     still holds. On an hour it is fatal: one window returning Urdu script,
-    which a hallucination loop over silence produces on its own, becomes the
+    which a repetition loop produces on its own (#140 measured those over
+    speech-level audio, not silence), becomes the
     prompt for the next, and the run never comes back. Measured over four
     recordings on 20 Sep 2026, the share of each transcript returned in Urdu
     script despite `--roman-urdu` was 41%, 80%, 97% and 99%, worst on the
@@ -208,8 +254,8 @@ def _anchored(
     Cutting the audio up and prompting each piece bounds that: drift can spread
     within one window and no further. What it costs is the cross-window
     continuity whisper would otherwise carry, which is why the windows overlap
-    and are not shorter than the 116s the Roman bias was measured to survive
-    (also UNVERIFIED, see #100).
+    and are not shorter: at 30s the same recordings lost 10 to 22% of their
+    words (#100, measured beside ANCHOR_CHUNK_S).
 
     `condition_on_previous_text=False` is not the fix it looks like:
     mlx-whisper resets its prompt to `len(all_tokens)`, which drops the seed
@@ -262,6 +308,7 @@ def _anchored(
             language=language,
             initial_prompt=prompt,
             word_timestamps=True,
+            hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
             verbose=None,
         )
         offset = start / SAMPLE_RATE
@@ -371,6 +418,7 @@ def transcribe_whisper(
         # The whole point of choosing whisper here. merge.py's speaker vote is
         # per token, and without this whisper returns segment bounds only.
         word_timestamps=True,
+        hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
         # None, and NOT False. mlx-whisper reads this backwards from the way it
         # looks: `disable=verbose is not False`, so verbose=False is the value
         # that SHOWS its tqdm bar, and only None silences it. Observed -- the
