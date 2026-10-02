@@ -253,7 +253,11 @@ def _probe(path: Path) -> AudioStream:
     from dsj.media import AudioStream
 
     return AudioStream(
-        codec_name="pcm_s16le", sample_rate=16_000, channels=1, duration_s=4427.028
+        codec_name="pcm_s16le",
+        sample_rate=16_000,
+        channels=1,
+        duration_s=4427.028,
+        container="wav",
     )
 
 

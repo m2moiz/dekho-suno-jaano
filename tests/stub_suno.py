@@ -94,7 +94,7 @@ def _transcribe_chunked(
 def _probe(path: Path) -> media.AudioStream:
     if not path.exists():
         raise FileNotFoundError(path)
-    return media.AudioStream("pcm_s16le", RATE, 1, AUDIO_S)
+    return media.AudioStream("pcm_s16le", RATE, 1, AUDIO_S, "wav")
 
 
 def _needs_conversion(_stream: media.AudioStream, _rate: int) -> bool:

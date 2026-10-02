@@ -783,7 +783,7 @@ def test_anchored_progress_reaches_exactly_one_whatever_the_probe_said(
     from dsj import media
 
     def probe(path: Path) -> media.AudioStream:
-        return media.AudioStream("pcm_s16le", whisper_mod.SAMPLE_RATE, 1, probed_s)
+        return media.AudioStream("pcm_s16le", whisper_mod.SAMPLE_RATE, 1, probed_s, "wav")
 
     monkeypatch.setattr(media, "probe", probe)
     _stub_anchored(

@@ -872,6 +872,51 @@ def test_no_diarize_output_is_the_old_schema_exactly(
     assert set(payload["sentences"][0]) == {"start", "end", "text", "tokens"}
 
 
+def test_a_mov_whose_sound_is_already_model_shaped_still_reaches_the_diarizer_as_a_wav(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """16 kHz mono pcm_s16le in a .mov is extracted, so the labelling runs (#205).
+
+    The sound already matched what the model reads, so the extraction was
+    skipped and senko was handed the .mov itself: `file does not start with
+    RIFF id`, and a transcript with no speakers. The stand-in diarizer refuses
+    a file the way senko does, so the labels below exist only if what it was
+    handed is a WAV.
+    """
+    monkeypatch.setattr(media_mod, "probe", REAL_PROBE)
+    monkeypatch.setattr(media_mod, "needs_conversion", REAL_NEEDS_CONVERSION)
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    mov = tmp_path / "edit.mov"
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=5:duration=2",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=16000",
+         "-ac", "1", "-c:a", "pcm_s16le", "-c:v", "mpeg4", str(mov)],
+        check=True,
+    )
+    stream = REAL_PROBE(mov)
+    assert (stream.codec_name, stream.sample_rate, stream.channels) == ("pcm_s16le", 16_000, 1)
+
+    headers: list[bytes] = []
+
+    def read_like_senko(wav: Path) -> None:
+        headers.append(wav.read_bytes()[:4])
+        if headers[-1] != b"RIFF":
+            raise RuntimeError("file does not start with RIFF id")
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(**_one_speaker(then=read_like_senko))
+
+    payload = transcribe(mov, tmp_path / "out.json", resume=False)
+
+    assert headers == [b"RIFF"]
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert {s["speaker"] for s in payload["sentences"]} == {0}
+
+
 def test_diarization_failure_leaves_a_complete_unlabelled_transcript(
     fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,

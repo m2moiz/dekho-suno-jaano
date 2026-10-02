@@ -177,6 +177,25 @@ def test_conversion_skipped_for_an_already_ready_wav(ready_wav: Path) -> None:
     assert media.needs_conversion(media.probe(ready_wav), 16000) is False
 
 
+def test_conversion_needed_for_model_shaped_sound_in_a_mov(tmp_path: Path) -> None:
+    # The sound needs nothing, but the speaker labelling reads the file as a
+    # WAV, and a .mov is not one (#205).
+    mov = tmp_path / "edit.mov"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=5:duration=1",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=16000",
+        "-ac", "1", "-c:a", "pcm_s16le", "-c:v", "mpeg4", str(mov),
+    )
+    s = media.probe(mov)
+    assert (s.codec_name, s.sample_rate, s.channels) == ("pcm_s16le", 16000, 1)
+    assert s.container != "wav"
+    assert media.needs_conversion(s, 16000) is True
+
+
+def test_a_wav_reports_its_container(ready_wav: Path) -> None:
+    assert media.probe(ready_wav).container == "wav"
+
+
 def test_conversion_needed_when_the_rate_does_not_match_the_model(ready_wav: Path) -> None:
     # A 16kHz mono wav is still wrong if the model asks for something else --
     # which is why the rate is a parameter and not a constant.

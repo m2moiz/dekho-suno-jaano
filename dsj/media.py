@@ -105,6 +105,10 @@ class AudioStream:
     sample_rate: int
     channels: int
     duration_s: float
+    # ffprobe's format_name for the file around the stream: "wav" for a WAV,
+    # "mov,mp4,m4a,3gp,3g2,mj2" for a .mov. The stream fields alone cannot say
+    # whether a reader that wants a WAV file can be handed the file (#205).
+    container: str
 
 
 def _tool(name: str) -> str:
@@ -132,7 +136,7 @@ def probe(media: Path) -> AudioStream:
             "-v", "error",
             "-select_streams", "a:0",
             "-show_entries", "stream=codec_name,sample_rate,channels,duration",
-            "-show_entries", "format=duration",
+            "-show_entries", "format=duration,format_name",
             "-print_format", "json",
             str(media),
         ],
@@ -176,6 +180,7 @@ def probe(media: Path) -> AudioStream:
         sample_rate=int(stream["sample_rate"]),
         channels=int(stream["channels"]),
         duration_s=float(duration),
+        container=str(fmt["format_name"]),
     )
 
 
@@ -186,9 +191,15 @@ def needs_conversion(stream: AudioStream, sample_rate: int) -> bool:
     `-ac 1 -acodec pcm_s16le -ar <preprocessor rate>` and nothing else, so a
     file already in that shape can be handed straight to the model. Anyone who
     pre-extracted their audio by hand lands here and pays nothing.
+
+    The container counts too, because the same file goes on to the speaker
+    labelling, and senko reads it as a WAV. A .mov whose sound is already 16 kHz
+    mono pcm_s16le transcribed fine and then lost its labels to `file does not
+    start with RIFF id` (#205). Only a WAV is passed through as it is.
     """
     return not (
-        stream.codec_name == "pcm_s16le"
+        stream.container == "wav"
+        and stream.codec_name == "pcm_s16le"
         and stream.sample_rate == sample_rate
         and stream.channels == 1
     )
