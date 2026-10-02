@@ -4,6 +4,11 @@ The file sits beside the output rather than inside the status heartbeat. The
 heartbeat is advisory and optional (`--status`); this is load-bearing for
 correctness and keyed to the required `--out`. They also want different
 durability -- see atomic_write_text's fsync argument.
+
+Two documents share the path. parakeet and sherpa bank merged tokens after
+every chunk (write_checkpoint). whisper owns its window loop and has nothing to
+bank until it finishes, so it banks its whole result once, before the steps
+after it (write_transcription, #171).
 """
 
 from __future__ import annotations
@@ -14,7 +19,10 @@ __all__ = [
     "checkpoint_path_for",
     "fingerprint",
     "read_checkpoint",
+    "read_transcription",
+    "whisper_fingerprint",
     "write_checkpoint",
+    "write_transcription",
 ]
 
 import dataclasses
@@ -27,6 +35,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 
 from dsj.alignment import AlignedToken
+from dsj.asr import Transcription
 from dsj.atomic import atomic_write_text
 from dsj.identity import content_id
 
@@ -225,6 +234,10 @@ _WHAT_CHANGED = {
     "model_id": "the model changed",
     "chunk_s": "the chunk length changed",
     "overlap_s": "the chunk overlap changed",
+    "language": "the language changed",
+    "prompt": "the prompt changed",
+    "anchor_s": "the anchor window changed",
+    "anchor_overlap_s": "the anchor window changed",
 }
 _ENGINE_CHANGED = "the engine or its version changed"
 _UNREADABLE = "the file is not a checkpoint this dsj can read"
@@ -253,8 +266,8 @@ def _mismatch(stored: dict[str, Any], expected: dict[str, Any]) -> str | None:
     return "; ".join(f"{what} ({', '.join(keys)})" for what, keys in changed.items())
 
 
-def _load(path: Path, fp: Fingerprint) -> tuple[int, list[AlignedToken]] | str | None:
-    """The checkpoint's contents, the reason it cannot be used, or None if absent."""
+def _matching(path: Path, expected: dict[str, Any]) -> dict[str, Any] | str | None:
+    """The document at `path` if its fingerprint is `expected`, else why not, or None if absent."""
     try:
         raw: object = json.loads(path.read_text())
     except FileNotFoundError:
@@ -267,15 +280,23 @@ def _load(path: Path, fp: Fingerprint) -> tuple[int, list[AlignedToken]] | str |
         return _UNREADABLE
     # The guard above proves it is a dict but says nothing about key/value
     # types; JSON object keys are always str, and the values stay Any because
-    # the shape check happens below, in the try.
+    # the shape check is the caller's, once the fingerprint has matched.
     payload = cast("dict[str, Any]", raw)
 
     stored: object = payload.get("fingerprint")
     if not isinstance(stored, dict):
         return _UNREADABLE
-    reason = _mismatch(cast("dict[str, Any]", stored), fp.to_dict())
+    reason = _mismatch(cast("dict[str, Any]", stored), expected)
     if reason is not None:
         return reason
+    return payload
+
+
+def _load(path: Path, fp: Fingerprint) -> tuple[int, list[AlignedToken]] | str | None:
+    """The checkpoint's contents, the reason it cannot be used, or None if absent."""
+    payload = _matching(path, fp.to_dict())
+    if not isinstance(payload, dict):
+        return payload
 
     try:
         doc = _CheckpointDoc.model_validate(payload)
@@ -311,3 +332,75 @@ def read_checkpoint(
             on_reject(found)
         return None
     return found
+
+
+def whisper_fingerprint(
+    media: Path, model_id: str, engine_fields: dict[str, str]
+) -> dict[str, Any]:
+    """What a banked whisper result must match to be reused (#171).
+
+    The recording by its contents, as Fingerprint names it, the model, and
+    `engine_fields` from dsj.whisper.fingerprint_fields: the language, the
+    prompt, the anchor window and the rest that change what whisper writes.
+    No sample count and no chunk geometry: whisper reads the file itself and
+    cuts its own windows, so neither is dsj's to record.
+    """
+    return {
+        "schema": SCHEMA,
+        "content_id": content_id(media),
+        "model_id": model_id,
+    } | engine_fields
+
+
+def write_transcription(
+    path: Path, fp: dict[str, Any], media: Path, transcription: Transcription
+) -> None:
+    """Bank a finished whisper result, so an interrupt after it costs no decode (#171).
+
+    Written as soon as whisper returns, which is before loops are decoded again
+    and before speakers are labelled: an hour of whisper is lost to a Ctrl-C in
+    either otherwise. fsynced, like a chunk checkpoint, because losing it costs
+    the whole decode.
+    """
+    payload = {
+        "media": str(media.resolve()),
+        "fingerprint": fp,
+        "transcription": {"text": transcription.text, "sentences": transcription.sentences},
+    }
+    atomic_write_text(path, json.dumps(payload), fsync=True)
+
+
+class _TranscriptionDoc(BaseModel):
+    """A banked whisper result: whisper's text and sentences, as it returned them."""
+
+    text: str
+    sentences: list[dict[str, Any]]
+
+
+class _BankDoc(BaseModel):
+    """The document write_transcription writes, validated for the reason _CheckpointDoc is."""
+
+    fingerprint: dict[str, Any]
+    transcription: _TranscriptionDoc
+
+
+def read_transcription(
+    path: Path, fp: dict[str, Any], on_reject: Callable[[str], None] | None = None
+) -> Transcription | None:
+    """The banked whisper result if its fingerprint is `fp`, else None.
+
+    Rejection works as read_checkpoint's does: a file that exists and is not
+    used gets one clause through `on_reject` naming the field that differs, so
+    a run that decodes again after a changed `--prompt` says why.
+    """
+    payload = _matching(path, fp)
+    if isinstance(payload, dict):
+        try:
+            doc = _BankDoc.model_validate(payload)
+        except ValidationError:
+            payload = _UNREADABLE
+        else:
+            return Transcription(text=doc.transcription.text, sentences=doc.transcription.sentences)
+    if isinstance(payload, str) and on_reject is not None:
+        on_reject(payload)
+    return None

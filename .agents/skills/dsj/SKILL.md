@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.2.2
+  version: 0.2.3
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -29,9 +29,25 @@ Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikh
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
 file those tools made into a transcript, in place of `suno`.
 
+The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
+`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
+and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
+field is in [references/payload.md](references/payload.md).
+
 ## Before the first command
 
+**On a Mac, run dsj in the Mac's own shell.** If your shell is a Linux sandbox or VM with
+a Mac checkout mounted into it, `uname -s` prints `Linux` rather than `Darwin`: stop, and
+do not run `uv run`, `uv sync` or `just` against that checkout. uv finds a `.venv` whose
+interpreter link points at a macOS path it cannot see, deletes the whole `.venv`, and
+rebuilds it for Linux. That breaks the Mac's install, including a job already running
+there, and the Linux rebuild cannot run the Mac engines anyway. The phone bundle is a
+separate install inside its own proot container; see
+[references/engines.md](references/engines.md).
+
 ```bash
+uname -s        # Darwin, on the Mac a clone of this repo was made for
 dsj --version
 dsj --help
 ```
@@ -50,6 +66,18 @@ installs the command at `.venv/bin/dsj` and links it nowhere. An installed copy 
 missing command means a missing install.
 
 `ffmpeg` must be on `PATH` for anything that is not already a 16 kHz mono wav.
+
+**The checkout may not be yours alone.** Another session may be running dsj, or editing
+it, from the same clone. Run `git status` before you start and before you stop, and never
+touch a file it already shows as modified. Stop only a job you started, by its pid: `$!`
+when you started it with `&`, or the `pid` its `--status` file records. Never
+`pkill -f 'dsj suno'`, which matches every dsj run on the machine, another session's
+included.
+
+**If a usage task turns into changing dsj**, even when you were asked to, file an issue
+for the change before running the patched tool, and put a measurement, with the command
+that produced it, behind any constant you introduce. Then gate it as
+[Changing dsj itself](#changing-dsj-itself) says.
 
 ## The five verbs
 
@@ -82,7 +110,7 @@ about whether it worked.
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
 anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
 `--roman-urdu` and about 5 to 6x on English (measured per file in
-[references/engines.md](references/engines.md#whisper-speed)) and writes no checkpoint. A `--roman-urdu` run reports progress once per window of about two minutes;
+[references/engines.md](references/engines.md#whisper-speed)) and banks nothing until it has decoded the whole recording. A `--roman-urdu` run reports progress once per window of about two minutes;
 any other whisper run reports 0% and then nothing until transcription ends:
 
 ```bash
@@ -217,9 +245,9 @@ jq -r '.sentences[] | select(.start >= 400 and .start <= 460) | "\(.start)  \(.t
 may walk it from the top and stop at the first `start` past its window. The order is
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case
-5.72 s, which pulls its whole sentence that far earlier in the list. Under whisper no
-two sentences overlap; under parakeet and sherpa a seam can still leave one running into
-the next (#192).
+5.72 s, and is written where its time puts it. No two sentences overlap, under every
+engine: whisper merges two that would (#190), parakeet and sherpa re-cut them so the
+fewest tokens change sentence, never merging two speakers into one (#192).
 
 A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
 space, under every engine, and the top-level `text` is the sentences joined. So at a seam
@@ -248,10 +276,23 @@ An hour of audio is not something to block on. Detach it and poll the heartbeat:
 
 ```bash
 dsj suno meeting.mov -o out.json --status run.json &
-jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s" end' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
 
-`state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`.
+It names the writer's `pid` on every line, says which signal stopped an `interrupted`
+run and how far it had got (never a made-up `0%`: that document has no `fraction`), and
+adds `stalled for Ns` while extraction stands still. Example lines:
+`running 42% eta 122.9s (pid 48213)`,
+`interrupted by SIGTERM (pid 48213) during running at 105s of 300s`,
+`failed (pid 48213): FileNotFoundError: /nope.mov`.
+
+`state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`, or
+`interrupted` when Ctrl-C or `kill` stopped it.
 A whisper run that wrote a repetition loop passes through `retrying` after `running`,
 while each loop span is decoded again.
 The file is one JSON object rewritten in full and replaced atomically, so a reader never
@@ -264,10 +305,27 @@ Two things will break a poller that assumes otherwise:
   again on the final frame, whose totals are the length of the audio. Observed across
   three separate runs: a poller that stops at `fraction == 1` calls it done before the
   speaker labels exist.
-- **The failure document is a different shape**, two keys and no progress fields:
-  `{"state": "failed", "error": "FileNotFoundError: /nope.mov"}`. Read `state` first.
+- **The failure document is a different shape**, three keys and no progress fields:
+  `{"state": "failed", "pid": 48213, "error": "FileNotFoundError: /nope.mov"}`. Read
+  `state` first.
+
+**A `running` frame is not proof of a running job.** A run killed with `kill -9`, or by
+the system under memory pressure, cannot write anything, so its file says `running`
+forever. Every frame carries the writer's `pid`: `kill -0 "$(jq -r .pid run.json)"`
+failing means the run is dead, not slow. To stop a run, `kill` that pid, never
+`pkill -f 'dsj suno'`, which stops every run on the machine. An `extracting` frame that
+carries `stalled_s` is alive but has not moved for that many seconds: report it, do not
+kill it. Details in [references/payload.md](references/payload.md).
 
 `eta_s` is `null` whenever speed is 0, which includes the first frame of every run.
+
+**One `dsj suno` at a time, per machine.** A second one started while another runs exits
+75 at once, before it loads a model and without touching its own `--status` file, and
+names the running job's pid and `--out` on stderr. Two at once froze the owner's Mac on
+2026-09-19, which is why it refuses rather than queues. Wait until `kill -0 <pid>` fails,
+or stop that job with `kill <pid>`, then run the command again. A run that died, even by
+`kill -9`, frees the lock as it dies. The lock is `~/.cache/dsj/suno.lock`; deleting it
+frees nothing and lets a second run start beside the first.
 
 ## Interrupting is cheap
 
@@ -317,8 +375,36 @@ silent: stderr says `checkpoint ignored, transcribing from the start:` and names
 that changed. A checkpoint written by a dsj from before this rule is ignored the same
 way, once.
 
-`--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
-none at all, so an interrupted whisper run always starts over.
+`--no-resume` deletes the checkpoint rather than ignoring it.
+
+**What survives an interrupt depends on the engine and the state it stopped in.** whisper
+has no chunk loop of dsj's to bank from, so it banks its whole result once, at the same
+path, the moment its decode ends, and keeps it until labelling is over. A different
+`--model`, `--prompt`, `--language` or `--roman-urdu` on the rerun invalidates it, and
+stderr says which.
+
+| Stopped in | parakeet, sherpa: the rerun | whisper: the rerun |
+|---|---|---|
+| `extracting`, or before the first frame | has nothing new banked | has nothing new banked |
+| `running` | resumes from the last chunk banked, at most 105 s back | starts over: the decode is lost |
+| `retrying` | (never retries) | decodes nothing; retries its loops again |
+| `diarizing` | decodes nothing; labels again | decodes nothing; retries its loops and labels again |
+
+**Never delete a transcript to force a re-run.** dsj replaces `--out` atomically and
+only once transcription has finished, so a run that stops earlier leaves the old file
+exactly as it was. The only way to lose it is to delete it first: on 2026-09-22 a
+script removed a finished transcript, started a whisper re-run, and the run was stopped
+14 minutes in, leaving neither. Write the retry to a new path, and replace the old file
+yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
+This matters most under whisper, which `--roman-urdu` uses: a retry stopped before its
+decode ends leaves nothing behind.
 
 ## When something fails
 
@@ -327,7 +413,9 @@ none at all, so an interrupted whisper run always starts over.
 | 0 | Success |
 | 1 | An uncaught exception, printed as a traceback on stderr |
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
-| 130 | Interrupted. For `suno` on parakeet or sherpa, re-run to resume |
+| 130 | Interrupted by Ctrl-C. For `suno`, re-run to resume; under whisper only a run stopped after its decode resumes |
+| 143 | Stopped by `kill`. The same as 130 otherwise |
+| 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 
 **Read the last line of stderr, not the first.** A failure is a traceback, and when
 ffmpeg is involved its own log prints above the exception, so the useful sentence can be
@@ -346,6 +434,13 @@ a failure instead.
 
 Every error class, its message, and its remedy are in
 [references/failures.md](references/failures.md).
+
+## Changing dsj itself
+
+From a clone, the check that a change works is `uv run just check`, never `uv run
+pytest` alone. `just check` runs the type checker, ruff and the fast tests; pytest skips
+the type checker, so a green pytest is no evidence. Paste the line `just check` ends
+with before calling the change done.
 
 ## References
 

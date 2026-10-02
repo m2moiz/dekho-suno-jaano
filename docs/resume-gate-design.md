@@ -1,7 +1,8 @@
 # A resume gate that cannot silently pass
 
-Design for the end-to-end verification of `--resume` in `jaano/suno.py`
-(HEAD `f081231`, branch `feat/transcription`).
+Design for the end-to-end verification of `--resume` in `dsj/suno.py`
+(HEAD `f081231`, branch `feat/transcription`, written when the package still
+had its old name).
 
 Prototype: `scratch/resume_gate.py` — written, executed, output pasted in
 [§6](#6-what-it-actually-printed).

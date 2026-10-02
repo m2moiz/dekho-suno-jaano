@@ -312,6 +312,59 @@ def test_every_status_state_the_code_can_write_is_documented() -> None:
     assert not missing, f"the code writes these states and the skill never names them: {missing}"
 
 
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not on PATH, so no recipe can run")
+def test_every_polling_recipe_says_what_each_status_shape_means(tmp_path: Path) -> None:
+    """Every jq recipe that reads `state`, against every status document the skill shows.
+
+    The polling recipe printed `interrupted 0%` for a stopped run: that document has no
+    `fraction`, and `// 0` made one up. A poller reading it saw a run that had not
+    started rather than one that had been stopped, by which signal, and where. So each
+    line must start with the state, name the writer's pid, and for `interrupted` name
+    the signal and how far it had got, never a percentage; an `extracting` frame with
+    `stalled_s` must say it is stalled. The documents are the skill's own examples, plus
+    the one a signal before the first frame writes, which has no position at all.
+    """
+    documents: list[dict[str, Any]] = [
+        cast("dict[str, Any]", parsed)
+        for document in skill_documents()
+        for parsed in json_examples(document.read_text())
+        if isinstance(parsed, dict) and "state" in parsed
+    ]
+    documents.append({"state": "interrupted", "pid": 48213, "signal": "SIGINT"})
+    assert {"running", "extracting", "failed", "interrupted"} <= {d["state"] for d in documents}
+    assert any("stalled_s" in d for d in documents), "no stalled frame is documented"
+    recipes = [program for program in jq_programs() if ".state" in program]
+    assert recipes, "the skill should carry a polling recipe"
+
+    status = tmp_path / "run.json"
+    wrong: list[str] = []
+    for program in recipes:
+        for doc in documents:
+            status.write_text(json.dumps(doc))
+            result = subprocess.run(
+                ["jq", "-r", program, str(status)], capture_output=True, text=True, timeout=60
+            )
+            line = result.stdout.strip()
+            problems = [
+                problem
+                for problem, failed in (
+                    (f"exit {result.returncode}: {result.stderr.strip()}", result.returncode),
+                    ("does not start with the state", not line.startswith(doc["state"])),
+                    ("does not name the pid", "pid" in doc and f"pid {doc['pid']}" not in line),
+                    ("gives an interrupted run a percentage",
+                     doc["state"] == "interrupted" and "%" in line),
+                    ("does not name the signal",
+                     doc["state"] == "interrupted" and doc["signal"] not in line),
+                    ("does not say how far it had got",
+                     "during" in doc and f"{doc['audio_done_s']:.0f}s" not in line),
+                    ("does not say it stalled", "stalled_s" in doc and "stalled" not in line),
+                )
+                if failed
+            ]
+            wrong += [f"{program!r}\n    on {doc}\n    printed {line!r}: {p}" for p in problems]
+    assert not wrong, "polling recipes that misreport a status:\n  " + "\n  ".join(wrong)
+
+
 def test_the_flag_check_can_fail() -> None:
     """A guard on the guard.
 

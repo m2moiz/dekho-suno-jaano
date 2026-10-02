@@ -68,6 +68,7 @@ __all__ = [
     "SAMPLE_RATE",
     "WhisperUnavailable",
     "available",
+    "fingerprint_fields",
     "redecoder",
     "transcribe_whisper",
 ]
@@ -122,9 +123,13 @@ ANCHOR_OVERLAP_S = 6.0
 # be measured again: scratch/whisper_sweep.py sets it from outside per run.
 HALLUCINATION_SILENCE_S: float | None = None
 
+# From a clone the hint cannot be a whole `uv sync` line: `uv sync` uninstalls
+# every extra it is not given, so `uv sync --extra whisper` alone would take
+# parakeet and the diarizer away (#170). It names the flag to add instead.
 INSTALL_HINT = (
-    'uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"'
-    " (or `uv sync --extra whisper` from a clone)"
+    '`uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"`,'
+    " or from a clone add `--extra whisper` to the `uv sync` line you already use"
+    " (`uv sync` uninstalls every extra it is not given)"
 )
 
 # Not a magic incantation -- a worked example of the output wanted, which is
@@ -155,12 +160,40 @@ def available() -> str | None:
     if "mlx_whisper" in sys.modules:
         return None
     if find_spec("mlx_whisper") is None:
-        return f"mlx-whisper is not installed. Install it with `{INSTALL_HINT}`."
+        return f"mlx-whisper is not installed. Install it with {INSTALL_HINT}."
     return None
 
 
 class WhisperUnavailable(RuntimeError):
     """The whisper engine was asked for and mlx-whisper is not installed."""
+
+
+def fingerprint_fields(
+    language: str | None, prompt: str | None, anchor_s: float | None
+) -> dict[str, str]:
+    """Everything besides the recording and the model that changes what whisper writes.
+
+    The key a banked whisper result is matched on (#171), as parakeet's and
+    sherpa's fingerprint_fields key their checkpoints. A prompt biases spelling
+    and script, a language skips detection, an anchor cuts the audio into
+    re-prompted windows (`_anchored`), and the anomaly threshold drops
+    segments: a result decoded under any other value of one of them is a
+    different transcript. The anchor is the one `transcribe_whisper` acts on,
+    so `anchor_s` without a prompt reads as no anchor, which is what it is.
+    Values are strings because the fingerprint is compared as JSON.
+    """
+    from importlib.metadata import version
+
+    anchored = anchor_s is not None and prompt is not None
+    return {
+        "mlx_whisper_version": version("mlx-whisper"),
+        "language": str(language),
+        "prompt": str(prompt),
+        "anchor_s": str(anchor_s) if anchored else "None",
+        "anchor_overlap_s": str(ANCHOR_OVERLAP_S) if anchored else "None",
+        "hallucination_silence_s": str(HALLUCINATION_SILENCE_S),
+    }
+
 
 def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:
     """Turn whisper's segments into payload sentences, shifted by `offset` seconds.
@@ -230,7 +263,7 @@ def _anchored(
     prompt: str,
     anchor_s: float,
     overlap_s: float,
-    on_progress: Callable[[float], None] | None,
+    on_progress: Callable[[float, float], None] | None,
 ) -> list[dict[str, Any]]:
     """Transcribe in windows, re-seeding `prompt` at the head of each one.
 
@@ -322,8 +355,12 @@ def _anchored(
                 cast("list[dict[str, Any]]", result.get("segments") or []), start / SAMPLE_RATE
             )
         )
+        # Both lengths from the decoded samples (#173). The total used to be
+        # left to the caller, which had only ffprobe's duration of the
+        # container, so a padded or rounded container put the last window
+        # short of 100% or past it.
         if on_progress is not None:
-            on_progress(end / SAMPLE_RATE)
+            on_progress(end / SAMPLE_RATE, total / SAMPLE_RATE)
 
     # A window with a next one always runs its full length, so the seconds two
     # neighbours share start at the later one's start and last the overlap.
@@ -439,7 +476,7 @@ def transcribe_whisper(
     language: str | None = None,
     prompt: str | None = None,
     anchor_s: float | None = None,
-    on_progress: Callable[[float], None] | None = None,
+    on_progress: Callable[[float, float], None] | None = None,
 ) -> Transcription:
     """Transcribe `audio` end to end with whisper.
 
@@ -460,9 +497,11 @@ def transcribe_whisper(
         anchor_s: Window length, in seconds, to re-seed `prompt` at. None
             leaves whisper's own window loop alone; ignored without a prompt,
             there being nothing to anchor.
-        on_progress: Called with seconds of audio finished, after each anchored
-            window. Never called on the unchunked path, which has no hook to
-            call it from.
+        on_progress: Called after each anchored window with the seconds of
+            audio finished and the seconds there are, both counted in the
+            samples whisper decoded, so their ratio ends at exactly 1.0.
+            Never called on the unchunked path, which has no hook to call it
+            from.
 
     Returns:
         The full text and the payload's sentences, one per whisper segment.
@@ -475,7 +514,7 @@ def transcribe_whisper(
     except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
         raise WhisperUnavailable(
             f"the whisper engine needs mlx-whisper, which is an optional extra. "
-            f"Install it with `{INSTALL_HINT}`, or use the default "
+            f"Install it with {INSTALL_HINT}, or use the default "
             f"`--engine parakeet`."
         ) from exc
 
@@ -553,7 +592,7 @@ def redecoder(
         )
     except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
         raise WhisperUnavailable(
-            f"retrying a loop needs mlx-whisper. Install it with `{INSTALL_HINT}`."
+            f"retrying a loop needs mlx-whisper. Install it with {INSTALL_HINT}."
         ) from exc
 
     transcribe = cast(

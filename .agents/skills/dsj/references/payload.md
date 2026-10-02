@@ -92,7 +92,7 @@ Inside a sentence:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. Under whisper a sentence ends at or before the next one's `start`; under parakeet and sherpa one can overlap the next at a chunk seam (below). |
+| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. A sentence ends at or before the next one's `start`, under every engine (below). |
 | `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
@@ -237,16 +237,18 @@ engine: sentences by `start`, tokens by `t`. A reader may walk the list from the
 stop at the first `start` past its window; there is nothing to re-sort. The order is
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case 5.72 s,
-which pulls its whole sentence that far earlier in the list.
+and is written where its time puts it (below).
 
-**Under whisper no two sentences overlap**: each ends at or before the next one's
+**No two sentences overlap**, under every engine: each ends at or before the next one's
 `start`. Each of the 6 s two of whisper's two-minute windows share is written by one of
 them, its own half by default or all of it by the one that did not loop there, so the same
 speech is not written twice at a seam (#190); two whisper sentences that still overlap are
-written as one, every word and time as decoded. **Under parakeet and sherpa they can
-overlap** at a chunk seam: a word timed seconds early starts its sentence inside the one
-before, 1 pair on a 6-minute parakeet run. They are left apart, because one merged
-sentence would put two speakers under one label (#192).
+written as one, every word and time as decoded. Under parakeet and sherpa a word timed
+seconds early at a chunk seam would start its sentence inside the one before, so the two
+are split, never merged (#192): the fewest tokens that must change sentence do, every
+word and time as decoded, and each sentence keeps its own speaker label. Usually that is
+one full stop, which then reads inside the sentence its time puts it in. A transcript
+written before v0.2.3 can still have overlapping parakeet sentences.
 
 ## The status heartbeat, written by `--status`
 
@@ -255,19 +257,21 @@ sees half of one. It is not a log and not JSONL.
 
 ```json
 {"audio_done_s": 1872.0, "audio_total_s": 4447.0, "elapsed_s": 89.4,
- "resumed_from_s": 0.0, "state": "running", "fraction": 0.4209,
+ "resumed_from_s": 0.0, "state": "running", "pid": 48213, "fraction": 0.4209,
  "speed": 20.94, "eta_s": 122.9}
 ```
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
+| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, `failed`, or `interrupted`. **This is the only reliable completion signal.** |
+| `pid` | int | The process that wrote the document. In every document, the failure and interrupted ones included. Below: how to tell a dead run from a slow one with it. |
 | `audio_done_s`, `audio_total_s` | float seconds | Of audio, not wall clock. |
 | `elapsed_s` | float seconds | Wall clock **for the current phase**, not for the run. Extraction and transcription each restart it, because one runs at about 1000x realtime and the other at about 13x, so a shared clock would make both speeds meaningless. |
 | `resumed_from_s` | float seconds | Audio a previous run already transcribed. `0.0` otherwise. |
 | `fraction` | float | Rounded to 4 places. Not clamped, and see the warning below. |
 | `speed` | float | Realtime multiple over this run's own work only. |
 | `eta_s` | float or **null** | `null` whenever `speed` is 0, which includes the first frame of every run. |
+| `stalled_s` | float seconds | `extracting` frames only, and **only while** ffmpeg's position has not moved for 60 s or more: how long it has stood still. Absent otherwise, so test for the key. Below. |
 
 **Poll `state`. Do not use `fraction` to detect completion.** `fraction` reaches `1.0`
 when the audio is decoded, which is before the speaker labels exist, then starts over at
@@ -276,21 +280,88 @@ as both `audio_done_s` and `audio_total_s`, the same total the `running` frames 
 it ends at `1.0` whether or not anyone spoke: a four-minute recording with no speech ends
 with `{"audio_done_s": 240.0, "audio_total_s": 240.0, "state": "done", "fraction": 1.0}`.
 
-**The failure document is a different shape.** Two keys, and none of the progress fields:
+**The failure document is a different shape.** Three keys, and none of the progress fields:
 
 ```json
-{"state": "failed", "error": "FileNotFoundError: /nope.mov"}
+{"state": "failed", "pid": 48213, "error": "FileNotFoundError: /nope.mov"}
 ```
 
 Anything reading `.fraction` unconditionally crashes on it, jq included: `.fraction * 100`
 against this document is `null (null) and number (100) cannot be multiplied`, and jq exits
-5. Branch on `state` first and default the rest:
+5. Branch on `state` first and default the rest. This is SKILL.md's polling recipe, and it
+reads all three shapes:
 
 ```bash
-jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fraction // 0) * 100 | floor)%" end' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
 
 `error` is `"<ExceptionClassName>: <message>"`.
+
+**A stopped run says so.** Ctrl-C (SIGINT) and a plain `kill` (SIGTERM) write a third
+shape before the process exits, 130 and 143 respectively:
+
+```json
+{"state": "interrupted", "pid": 48213, "signal": "SIGTERM", "during": "running",
+ "audio_done_s": 105.0, "audio_total_s": 300.0}
+```
+
+`signal` is `SIGINT` or `SIGTERM`. `during` is the state of the last frame written before
+the signal, and `audio_done_s` and `audio_total_s` are that frame's, so they count
+extraction if `during` is `extracting`. `during`, `audio_done_s` and `audio_total_s` are
+absent when the signal arrived before the first frame, while the model was loading. `interrupted` is terminal: nothing
+writes to the file again. Do not wait on it. A parakeet or sherpa run resumes from its
+checkpoint when the same command is run again. A whisper run resumes only if `during` is
+`retrying` or `diarizing`, past its decode; stopped while `running`, it starts over. `kill -9`
+cannot be caught, so it writes nothing and the file keeps its last frame.
+
+**Dead or slow: ask the process table, not the clock.** A run ended by `kill -9`, by the
+system under memory pressure, or by a crash of the machine writes nothing, so its file
+keeps saying `running` forever. Before trusting a frame whose `state` is not `done`,
+`failed` or `interrupted`, check its `pid`:
+
+```bash
+pid=$(jq -r '.pid' run.json)
+if kill -0 "$pid" 2>/dev/null; then echo alive; else echo "gone: the run died"; fi
+```
+
+Alive means alive, however long since the last frame: a plain whisper run writes one
+frame at 0% and nothing more until it ends. Gone, on a non-terminal frame, means the run
+died without a word; the same command resumes it on parakeet and sherpa, and on whisper
+once its decode had ended. Three limits.
+The check only works on the machine that ran the job, not on a status file read from
+another. A pid is reused eventually, so on a frame hours old confirm it is still dsj with
+`ps -p "$pid" -o command=`. And a status file written before `pid` existed has none, so
+the only signal there is the file's mtime against the cadence table below.
+
+**A stalled extraction says so, and is not stopped.** On 2026-09-22 ffmpeg sat at 4:20 of
+a 27:52 recording for over 15 minutes, still reporting, and then finished. The process
+was alive throughout, so `pid` reads alive, and every frame was fresh, so the file's
+mtime looked healthy; only `audio_done_s` had stopped. Now an `extracting` frame carries
+`stalled_s` once the position has stood still for a minute, and loses it as soon as it
+moves:
+
+```json
+{"audio_done_s": 260.0, "audio_total_s": 1672.0, "elapsed_s": 923.0, "resumed_from_s": 0.0,
+ "state": "extracting", "pid": 48213, "fraction": 0.1555, "speed": 0.28, "eta_s": 5012.6,
+ "stalled_s": 903.4}
+```
+
+Report it; do not kill the job for it. Why that extraction stalled is not known, and
+killing a run that would have finished costs the whole run. A machine short of memory
+(`memory_pressure`) or a recording that is still downloading from a cloud drive are the
+two suspects, neither reproduced. `stalled_s` is computed when ffmpeg reports, about
+twice a second; an ffmpeg that stops reporting altogether stops the frames too, and then
+the file's mtime is what goes stale.
+
+**Stop the job you started, and only that one:** `kill "$(jq -r .pid run.json)"`. Never
+`pkill -f 'dsj suno'`, which stops every run on the machine, another session's included.
+The pid is the Python process doing the work, so this holds under `uv run` too, where `$!`
+is uv's wrapper.
 
 How often each state is written:
 
@@ -356,3 +427,31 @@ mtime. They cannot match, so a run interrupted on an older dsj starts over once,
 
 `sherpa` contributes `sherpa_onnx_version` where parakeet contributes `parakeet_version`,
 so a checkpoint cannot cross engines even if every shared value matched.
+
+### whisper's banked result
+
+whisper decodes the whole recording in one call, so there is no chunk to bank while it
+runs. The moment the call returns, before loops are decoded again and before speakers are
+labelled, its result is banked at the same path, fsynced, and kept until labelling is
+over. A run stopped in `retrying` or `diarizing` therefore decodes nothing on the rerun:
+it retries the loops and labels again from the banked result. A run stopped in `running`
+has banked nothing and starts over.
+
+```json
+{"media": "/recordings/voice-note.m4a",
+ "fingerprint": {"schema": 2,
+                 "content_id": "1048576-5a1b0c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+                 "model_id": "mlx-community/whisper-large-v3-turbo",
+                 "mlx_whisper_version": "0.4.3", "language": "ur",
+                 "prompt": "Yeh Roman Urdu transcript hai.", "anchor_s": "120.0",
+                 "anchor_overlap_s": "6.0", "hallucination_silence_s": "None"},
+ "transcription": {"text": "...", "sentences": []}}
+```
+
+`transcription` is whisper's text and sentences as it returned them, in the transcript's
+own sentence shape. Every fingerprint field must match. `language`, `prompt` and the two
+`anchor_` fields are what `--language`, `--prompt` and `--roman-urdu` set, and each
+changes what whisper writes, so a rerun with another of any of them decodes again and
+says so: `checkpoint ignored, transcribing from the start: the prompt changed (prompt)`.
+Values are strings, and `"None"` means the setting was not given. `--no-resume` deletes
+the file as it deletes a chunk checkpoint.

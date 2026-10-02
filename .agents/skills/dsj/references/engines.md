@@ -51,9 +51,13 @@ practice means every `.mov`, `.mp4` and `.m4a`.
 every invocation needs a prefix:
 
 ```bash
-uv sync --extra parakeet --extra diarize
+uv sync --extra parakeet --extra whisper --extra diarize
 uv run dsj suno recording.mov -o transcript.json
 ```
+
+That is the `mac` bundle's set. `uv sync` installs exactly the extras on its line and
+**uninstalls every other one**, so keep one sync line and add `--extra <name>` to it. A
+bare `uv sync`, or `uv sync --extra <one>`, takes away the engines you already had.
 
 `python -m dsj.suno` and `python -m dsj.dekho` are the same code and still work.
 `python -m dsj` does not exist.
@@ -74,7 +78,7 @@ fallback: if the chosen engine cannot run, nothing is transcribed and the run ex
 | Speed | About 13x realtime | About 1.7 to 3x on Urdu with `--roman-urdu`, about 5 to 6x on English. Per file in [whisper speed](#whisper-speed) | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
 | Platform | Apple Silicon, Metal | Apple Silicon, Metal | Anywhere sherpa-onnx has wheels |
 | Languages | 25, all European. No Urdu | Whatever whisper reads, including Urdu | Same weights as parakeet |
-| Checkpoint and resume | Yes | **No.** An interrupted run starts over | Yes |
+| Checkpoint and resume | Yes, per chunk | **Only after the decode.** Stopped while `running`, it starts over; stopped later, the rerun decodes nothing | Yes, per chunk |
 | Progress reporting | Per chunk | With `--roman-urdu`, per window of about two minutes. Otherwise **one frame at 0%**, then nothing until transcription ends | Per chunk |
 | Speaker labels | With the diarize extra | With the diarize extra | Not on the android bundle |
 | Needs `--model` | No | No | **Yes**, see below |

@@ -12,6 +12,9 @@
 
 ---
 
+> **Driving dsj from an agent?** Read [.agents/skills/dsj/SKILL.md](.agents/skills/dsj/SKILL.md)
+> first. The transcript format is in [.agents/skills/dsj/references/payload.md](.agents/skills/dsj/references/payload.md).
+
 **An hour of screen recording, made answerable.** `dsj` turns a recording into
 a timestamped transcript that acts as an *index into the video* — so an agent
 reads cheap text, notices a moment that only makes sense visually, and pulls
@@ -86,8 +89,10 @@ the interesting part.
 ## Requirements
 
 - **A platform with an engine bundle.** The core is portable Python, but the
-  speech engines are not: on macOS both ASR engines run through Metal
-  ([`parakeet-mlx`][pmlx] and `mlx-whisper`), which is Apple Silicon only.
+  speech engines are not. Of the three, the two Mac engines run through Metal
+  ([`parakeet-mlx`][pmlx] and `mlx-whisper`), which is Apple Silicon only. The
+  third, `sherpa`, runs the same parakeet weights through ONNX wherever
+  sherpa-onnx publishes wheels, which is what lets dsj run on a phone.
   Installing dsj means choosing a bundle -- there is deliberately no default,
   because a dsj with no engine transcribes nothing.
 - **Python 3.12 or 3.13.** Capped deliberately. The diarize extra reaches
@@ -110,12 +115,32 @@ Pick the bundle for your machine. On a Mac:
 uv tool install "dsj[mac] @ git+https://github.com/m2moiz/dekho-suno-jaano"
 ```
 
-That puts `dsj` on your `PATH` with both engines and the diarizer. There is no
+That puts `dsj` on your `PATH` with both Mac engines and the diarizer. There is no
 bare install line on purpose: `uv tool install dsj` succeeds but carries no
 engine, and the first `dsj suno` tells you which extra to add.
 
 Model weights (~2.4 GB) download on first run and are cached by
 `huggingface_hub`.
+
+Off the Mac, the `android` bundle carries the third engine, `sherpa`, and nothing
+else. It has no speaker labelling, because the diarizer is CoreML and has no
+Android path:
+
+```bash
+uv tool install "dsj[android] @ git+https://github.com/m2moiz/dekho-suno-jaano"
+```
+
+Each bundle is a set of extras, and each extra installs alone when a bundle
+carries more than you want:
+
+| Extra | Pulls in | For |
+|---|---|---|
+| `dsj[mac]` | `parakeet`, `whisper`, `diarize` | The working Mac setup |
+| `dsj[android]` | `sherpa` | The phone |
+| `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
+| `dsj[whisper]` | `mlx-whisper` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch |
+| `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
+| `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -123,13 +148,35 @@ invocation is prefixed with `uv run`:
 
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
-cd dsj
-uv sync                      # or: uv sync --extra diarize
+cd dekho-suno-jaano
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
 uv run dsj suno recording.mov -o transcript.json
 ```
 
+That sync line is the one CI runs. `uv sync` installs exactly the extras on its
+line and **uninstalls every other one**, so keep one line and add to it: a bare
+`uv sync`, or `uv sync --extra <one>`, takes away the engines you already had.
+
 Every command below is written bare (`dsj ...`), which is what an installed
 copy gives you. From a clone, prefix each one with `uv run`.
+
+### On a phone: Termux and proot
+
+sherpa-onnx ships manylinux wheels, which need glibc, and Termux is built on
+Android's own C library, bionic. So the install does not go in Termux itself: it
+goes inside a proot container running a glibc Linux on the phone, and the
+`dsj[android]` line above runs there.
+
+`--engine sherpa` then needs an explicit `--model <directory>`, because the
+default it is handed is parakeet's Hugging Face id, not a directory ([#46](https://github.com/m2moiz/dekho-suno-jaano/issues/46)), and
+nothing in this repo yet says where to download that directory ([#47](https://github.com/m2moiz/dekho-suno-jaano/issues/47)).
+
+What has run on a phone, as of this writing: on 2026-08-26, at commit `eb6e06f`,
+`dsj suno --engine sherpa` transcribed a five-minute recording on a OnePlus 15
+inside proot-distro Ubuntu, and an interrupted run resumed from its checkpoint.
+The `dsj[android]` install line as it stands now has not been run on a phone and
+recorded, and neither has an hour-long recording ([#32](https://github.com/m2moiz/dekho-suno-jaano/issues/32)). CI cannot run Termux, so
+this record is kept by hand.
 
 ## Usage
 
@@ -167,7 +214,7 @@ Progress renders live on stderr:
 | `--no-diarize` | skip speaker labelling |
 | `--require-diarize` | fail rather than degrade if labelling cannot run |
 | `--model ID` | override the ASR model; the default follows `--engine` |
-| `--engine parakeet\|whisper` | which ASR backend (default `parakeet`) |
+| `--engine parakeet\|whisper\|sherpa` | which ASR backend (default `parakeet`) |
 | `--language CODE` | whisper only: ISO code, e.g. `ur`. Detected if omitted |
 | `--prompt TEXT` | whisper only: seeds the decoder; biases spelling and script |
 | `--roman-urdu` | whisper, Urdu, written in Latin. Sets the two flags above |
@@ -224,8 +271,11 @@ dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>
 The full model writes most of its text in Urdu script whatever the prompt says.
 Turbo is the default here for that reason, and changing it means re-measuring.
 
-The whisper engine writes **no checkpoint**, so an interrupted run starts over:
-it owns its own window loop and exposes no hook to bank one from. How much
+The whisper engine banks **nothing while it decodes**, so a run interrupted in
+the `running` state starts over: it owns its own window loop and exposes no hook
+to bank from. Its finished result is banked beside `-o` the moment the decode
+ends and kept until speaker labelling is over, so a run stopped after that
+decodes nothing on the rerun (#171). How much
 progress it reports depends on the run. `--roman-urdu` cuts the audio into
 two-minute windows itself and reports after each one. Any other whisper run,
 `--prompt` and `--language` included, reports 0% and then **nothing until
@@ -237,6 +287,19 @@ The per-file numbers, with the command, commit and memory state of each, are in
 three cost more the longer the recording, which is why parakeet stays the
 default.
 
+**Never delete a transcript to force a re-run.** dsj replaces `-o` atomically
+and only once transcription has finished, so a run that stops earlier leaves
+the old file as it was. A whisper retry stopped before its decode ends leaves
+nothing behind, so if the old file was deleted first, both are gone: that is how
+a finished transcript was lost on 2026-09-22. Write the retry to a new path and
+replace the old file yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
 It is part of the `mac` bundle; standalone installs can pick it alone
 (mlx-whisper pulls torch, ~250 MB):
 
@@ -244,12 +307,31 @@ It is part of the `mac` bundle; standalone installs can pick it alone
 uv tool install "dsj[whisper] @ git+https://github.com/m2moiz/dekho-suno-jaano"
 ```
 
+**sherpa, where MLX does not run.** `--engine sherpa` runs the same parakeet
+weights through their ONNX export instead of MLX, so it works wherever
+sherpa-onnx has wheels, which is how dsj transcribes on a phone (see
+[On a phone](#on-a-phone-termux-and-proot)). Like parakeet it transcribes in
+chunks and checkpoints each one, so an interrupted run resumes. It needs an
+explicit `--model <directory>` ([#46](https://github.com/m2moiz/dekho-suno-jaano/issues/46), [#47](https://github.com/m2moiz/dekho-suno-jaano/issues/47)):
+
+```bash
+dsj suno recording.m4a -o transcript.json --engine sherpa --model /path/to/model-dir
+```
+
+No phone speed is published here yet; [#32](https://github.com/m2moiz/dekho-suno-jaano/issues/32) measures one properly, on an
+hour-long recording.
+
 **Long runs.** An hour of audio is not something you sit and watch, so detach it
 and poll the heartbeat:
 
 ```bash
 dsj suno meeting.mov -o out.json --status run.json &
-jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
 
 `state` moves `extracting → running → diarizing → done`, or `failed` with an
@@ -262,6 +344,25 @@ renamed, moved or copied in between: the checkpoint knows it by its contents,
 not its path. An edited recording, a changed model, or a different chunk
 geometry invalidates it, and the run starts over rather than reusing tokens
 that describe something else, saying on stderr which of those it was.
+
+**One `dsj suno` at a time, per machine.** A second one started while another
+runs exits **75** at once, before it loads a model and without touching its own
+`--status` file, and names the job it is waiting on:
+
+```
+another dsj suno is already running on this machine: pid 48213, writing /recordings/out.json.
+```
+
+Two at once froze the owner's Mac on 2026-09-19: one run is already sized
+against the machine's memory, two are not. That is why the second refuses
+rather than queues, and why the lock is one file for the whole machine rather
+than one per output: the two runs that froze it wrote to different files. Wait
+until `kill -0 <pid>` fails, or stop that job with `kill <pid>`, then run the
+command again. A run that dies, even by `kill -9`, frees the lock as it dies.
+The lock is `~/.cache/dsj/suno.lock`; deleting it frees nothing and lets a
+second run start beside the first. `DSJ_SUNO_LOCK=<path>` moves it, which is
+how the test suite keeps out of a real run's way; two runs under different
+lock paths do not see each other.
 
 ### Dekho — change marks
 
@@ -397,19 +498,22 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
 A reader may walk the list from the top and stop at the first `start` past the
 window it cares about. That is a promise about *order*, not about *accuracy*: a
 recording longer than 120 s is transcribed in overlapping pieces and stitched,
-and the stitch can mistime a word at a seam by a few seconds, so the sentence
-that word belongs to sorts to where its earliest token claims it began. Measured
+and the stitch can mistime a word at a seam by a few seconds. That word is
+written where its time puts it, in the sentence its time falls inside if there
+is one (#192), and otherwise its sentence sorts to where it claims. Measured
 on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
 
-**Under whisper no two sentences overlap**: each ends at or before the next
-one's `start`. Each of the 6 s two of whisper's two-minute windows share is
-written by one of them, its own half by default or all of it by the one that
+**No two sentences overlap**: each ends at or before the next one's `start`,
+under every engine. Each of the 6 s two of whisper's two-minute windows share
+is written by one of them, its own half by default or all of it by the one that
 did not loop there, so the same speech is not written twice at a seam (#190).
-Under parakeet and sherpa a chunk seam can still leave a sentence starting
-inside the one before, 1 pair on a 6-minute parakeet run; they are left apart,
-because merging them would put two speakers under one label (#192).
+Under parakeet and sherpa a word timed seconds early at a chunk seam would
+start its sentence inside the one before. The two are split rather than
+merged, because one merged sentence would put two speakers under one label
+(#192): the fewest tokens that must change sentence do, usually one full stop,
+and no time changes.
 
 **A sentence's `text` is its `tokens` joined**: every `w` in that time order,
 leading space included, under every engine. The top-level `text` is the
@@ -688,8 +792,10 @@ dsj/            the package
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
   merge.py         token-vote speaker labelling
-  asr.py           the one shape both ASR engines return
+  asr.py           the one shape every ASR engine returns
+  parakeet.py      the parakeet engine, the default, on MLX
   whisper.py       the whisper engine, and why Roman Urdu is a prompt
+  sherpa.py        the sherpa engine: parakeet's weights on ONNX, for the phone
   diarize.py       the fail-soft senko boundary
   atomic.py        write-or-do-not-write, for files a reader may be watching
 tests/             fast unit tests, plus the two slow end-to-end gates

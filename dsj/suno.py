@@ -20,6 +20,7 @@ __all__ = [
     "NO_SPEECH_REASON",
     "OVERLAP_S",
     "RETRY_LOOPS",
+    "STALL_S",
     "Progress",
     "clock",
     "is_loop",
@@ -31,6 +32,7 @@ __all__ = [
 
 import json
 import logging
+import os
 import re
 import sys
 import tempfile
@@ -80,6 +82,16 @@ logger = logging.getLogger("dsj.suno")
 # what makes chunk_callback fire, so progress reporting depends on it too.
 CHUNK_S = 120.0
 OVERLAP_S = 15.0
+
+# How long ffmpeg's position may stand still before the heartbeat says so (#164).
+# On 2026-09-22 an extraction sat at 4:20 of 27:52 for 15 minutes 23 seconds and
+# then finished, while the status kept reading `extracting` with nothing to show
+# that it had stopped moving. Healthy extraction runs about a thousand times
+# realtime and reports twice a second, so a minute without one advance is
+# nothing a healthy run does. It is reported, never acted on: why that one
+# stalled is not known, and killing a job that would have finished is worse
+# than saying it has stopped.
+STALL_S = 60.0
 
 
 @dataclass
@@ -603,43 +615,44 @@ def _retried(
 
 
 def _without_overlaps(transcription: Transcription, *, merge: bool) -> Transcription:
-    """`transcription` with every token inside its sentence, and under whisper no two overlapping.
+    """`transcription` with every token inside its sentence, and no two sentences overlapping.
 
-    The last step before the payload is written. Under every engine it checks
-    that each token's `t` and `e` lie within its own sentence's bounds. With
-    `merge`, which transcribe() sets for whisper only, it also makes sure a
-    sentence ends by the time the next one starts.
+    The last step before the payload is written. Under every engine it makes
+    sure a sentence ends by the time the next one starts, and checks that each
+    token's `t` and `e` lie within its own sentence's bounds. `merge`, which
+    transcribe() sets for whisper only, picks how an overlap is undone.
 
-    Two overlapping whisper sentences are written as one, their tokens in time
+    whisper: two overlapping sentences are written as one, their tokens in time
     order: every word and every time kept as decoded, where moving or clipping
     times would write times no decoder gave. whisper's anchored windows wrote
     the same speech twice at their seams (#190); _owned in dsj/whisper.py now
     gives each second to one window, and on #148's fixture and the owner's
     101117 whisper reached here with nothing to merge. A merge is logged.
 
-    parakeet and sherpa are left as they are, overlaps included (#192). Their
+    parakeet and sherpa: split, never merged (#192, _split_at_seams). Their
     vendored chunk merge can time a word seconds early at a seam
-    (_in_time_order), so the sentence holding it starts inside the one before:
-    measured 2026-10-02, 1 pair on a 6 minute parakeet run of
-    scratch/clip360.wav, 17 to 33 on three older long parakeet transcripts.
-    Merging those puts two speakers' words in one sentence under one label
-    (tests/test_suno.py's seam case went from labels [0, 1, 1] to [1]), so
-    their fix is a split at the seam, not a merge.
+    (_in_time_order), so the sentence holding it starts inside the one before.
+    Merging those put two speakers' words in one sentence under one label
+    (tests/test_suno.py's seam case went from labels [0, 1, 1] to [1]).
 
     A token outside its sentence raises, under every engine, because no path
     here makes one: the engines' bounds are widened to their tokens
-    (_in_whole_milliseconds), and every later step that drops tokens rebuilds
-    the bounds from the ones left. None was found on that parakeet run or the
-    three older transcripts. One appearing means a step was broken, and a test
-    should stop there rather than write a file whose words point outside their
-    sentence.
+    (_in_whole_milliseconds), and every later step that moves or drops tokens
+    rebuilds the bounds from the ones left. One appearing means a step was
+    broken, and a test should stop there rather than write a file whose words
+    point outside their sentence.
 
     Raises:
         RuntimeError: if a token lies outside its sentence.
     """
     if not merge:
-        _tokens_inside(transcription.sentences)
-        return transcription
+        sentences, split = _split_at_seams(transcription.sentences)
+        _tokens_inside(sentences)
+        if not split:
+            return transcription
+        return Transcription(
+            text="".join(str(s["text"]) for s in sentences).strip(), sentences=sentences
+        )
     ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
     out: list[Sentence] = []
     merged = 0
@@ -661,6 +674,87 @@ def _without_overlaps(transcription: Transcription, *, merge: bool) -> Transcrip
         return transcription._replace(sentences=out)
     logger.info("%d overlapping sentence pairs written as one", merged)
     return Transcription(text="".join(str(s["text"]) for s in out).strip(), sentences=out)
+
+
+def _split_at_seams(sentences: list[Sentence]) -> tuple[list[Sentence], int]:
+    """`sentences` earliest first with each overlapping pair split apart, and how many splits.
+
+    Two overlapping sentences keep their own tokens except the fewest that must
+    change sentence for the first to end by the time the second starts. Their
+    tokens are laid out in time order and cut once, between two tokens where
+    nothing before the cut ends after the first token past it; of those cuts,
+    the one that moves the fewest tokens wins, and between equals the one at
+    the widest pause, where a sentence most likely ended. No time changes and
+    no sentence disappears, so each still gets its own speaker vote.
+
+    The fewest, not a cut at the overlap's midpoint, because the usual fault is
+    one token. On scratch/clip360.wav it is a full stop timed 3 s before the
+    rest of its sentence, inside the one before: the cut moves that full stop
+    and nothing else, where a cut at the overlap's midpoint also moved 6 tokens
+    of the earlier sentence. Measured 2026-10-02 on three older long parakeet
+    transcripts (17, 33 and 19 overlapping pairs): 19, 40 and 15 tokens end in
+    another sentence this way, against 57, 104 and 77 at the midpoint, and 0
+    pairs are left either way.
+
+    A pair is left as decoded, and logged, where no cut exists: two of its
+    words overlap each other, so separating them would move a time. Never seen
+    on those transcripts. The splits are capped at the number of tokens, so
+    the loop ends.
+    """
+    out = sorted(sentences, key=lambda s: cast("float", s["start"]))
+    budget = sum(len(s["tokens"]) for s in out)
+    split = left = 0
+    i = 0
+    while i + 1 < len(out):
+        a, b = out[i], out[i + 1]
+        cut = _seam_cut(a, b) if a["end"] > b["start"] and split < budget else None
+        if cut is None:
+            left += a["end"] > b["start"]
+            i += 1
+            continue
+        out[i], out[i + 1] = cut
+        # Nothing ahead of `a` moves: it ends by `a`'s start, and every token
+        # re-cut here starts at or after that.
+        out[i:] = sorted(out[i:], key=lambda s: cast("float", s["start"]))
+        split += 1
+    if split:
+        logger.info("%d overlapping sentence pairs split at the seam", split)
+    if left:
+        logger.warning("%d overlapping sentence pair left as decoded: no cut separates them", left)
+    return out, split
+
+
+def _seam_cut(a: Sentence, b: Sentence) -> tuple[Sentence, Sentence] | None:
+    """`a` and `b` re-cut so `a` ends by the time `b` starts, or None if no cut can."""
+    tokens = sorted(
+        [(t, False) for t in a["tokens"]] + [(t, True) for t in b["tokens"]],
+        key=lambda tb: cast("float", tb[0]["t"]),
+    )
+    # Tokens of b before the cut, and of a after it, change sentence.
+    moved = sum(1 for _, of_b in tokens if not of_b)
+    ends = 0.0
+    best: tuple[int, float, int] | None = None
+    for k in range(1, len(tokens)):
+        token, of_b = tokens[k - 1]
+        moved += 1 if of_b else -1
+        ends = max(ends, cast("float", token.get("e", token["t"])))
+        pause = cast("float", tokens[k][0]["t"]) - ends
+        if pause >= 0 and (best is None or (moved, -pause) < best[:2]):
+            best = (moved, -pause, k)
+    if best is None:
+        return None
+    k = best[2]
+    return _with_tokens(a, [t for t, _ in tokens[:k]]), _with_tokens(b, [t for t, _ in tokens[k:]])
+
+
+def _with_tokens(sentence: Sentence, tokens: list[dict[str, Any]]) -> Sentence:
+    """`sentence` holding `tokens`, already in time order, with its bounds and text rebuilt."""
+    return sentence | {
+        "start": tokens[0]["t"],
+        "end": max(cast("float", t.get("e", t["t"])) for t in tokens),
+        "text": "".join(str(t["w"]) for t in tokens),
+        "tokens": with_char_offsets(tokens),
+    }
 
 
 def _tokens_inside(sentences: list[Sentence]) -> None:
@@ -852,11 +946,13 @@ def transcribe(
     `engine` picks the ASR backend. "parakeet" is the default and everything
     above describes it. "whisper" exists for the languages parakeet does not
     have -- see dsj/whisper.py -- and differs in two ways worth knowing
-    before you choose it: it owns its own window loop, so there is no
-    checkpoint and no resume, and only an anchored run (`anchor_s` and
-    `prompt`, which `--roman-urdu` sets) reports progress between start and
-    finish, once per window. `language` and `prompt` are whisper's; parakeet
-    takes neither.
+    before you choose it: it owns its own window loop, so nothing is banked
+    until it has decoded the whole recording, and only an anchored run
+    (`anchor_s` and `prompt`, which `--roman-urdu` sets) reports progress
+    between start and finish, once per window. Its finished result is banked
+    beside `out` until labelling is over, so an interrupt after the decode
+    costs no decode on the next run. `language` and `prompt` are whisper's;
+    parakeet takes neither.
     `model_id` defaults to whichever engine's model, so it is usually left
     alone.
     """
@@ -866,6 +962,26 @@ def transcribe(
         raise ValueError(
             "--language and --prompt are whisper's; parakeet takes neither. "
             "Add --engine whisper, or drop them."
+        )
+    # Before the engine loads or a second of audio is decoded (#191). The first
+    # write to `out` comes at parakeet's first checkpoint, and whisper's only
+    # at the very end: on 2026-10-02 a whisper run decoded for 441 s and then
+    # died on a temp file the user never named. Refused, not created, as
+    # dikhao refuses a frame into a missing directory: a typo in `-o` would
+    # otherwise put the transcript somewhere nobody looks.
+    if not out.parent.is_dir():
+        raise FileNotFoundError(
+            f"cannot write {out}: the directory {out.parent} does not exist. "
+            f"Create it first (mkdir -p {out.parent}) or pass another -o."
+        )
+    # The same for the heartbeat (#197). Its first write came after the model
+    # loaded and a chunk decoded, and the CLI's handler then failed again
+    # writing "failed" into the same missing directory.
+    if status_path is not None and not status_path.parent.is_dir():
+        raise FileNotFoundError(
+            f"cannot write the status file {status_path}: the directory "
+            f"{status_path.parent} does not exist. Create it first "
+            f"(mkdir -p {status_path.parent}) or pass another --status."
         )
     # Resolves the engine module and raises EngineUnavailable with the remedy
     # if its backend cannot import here. After this call, everything
@@ -877,7 +993,10 @@ def transcribe(
         checkpoint_path_for,
         fingerprint,
         read_checkpoint,
+        read_transcription,
+        whisper_fingerprint,
         write_checkpoint,
+        write_transcription,
     )
     from dsj.chunking import transcribe_chunked
 
@@ -899,21 +1018,29 @@ def transcribe(
         loaded = eng_mod.load(model_id)
         rate = int(loaded.sample_rate)
 
-    def write_status(p: Progress, state: str) -> None:
+    def write_status(p: Progress, state: str, stalled_s: float | None = None) -> None:
         if status_path is None:
             return
         payload = asdict(p) | {
             "state": state,
+            # The writer, so a reader can ask the process table whether the job
+            # behind a `running` frame still exists, and stop that job alone
+            # rather than every `dsj suno` on the machine (#138). Without it, a
+            # killed run and a slow one read the same until someone ran `ps`.
+            "pid": os.getpid(),
             "fraction": round(p.fraction, 4),
             "speed": round(p.speed, 2),
             "eta_s": p.eta_s,
         }
+        # Present only while it applies, so a reader tests for the key.
+        if stalled_s is not None:
+            payload["stalled_s"] = round(stalled_s, 1)
         # Not fsynced: a reader is protected by the rename alone, and a
         # heartbeat lost to a power cut costs nothing to regenerate.
         atomic_write_text(status_path, json.dumps(payload))
 
-    def report(p: Progress, state: str) -> None:
-        write_status(p, state)
+    def report(p: Progress, state: str, stalled_s: float | None = None) -> None:
+        write_status(p, state, stalled_s)
         if on_progress:
             on_progress(p, state)
 
@@ -925,11 +1052,22 @@ def transcribe(
             # than realtime and the transcription that follows around 20x;
             # sharing one elapsed would make both speeds meaningless.
             extract_started = time.monotonic()
+            # ffmpeg keeps reporting while its position stands still, which is
+            # what made the 2026-09-22 stall look like a slow run: every frame
+            # was fresh, and each one named the same second.
+            furthest_s = -1.0
+            moved_at = extract_started
 
             def on_extract(done_s: float) -> None:
+                nonlocal furthest_s, moved_at
+                now = time.monotonic()
+                if done_s > furthest_s:
+                    furthest_s, moved_at = done_s, now
+                still_s = now - moved_at
                 report(
-                    Progress(done_s, stream.duration_s, time.monotonic() - extract_started),
+                    Progress(done_s, stream.duration_s, now - extract_started),
                     "extracting",
+                    still_s if still_s >= STALL_S else None,
                 )
 
             audio = media_mod.extract_audio(
@@ -950,53 +1088,90 @@ def transcribe(
         # cannot read fails here rather than after an hour of whisper.
         stretches = silences(media_mod.loudness(media, LOUDNESS_FRAME_S))
 
-        ckpt_path: Path | None = None
+        # Beside `out`, for every engine: the chunk engines bank tokens there
+        # after every chunk, whisper its finished result (dsj/checkpoint.py).
+        ckpt_path = checkpoint_path_for(out)
         resumed_from_s = 0.0
         # The recording's length as this run's transcription frames report it,
-        # kept so the done frame can report the same number (#52). whisper's
-        # frames take ffprobe's duration; the chunk branch below replaces it
-        # with the decoded length, which is what its running frames divide by.
+        # kept so the done frame can report the same number (#52). It starts as
+        # ffprobe's duration, which an unanchored whisper run keeps; an
+        # anchored one and the chunk branch below replace it with the decoded
+        # length, which is what their running frames divide by (#173).
         audio_total_s = stream.duration_s
         if spec.kind == "file":
+            from dsj.whisper import fingerprint_fields as whisper_fields
             from dsj.whisper import transcribe_whisper
 
-            # No checkpoint, and so no resume: whisper owns its window loop and
-            # exposes no per-window hook to bank one from. Said out loud rather
-            # than left as a silently absent feature, because a resumable engine
-            # and a non-resumable one look identical until the run is killed.
-            if resume:
-                logger.info("whisper writes no checkpoint; an interrupted run starts over")
-            report(Progress(0.0, stream.duration_s, 0.0), "running")
-            whisper_started = time.monotonic()
-
-            # The anchored path cuts the audio itself, so it can say where it
-            # has got to. Unanchored there is still one report at 0% and
-            # nothing until the end: mlx-whisper takes no progress callback,
-            # and a bar that moved without evidence would be a bar that lies.
-            whisper_progress: Callable[[float], None] | None = None
-            if anchor_s is not None and prompt is not None:
-
-                def _whisper_progress(done_s: float) -> None:
-                    report(
-                        Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
-                        "running",
-                    )
-
-                whisper_progress = _whisper_progress
-
-            transcription = transcribe_whisper(
-                audio,
-                model_id=model_id,
-                language=language,
-                prompt=prompt,
-                anchor_s=anchor_s,
-                on_progress=whisper_progress,
+            # whisper owns its window loop and exposes no per-window hook, so
+            # nothing is banked while it decodes; its finished result is, at
+            # the checkpoint's path, before the loop retry and the labelling
+            # that follow it (#171). Before that, an hour of whisper was lost
+            # to an interrupt that came after the decode had finished.
+            whisper_fp = whisper_fingerprint(
+                media, model_id, whisper_fields(language, prompt, anchor_s)
             )
+            banked_result: Transcription | None = None
+            if resume:
+                banked_result = read_transcription(
+                    ckpt_path,
+                    whisper_fp,
+                    on_reject=lambda why: logger.warning(
+                        "checkpoint ignored, transcribing from the start: %s", why
+                    ),
+                )
+            else:
+                ckpt_path.unlink(missing_ok=True)
+
+            if banked_result is not None:
+                # The whole recording was decoded by an earlier run, so this
+                # one credits itself with none of it and ends at 0.0x, as a
+                # parakeet run resumed from a finished checkpoint does.
+                logger.info("whisper's result was banked by an earlier run; not decoding again")
+                transcription = banked_result
+                resumed_from_s = audio_total_s
+            else:
+                # Said out loud rather than left as a silently absent
+                # feature, because a resumable engine and a non-resumable one
+                # look identical until the run is killed.
+                if resume:
+                    logger.info(
+                        "whisper banks nothing until its transcription is finished; "
+                        "an interrupt before then starts over"
+                    )
+                report(Progress(0.0, stream.duration_s, 0.0), "running")
+                whisper_started = time.monotonic()
+
+                # The anchored path cuts the audio itself, so it can say where
+                # it has got to. Unanchored there is still one report at 0%
+                # and nothing until the end: mlx-whisper takes no progress
+                # callback, and a bar that moved without evidence would be a
+                # bar that lies.
+                whisper_progress: Callable[[float, float], None] | None = None
+                if anchor_s is not None and prompt is not None:
+
+                    def _whisper_progress(done_s: float, total_s: float) -> None:
+                        nonlocal audio_total_s
+                        audio_total_s = total_s
+                        report(
+                            Progress(done_s, total_s, time.monotonic() - whisper_started),
+                            "running",
+                        )
+
+                    whisper_progress = _whisper_progress
+
+                transcription = transcribe_whisper(
+                    audio,
+                    model_id=model_id,
+                    language=language,
+                    prompt=prompt,
+                    anchor_s=anchor_s,
+                    on_progress=whisper_progress,
+                )
+                write_transcription(ckpt_path, whisper_fp, media, transcription)
         else:
             audio_data = loaded.load_audio(audio)
             audio_total_s = len(audio_data) / rate
 
-            ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
             # differ, and `audio` is a temp wav made fresh on every run, so a
             # checkpoint keyed to it would name ffmpeg's output rather than the
@@ -1106,7 +1281,8 @@ def transcribe(
             )
         transcription, loops = _without_loops(transcription)
         # After the loops leave, so a loop never merges into a real sentence
-        # and hides from is_loop. Merging is whisper's only (#192).
+        # and hides from is_loop. whisper merges overlapping sentences (#190);
+        # parakeet and sherpa split them, never merge (#192).
         transcription = _without_overlaps(transcription, merge=spec.kind == "file")
         unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 
@@ -1142,7 +1318,9 @@ def transcribe(
             )
 
         # Removed once labelling is over, not as soon as `out` is written
-        # (#101). The unlabelled transcript carries no fingerprint, so the next
+        # (#101). whisper's banked result goes at the same moment and for the
+        # same reason (#171); the rest of this comment is about the chunk
+        # engines' checkpoint. The unlabelled transcript carries no fingerprint, so the next
         # run cannot tell it is finished, or for this media and model; only the
         # checkpoint can. It used to go first, on the reasoning that a crash in
         # labelling would strand a stale checkpoint and the next run would
@@ -1156,8 +1334,7 @@ def transcribe(
         #
         # After the write, not before, for the same reason: a crash between
         # the two costs one redundant resume rather than the whole run.
-        if ckpt_path is not None:
-            ckpt_path.unlink(missing_ok=True)
+        ckpt_path.unlink(missing_ok=True)
 
         elapsed = time.monotonic() - started
         # The length of the recording, the total every running frame reported,

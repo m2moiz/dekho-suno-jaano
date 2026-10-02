@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -18,14 +19,19 @@ import wave
 from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
+from dsj.checkpoint import checkpoint_path_for
+from dsj.merge import Turn
 from dsj.suno import Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _stub_mlx_whisper(
@@ -315,7 +321,10 @@ def test_the_missing_extra_names_both_install_forms(monkeypatch: pytest.MonkeyPa
     # Both forms, because `uv sync` is a no-op for someone who installed the
     # tool rather than the project, and the reverse.
     assert "uv tool install" in str(exc.value)
-    assert "uv sync --extra whisper" in str(exc.value)
+    assert "--extra whisper" in str(exc.value)
+    # Never as a whole `uv sync` line: that uninstalls every other extra (#170).
+    assert "uv sync --extra whisper" not in str(exc.value)
+    assert "uninstalls every extra" in str(exc.value)
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -326,8 +335,8 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     Downstream -- dekho, and any agent reading the index -- must not be able to
     tell which engine wrote it apart from the model id. The checkpoint check is
-    the other half: whisper has no chunk loop of dsj's to bank, so a file
-    beside the output would be a stale one nothing could ever resume from.
+    the other half: the result whisper banks beside the output (#171) is gone
+    once the run has finished, so nothing stale is left for a later run to find.
     """
     _stub_mlx_whisper(monkeypatch, _result())
     out = tmp_path / "out.json"
@@ -343,7 +352,125 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
         "c": 0.25,
         "charOffset": 0,
     }
-    assert list(tmp_path.glob("*.checkpoint*")) == []
+    assert not checkpoint_path_for(out).exists()
+    assert [p.name for p in tmp_path.iterdir()] == [fake_media.name, out.name]
+
+
+def _interrupt(wav: Path) -> None:
+    raise KeyboardInterrupt
+
+
+ONE_SPEAKER: dict[str, Any] = {"turns": [Turn(0.0, 400.0, 0)], "labels": ["SPEAKER_01"]}
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_an_interrupt_while_labelling_does_not_decode_whisper_again(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Stopped during speaker labelling, the rerun labels the banked result (#171).
+
+    The whisper half of #101. Labelling runs after the decode, so this is where
+    someone who thinks "it is nearly done" presses Ctrl-C, and on the owner's
+    85.6 minute recording that used to cost up to an hour of whisper again.
+    KeyboardInterrupt stands in for the signal, as in #101's test. The stub
+    counts its decodes, so "not decoded again" is asserted directly.
+    """
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper")
+    unlabelled = json.loads(out.read_text())
+    assert "speakers" not in unlabelled
+    assert len(calls) == 1
+    assert checkpoint_path_for(out).exists(), "nothing was banked before labelling"
+
+    fake_turns(**ONE_SPEAKER)
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, out, engine="whisper", on_progress=capture)
+
+    assert len(calls) == 1, "the rerun decoded the audio again"
+    assert "running" not in states, "the rerun reported transcription progress again"
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert [s["tokens"] for s in payload["sentences"]] == [
+        s["tokens"] for s in unlabelled["sentences"]
+    ]
+    assert not checkpoint_path_for(out).exists()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+@pytest.mark.parametrize(
+    ("first", "second", "changed"),
+    [
+        ({"prompt": "one"}, {"prompt": "two"}, "the prompt changed (prompt)"),
+        (
+            {"prompt": "seed"},
+            {"prompt": "seed", "anchor_s": 10.0},
+            "the anchor window changed (anchor_s, anchor_overlap_s)",
+        ),
+        ({"language": "ur"}, {"language": "en"}, "the language changed (language)"),
+        ({"model_id": "m/a"}, {"model_id": "m/b"}, "the model changed (model_id)"),
+    ],
+)
+def test_a_result_banked_under_other_settings_is_decoded_again(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    changed: str,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A prompt, an anchor, a language or a model changes what whisper writes (#171).
+
+    So a result banked under one is not labelled as though it came from
+    another: the rerun decodes again, and says on stderr which setting moved.
+    """
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper", **first)
+    assert len(calls) == 1
+
+    fake_turns(**ONE_SPEAKER)
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    transcribe(fake_media, out, engine="whisper", **second)
+
+    assert len(calls) == 2, "a result banked under other settings was reused"
+    assert "checkpoint ignored, transcribing from the start" in caplog.text
+    assert changed in caplog.text
+    assert not checkpoint_path_for(out).exists()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_no_resume_decodes_whisper_again_and_removes_the_bank(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper")
+
+    fake_turns(**ONE_SPEAKER)
+    transcribe(fake_media, out, engine="whisper", resume=False)
+
+    assert len(calls) == 2
+    assert not checkpoint_path_for(out).exists()
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -618,7 +745,7 @@ def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.Monke
 def test_anchored_reports_progress_at_each_windows_real_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`on_progress` fires once per window, with the window's end in seconds.
+    """`on_progress` fires once per window, with the window's end and the decoded length.
 
     Same 16s/10s/6s geometry as the step test above: windows end at 10s, 14s
     and 16s (the last clipped to the real length, not the nominal 18s a fourth
@@ -629,14 +756,55 @@ def test_anchored_reports_progress_at_each_windows_real_end(
         samples=16 * whisper_mod.SAMPLE_RATE,
         results=[_result(segments=[]) for _ in range(3)],
     )
-    seen: list[float] = []
+    seen: list[tuple[float, float]] = []
 
-    def on_progress(done_s: float) -> None:
-        seen.append(done_s)
+    def on_progress(done_s: float, total_s: float) -> None:
+        seen.append((done_s, total_s))
 
     transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0, on_progress=on_progress)
 
-    assert seen == [10.0, 14.0, 16.0]
+    assert seen == [(10.0, 16.0), (14.0, 16.0), (16.0, 16.0)]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+@pytest.mark.parametrize("probed_s", [15.5, 16.5])
+def test_anchored_progress_reaches_exactly_one_whatever_the_probe_said(
+    probed_s: float, monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """Done and total come from one length, the decoded one, so 100% is 100% (#173).
+
+    ffprobe reads a container's duration, and whisper decodes the samples in
+    it; padding and rounding put the two apart. Here the decode is 16 s and the
+    probe says half a second more or less. Dividing the decoded seconds by the
+    probe's ended the last window at 103% or 97%. The done frame names the same
+    total as the running frames, as #52 holds for the other paths.
+    """
+    from dsj import media
+
+    def probe(path: Path) -> media.AudioStream:
+        return media.AudioStream("pcm_s16le", whisper_mod.SAMPLE_RATE, 1, probed_s)
+
+    monkeypatch.setattr(media, "probe", probe)
+    _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+    frames: list[tuple[str, float, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        frames.append((state, p.fraction, p.audio_total_s))
+
+    transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", prompt="seed", anchor_s=10.0,
+        diarize=False, on_progress=capture,
+    )
+
+    windows = [f for f in frames if f[0] == "running"][1:]
+    assert [fraction for _, fraction, _ in windows] == [10 / 16, 14 / 16, 1.0]
+    assert {total for _, _, total in windows} == {16.0}
+    assert frames[-1] == ("done", 1.0, 16.0)
 
 
 def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(

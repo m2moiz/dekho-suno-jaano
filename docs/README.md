@@ -16,7 +16,7 @@ a fully green test suite.
 | [visual-marks.md](visual-marks.md) | **Three change detectors built, measured on a real recording, and thrown away** — and the premise failure underneath all three. Why the shipped one has a budget and no threshold. |
 | [vlm-legibility.md](vlm-legibility.md) | Can a small local vision model read dense on-screen text? Ground truth written *before* the model ran, and reused unedited for a second round. One model cannot (47%), a second can (86%) — and the blocker moves from legibility to 156 s a frame. |
 | [datasets-surveyed.md](datasets-surveyed.md) | Every public dataset considered as external ground truth, what each one's annotations really are, and why eight were rejected. |
-| [marks-resume.md](marks-resume.md) | Why `jaano dekho` has no checkpoint when `jaano suno` does. A 74-minute scan costs nine minutes; the machinery that would save half of it is 1,300 lines. Includes the correctness objection that was checked and turned out to be wrong. |
+| [marks-resume.md](marks-resume.md) | Why `dsj dekho` has no checkpoint when `dsj suno` does. A 74-minute scan costs nine minutes; the machinery that would save half of it is 1,300 lines. Includes the correctness objection that was checked and turned out to be wrong. |
 
 ## How it is tested
 
@@ -25,6 +25,7 @@ a fully green test suite.
 | [tooling-gaps.md](tooling-gaps.md) | The 16 practices and 3 tool tiers this project is built to. A general Python checklist, not a jaano one. |
 | [resume-gate-design.md](resume-gate-design.md) | How you test a resume that silently restarts, given it produces byte-identical output either way. |
 | [mutmut-triage.md](mutmut-triage.md) | Every mutant the suite fails to kill, and why each one is accepted. Read this before adding a suppression. |
+| [runbook.md](runbook.md) | How a session executes a milestone end to end, from its plan issue to the release, and the traps earlier sessions fell into. |
 
 ## The one idea they share
 

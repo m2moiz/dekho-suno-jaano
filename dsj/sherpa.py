@@ -82,8 +82,9 @@ def available() -> str | None:
         # the part that is Android's alone.
         return (
             f"sherpa-onnx will not import here: {exc}. Install it with "
-            '`uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano"` '
-            "(or `uv sync --extra sherpa` from a clone). On Android that install "
+            '`uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano"`, '
+            "or from a clone add `--extra sherpa` to the `uv sync` line you already use "
+            "(`uv sync` uninstalls every extra it is not given). On Android that install "
             "goes inside a proot glibc container, not Termux itself, which is bionic."
         )
     return None
