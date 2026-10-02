@@ -14,11 +14,13 @@ build banner with the actual diagnosis buried in it.
 from __future__ import annotations
 
 __all__ = [
+    "ENVELOPE_RATE",
     "AudioStream",
     "FFmpegNotFound",
     "MediaError",
     "NoAudioStream",
     "NoVideoStream",
+    "envelope",
     "extract_audio",
     "extract_frame",
     "extract_tile_grid",
@@ -26,9 +28,12 @@ __all__ = [
     "loudness",
     "needs_conversion",
     "probe",
+    "sound_copy",
+    "video_codec",
 ]
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -100,6 +105,10 @@ class AudioStream:
     sample_rate: int
     channels: int
     duration_s: float
+    # ffprobe's format_name for the file around the stream: "wav" for a WAV,
+    # "mov,mp4,m4a,3gp,3g2,mj2" for a .mov. The stream fields alone cannot say
+    # whether a reader that wants a WAV file can be handed the file (#205).
+    container: str
 
 
 def _tool(name: str) -> str:
@@ -127,7 +136,7 @@ def probe(media: Path) -> AudioStream:
             "-v", "error",
             "-select_streams", "a:0",
             "-show_entries", "stream=codec_name,sample_rate,channels,duration",
-            "-show_entries", "format=duration",
+            "-show_entries", "format=duration,format_name",
             "-print_format", "json",
             str(media),
         ],
@@ -171,6 +180,7 @@ def probe(media: Path) -> AudioStream:
         sample_rate=int(stream["sample_rate"]),
         channels=int(stream["channels"]),
         duration_s=float(duration),
+        container=str(fmt["format_name"]),
     )
 
 
@@ -181,9 +191,15 @@ def needs_conversion(stream: AudioStream, sample_rate: int) -> bool:
     `-ac 1 -acodec pcm_s16le -ar <preprocessor rate>` and nothing else, so a
     file already in that shape can be handed straight to the model. Anyone who
     pre-extracted their audio by hand lands here and pays nothing.
+
+    The container counts too, because the same file goes on to the speaker
+    labelling, and senko reads it as a WAV. A .mov whose sound is already 16 kHz
+    mono pcm_s16le transcribed fine and then lost its labels to `file does not
+    start with RIFF id` (#205). Only a WAV is passed through as it is.
     """
     return not (
-        stream.codec_name == "pcm_s16le"
+        stream.container == "wav"
+        and stream.codec_name == "pcm_s16le"
         and stream.sample_rate == sample_rate
         and stream.channels == 1
     )
@@ -318,12 +334,101 @@ def loudness(media: Path, frame_s: float, sample_rate: int = 16_000) -> NDArray[
     return 10 * np.log10(np.maximum(np.concatenate(power), 1e-18))
 
 
+# Buckets a second in a waveform envelope (#61). A 1,600 px canvas on a 2x
+# display is 3,200 columns; at 50 a second every recording over 64 s has at
+# least one bucket per column, a 74-minute one has 69 (so a column is the
+# min and max of 69 buckets, never a guess), and the 74 minutes cost 444 KB.
+ENVELOPE_RATE = 50
+
+
+def envelope(
+    media: Path, buckets_per_s: int = ENVELOPE_RATE, sample_rate: int = 16_000
+) -> bytes:
+    """The shape of `media`'s sound: the lowest and highest sample of each bucket.
+
+    `buckets_per_s` buckets a second, each written as two signed bytes, min
+    then max, scaled so 127 is full scale; a part bucket at the end counts as
+    one. Small whole numbers rather than floats or JSON, so a 74-minute file is
+    under half a megabyte and the page reads it without parsing (#61).
+
+    One decode pass of the mono mix, read in blocks as loudness() reads it, so
+    the recording is never in memory, only its buckets.
+
+    Raises:
+        MediaError: if ffmpeg exits non-zero.
+    """
+    bucket = sample_rate // buckets_per_s
+    if bucket <= 0 or sample_rate % buckets_per_s:
+        raise ValueError(
+            f"buckets_per_s must divide sample_rate ({sample_rate}), got {buckets_per_s}"
+        )
+    cmd = [
+        _tool("ffmpeg"),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(media),
+        "-vn",
+        "-ac", "1",
+        "-ar", str(sample_rate),
+        "-f", "f32le",
+        "-",
+    ]
+    # 1,000 buckets a read, a little over a megabyte of samples, as loudness().
+    block = 1000 * bucket * 4
+    pairs: list[NDArray[np.float32]] = []
+    rest = b""
+
+    def fold(samples: NDArray[np.float32]) -> None:
+        shaped = samples.reshape(-1, bucket)
+        pairs.append(np.stack([shaped.min(axis=1), shaped.max(axis=1)], axis=1))
+
+    # stderr to a file and Popen as a context manager, for extract_audio's reasons.
+    with (
+        tempfile.TemporaryFile("w+") as errfile,
+        subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errfile) as proc,
+    ):
+        assert proc.stdout is not None
+        while buf := proc.stdout.read(block):
+            buf = rest + buf
+            whole = len(buf) // (bucket * 4) * bucket * 4
+            rest = buf[whole:]
+            fold(np.frombuffer(buf[:whole], dtype=np.float32))
+        returncode = _reap(proc, what="the sample stream reaching EOF")
+        errfile.seek(0)
+        stderr = errfile.read().strip()
+
+    if returncode != 0:
+        raise MediaError(
+            f"ffmpeg failed to read the audio of {media} (exit {returncode}):\n{stderr}"
+        )
+    if len(rest) >= 4:
+        # The part bucket at the end, padded with its own last sample so the
+        # padding cannot widen its range.
+        tail = np.frombuffer(rest[: len(rest) // 4 * 4], dtype=np.float32)
+        fold(np.concatenate([tail, np.full(bucket - len(tail), tail[-1], dtype=np.float32)]))
+    if not pairs:
+        return b""
+    scaled = np.round(np.clip(np.concatenate(pairs), -1.0, 1.0) * 127)
+    return scaled.astype(np.int8).tobytes()
+
+
 def has_video(media: Path) -> bool:
     """Does `media` carry a picture at all?
 
     Asked separately from probe() because that one describes the audio stream
     and raises when there is none -- an audio-only file is a perfectly good
     transcription input and a hopeless input to a change scan.
+    """
+    return video_codec(media) is not None
+
+
+def video_codec(media: Path) -> str | None:
+    """The codec of `media`'s first picture stream, or None when it has none.
+
+    The name rather than a yes or no because the library keeps it (#105): a
+    browser plays h264 and may not play ProRes, and only the name can tell the
+    two apart later (#110).
     """
     if not media.exists():
         raise FileNotFoundError(media)
@@ -343,7 +448,52 @@ def has_video(media: Path) -> bool:
     if proc.returncode != 0:
         raise MediaError(f"ffprobe could not read {media}: {proc.stderr.strip()}")
     info: dict[str, Any] = json.loads(proc.stdout)
-    return bool(info.get("streams"))
+    streams: list[dict[str, Any]] = info.get("streams") or []
+    if not streams:
+        return None
+    # A stream ffprobe cannot name is still a picture: has_video() said yes to
+    # it before this function existed, and must not start saying no.
+    return str(streams[0].get("codec_name") or "unknown")
+
+
+def sound_copy(media: Path, dest: Path) -> Path:
+    """Write `media`'s first audio stream to `dest` as 96 kbps AAC in an .m4a.
+
+    For a recording the browser will not play at all (#110): every browser the
+    page runs in plays AAC in MP4, so this copy carries the sound when the file
+    itself is refused. About 40 MB an hour. The index goes at the front
+    (`+faststart`), so a player can seek before it has read to the end.
+
+    Written beside `dest` and renamed into place, so a reader never meets half
+    a copy.
+
+    Raises:
+        NoAudioStream: `media` has no sound to copy.
+        MediaError: ffmpeg could not read it or write the copy.
+    """
+    probe(media)  # NoAudioStream, or ffprobe's own words, before anything is written
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    proc = subprocess.run(
+        [
+            _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(media),
+            "-map", "0:a:0", "-vn",
+            "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart",
+            "-f", "mp4", str(tmp),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise MediaError(
+            f"ffmpeg could not copy the sound of {media} (exit {proc.returncode}):\n"
+            f"{proc.stderr.strip()}"
+        )
+    os.replace(tmp, dest)  # noqa: PTH105
+    return dest
 
 
 # How far before the target the coarse seek lands, in seconds. Big enough to

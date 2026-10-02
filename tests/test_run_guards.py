@@ -187,7 +187,8 @@ def test_a_finished_run_puts_the_default_sigterm_back(tmp_path: Path) -> None:
         dsj.cli.app,
         ["suno", str(tmp_path / "rec.wav"), "-o", str(tmp_path / "o.json"), "--language", "ur"],
     )
-    assert isinstance(result.exception, ValueError), result.output
+    # A mistake in the arguments: one line and exit 1, not a traceback (#200).
+    assert result.exit_code == 1, result.output
     assert signal.getsignal(signal.SIGTERM) == before
 
 
@@ -238,7 +239,7 @@ def test_every_document_names_its_writer(tmp_path: Path) -> None:
     failed = read_status(tmp_path / "run.json")
     assert failed is not None
     assert (failed["state"], failed["pid"]) == ("failed", broken.pid)
-    assert failed["error"].startswith("FileNotFoundError")
+    assert failed["error"].startswith("MissingPath: ")
 
 
 # --------------------------------------------------------------------------
@@ -255,7 +256,8 @@ def test_a_second_run_is_refused_while_the_first_runs(tmp_path: Path) -> None:
     assert second.wait(timeout=60) == 75
 
     said = (tmp_path / "second" / "stderr.log").read_text()
-    assert "already running" in said
+    assert said.startswith("dsj: another dsj suno is already running"), said
+    assert "Traceback" not in said
     assert f"pid {first.pid}" in said
     assert str(tmp_path / "first" / "out.json") in said
     # Refused before the model loaded and before --status was touched.
@@ -388,3 +390,69 @@ def test_parakeet_stopped_mid_run_says_interrupted(
     assert doc["during"] == "running"
     assert doc["audio_done_s"] >= running["audio_done_s"]
     assert doc["audio_total_s"] == pytest.approx(360.0, abs=1.0)
+
+
+# --------------------------------------------------------------------------
+# #200: a mistake in the arguments is one line; a bug in dsj keeps its stack
+# --------------------------------------------------------------------------
+
+CONSOLE_SCRIPT = Path(sys.executable).parent / "dsj"
+
+
+def said_by(argv: list[str], tmp_path: Path, env: dict[str, str] | None = None) -> tuple[int, str]:
+    """Run `argv` to the end: its exit code and everything it wrote to stderr."""
+    proc = launch(argv, tmp_path / "stderr.log", env)
+    code = proc.wait(timeout=120)
+    return code, (tmp_path / "stderr.log").read_text()
+
+
+@pytest.mark.parametrize(
+    ("argv", "line"),
+    [
+        (["/nonexistent.wav", "-o", "{tmp}/x.json"], "dsj: /nonexistent.wav does not exist.\n"),
+        (["{tmp}/rec.wav", "-o", "{tmp}/nope-dir/x.json"],
+         "dsj: cannot write {tmp}/nope-dir/x.json: the directory {tmp}/nope-dir does not exist. "
+         "Create it first (mkdir -p {tmp}/nope-dir) or pass another -o.\n"),
+        (["{tmp}/rec.wav", "-o", "{tmp}/x.json", "--engine", "bogus"],
+         "dsj: unknown engine 'bogus', expected one of parakeet, whisper, sherpa\n"),
+        (["{tmp}/rec.wav", "-o", "{tmp}/x.json", "--language", "ur"],
+         "dsj: --language and --prompt are whisper's; parakeet takes neither. "
+         "Add --engine whisper, or drop them.\n"),
+    ],
+)
+def test_a_mistake_in_the_arguments_is_one_line_and_exit_1(
+    tmp_path: Path, argv: list[str], line: str
+) -> None:
+    """The installed `dsj`, as the issue ran it. Each refusal comes before any model loads."""
+    (tmp_path / "rec.wav").touch()
+    args = [a.format(tmp=tmp_path) for a in argv]
+    code, said = said_by([str(CONSOLE_SCRIPT), "suno", *args], tmp_path)
+    assert (code, said) == (1, line.format(tmp=tmp_path))
+
+
+def test_an_engine_that_cannot_run_is_one_line_and_exit_1(tmp_path: Path) -> None:
+    (tmp_path / "rec.wav").touch()
+    code, said = said_by(
+        [sys.executable, str(STUB), str(tmp_path / "rec.wav"), "-o", str(tmp_path / "o.json"),
+         "--no-diarize"],
+        tmp_path,
+        {"STUB_UNAVAILABLE": "its extra is not installed"},
+    )
+    assert (code, said) == (
+        1, "dsj: the parakeet engine cannot run here: its extra is not installed\n"
+    )
+
+
+def test_a_bug_in_dsj_still_prints_its_traceback(tmp_path: Path) -> None:
+    """Only the listed errors are shortened. Anything else is dsj's to fix, and needs its stack."""
+    (tmp_path / "rec.wav").touch()
+    code, said = said_by(
+        [sys.executable, str(STUB), str(tmp_path / "rec.wav"), "-o", str(tmp_path / "o.json"),
+         "--no-diarize"],
+        tmp_path,
+        {"STUB_BUG": "1"},
+    )
+    assert code == 1
+    assert "Traceback (most recent call last)" in said
+    assert said.rstrip().endswith("RuntimeError: stub_suno: a bug in dsj itself")
+    assert "dsj: " not in said

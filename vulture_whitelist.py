@@ -46,6 +46,7 @@ whitelist.dekho  # dsj/cli.py
 whitelist.dikhao  # dsj/cli.py
 whitelist.likho  # dsj/cli.py
 whitelist.parho  # dsj/cli.py
+whitelist.ui  # dsj/cli.py
 # The same for the group callback, `@app.callback()`, which exists to carry
 # --version. `dsj --version` printing the version is the check that it is wired.
 whitelist.root  # dsj/cli.py
@@ -91,3 +92,21 @@ whitelist.generate  # tests/conftest.py
 # comparison of one. Nothing reads it as an attribute, so a branch that changes
 # dsj/checkpoint.py sees it as unused.
 whitelist.schema  # dsj/checkpoint.py -- Fingerprint
+
+# uvicorn calls it by name, `dsj.ui.server:dev_app --factory`, from the
+# justfile's ui-dev recipe, which vulture does not read.
+whitelist.dev_app  # dsj/ui/server.py
+
+# Set by the idle watchdog, read inside uvicorn's own serve loop, which vulture
+# does not scan: uvicorn.Server polls `should_exit` and shuts down when it is True.
+whitelist.should_exit  # dsj/ui/server.py -- _watch
+
+# A FastAPI route: the @router.get decorator registers it, and FastAPI calls it
+# for each request. Its other routes' names happen to be used elsewhere too.
+whitelist.waveform  # dsj/ui/routes/media.py
+whitelist.import_recording  # dsj/ui/routes/recording.py, the same: @router.post registers it
+# Read by reflection: the engines route turns each EngineChoice into the
+# Engine model through dataclasses.asdict, and pydantic fills Engine's
+# fields from it; FastAPI then serializes them. Nothing reads either as an
+# attribute (#113).
+whitelist.default_model  # dsj/ui/jobs.py EngineChoice, dsj/ui/schemas.py Engine

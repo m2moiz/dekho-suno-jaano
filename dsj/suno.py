@@ -21,11 +21,17 @@ __all__ = [
     "OVERLAP_S",
     "RETRY_LOOPS",
     "STALL_S",
+    "BadOption",
+    "MissingPath",
     "Progress",
+    "RunRefused",
+    "Terminated",
     "clock",
     "is_loop",
     "main",
     "render_bar",
+    "reports_progress",
+    "roman_urdu",
     "silences",
     "transcribe",
 ]
@@ -46,6 +52,7 @@ import numpy as np
 
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
+from dsj import filetag
 from dsj import media as media_mod
 from dsj.asr import ENGINES, Transcription, get_engine, with_char_offsets
 from dsj.atomic import atomic_write_text
@@ -908,6 +915,93 @@ def _label_speakers(
     return labelled
 
 
+class RunRefused(Exception):
+    """A run refused before anything loaded, over something only its caller can put right.
+
+    `dsj suno` prints one of these as one line, `dsj: <message>`, and not as a
+    traceback (#200): forty lines of stack above a sentence about the caller's
+    own arguments read as a crash in dsj. Anything that is not one of these
+    keeps its traceback, because that is a bug in dsj.
+    """
+
+
+class MissingPath(RunRefused, FileNotFoundError):
+    """A file the run reads, or a directory it writes into, is not there.
+
+    A FileNotFoundError too, so a caller's `except FileNotFoundError` still
+    catches it.
+    """
+
+
+class BadOption(RunRefused, ValueError):
+    """An option this run cannot take. A ValueError too, as it always was."""
+
+
+class Terminated(KeyboardInterrupt):
+    """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
+
+    A KeyboardInterrupt so that everything already written to survive Ctrl-C
+    survives `kill` too: the temp file cleanup in atomic.py, the checkpoint the
+    chunk loop banked, the temporary directory the extracted audio sits in.
+    Python's default for SIGTERM is to end the process on the spot, which skips
+    all of it, and the status file kept saying `running` about a process that no
+    longer existed (#143, observed 2026-09-22).
+
+    Here and not in the CLI, which installs the handler that raises it, because
+    transcribe() is what writes `interrupted` and has to name the signal (#103).
+    """
+
+
+def roman_urdu(
+    engine: str, language: str | None, prompt: str | None
+) -> tuple[str, str, str, float]:
+    """What `--roman-urdu` turns a run's engine, language and prompt into, and its `anchor_s`.
+
+    One definition for `dsj suno` and for a run started from `dsj ui` (#113),
+    because transcribe() knows nothing of Roman Urdu: an app that passed only
+    `language="ur"` would get a worse Urdu transcript than the terminal, with
+    nothing to say so. Sugar over the flags under it rather than a mode, so an
+    explicit language or prompt beside it still wins. The prompt is measured,
+    not invented, and so is the window it is re-seeded every (dsj/whisper.py).
+    parakeet becomes whisper; sherpa is left alone, and transcribe() then
+    refuses the whisper options it does not take.
+    """
+    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
+
+    return (
+        "whisper" if engine == "parakeet" else engine,
+        language or "ur",
+        prompt or ROMAN_URDU_PROMPT,
+        ANCHOR_CHUNK_S,
+    )
+
+
+def reports_progress(engine: str, prompt: str | None, anchor_s: float | None) -> bool:
+    """Whether a run reports progress before it finishes.
+
+    parakeet and sherpa report after every chunk. whisper reports once at 0%
+    and then nothing until it is done, because mlx-whisper takes no progress
+    callback, except on an anchored run (`anchor_s` and `prompt`, which
+    `--roman-urdu` sets), which cuts the audio itself and reports per window.
+    A page showing a run must know which, or a bar waiting on whisper reads as
+    stuck (#113).
+    """
+    return engine != "whisper" or (anchor_s is not None and prompt is not None)
+
+
+def _write_last_status(status_path: Path | None, document: dict[str, object]) -> None:
+    """Write the document a run ends on when it does not reach `done`.
+
+    Atomic for the same reason as the heartbeat, and more so: the watcher
+    polling for exactly this document is in a tight read loop, which makes it
+    the reader most likely to land inside a torn write. Not into a directory
+    that does not exist: transcribe() refuses that status path up front, and
+    writing here would raise over its refusal (#197).
+    """
+    if status_path is not None and status_path.parent.is_dir():
+        atomic_write_text(status_path, json.dumps(document))
+
+
 def transcribe(
     media: Path,
     out: Path,
@@ -955,14 +1049,85 @@ def transcribe(
     parakeet takes neither.
     `model_id` defaults to whichever engine's model, so it is usually left
     alone.
+
+    A run that raises ends its status file on `{"state": "failed", "pid",
+    "error"}`, and one stopped by Ctrl-C or `kill` on `{"state":
+    "interrupted", "pid", "signal"}` plus where it had got to, then the
+    exception propagates. Written here, not by the CLI, so a caller that
+    imports this function is told too (#103): before, only `dsj suno` wrote
+    them, and an in-process run that crashed left its last `running` frame
+    on disk for good.
     """
+    # The last frame reported, for the `interrupted` document: tracked behind
+    # the heartbeat write and ahead of the caller's callback, the order the CLI
+    # tracked it in when it wrote this document, so the bytes are unchanged.
+    last: list[tuple[Progress, str]] = []
+
+    def track(p: Progress, state: str) -> None:
+        last[:] = [(p, state)]
+        if on_progress:
+            on_progress(p, state)
+
+    try:
+        return _transcribe(
+            media, out, model_id, status_path, track, resume, diarize,
+            require_diarize, engine, language, prompt, anchor_s,
+        )
+    except Exception as exc:
+        # Recorded and re-raised: a watcher has no other way to tell "died"
+        # from "not started yet", and the caller still gets the exception.
+        _write_last_status(
+            status_path,
+            {"state": "failed", "pid": os.getpid(), "error": f"{type(exc).__name__}: {exc}"},
+        )
+        raise
+    except KeyboardInterrupt as exc:
+        # Ctrl-C and `kill`. KeyboardInterrupt is not an Exception, so it needs
+        # its own branch; without one the heartbeat said `running` forever (#143).
+        stopped: dict[str, object] = {
+            "state": "interrupted",
+            "pid": os.getpid(),
+            "signal": "SIGTERM" if isinstance(exc, Terminated) else "SIGINT",
+        }
+        # Where it had got to, with the phase that number belongs to: an
+        # extracting frame's audio_done_s counts extraction, not transcript.
+        if last:
+            p, state = last[0]
+            stopped |= {
+                "during": state,
+                "audio_done_s": p.audio_done_s,
+                "audio_total_s": p.audio_total_s,
+            }
+        _write_last_status(status_path, stopped)
+        raise
+
+
+def _transcribe(
+    media: Path,
+    out: Path,
+    model_id: str | None,
+    status_path: Path | None,
+    on_progress: Callable[[Progress, str], None],
+    resume: bool,
+    diarize: bool,
+    require_diarize: bool,
+    engine: str,
+    language: str | None,
+    prompt: str | None,
+    anchor_s: float | None,
+) -> Payload:
+    """transcribe()'s body: everything it documents but the status a run ends on."""
     if engine not in ENGINES:
-        raise ValueError(f"unknown engine {engine!r}, expected one of {', '.join(ENGINES)}")
+        raise BadOption(f"unknown engine {engine!r}, expected one of {', '.join(ENGINES)}")
     if engine == "parakeet" and (language is not None or prompt is not None):
-        raise ValueError(
+        raise BadOption(
             "--language and --prompt are whisper's; parakeet takes neither. "
             "Add --engine whisper, or drop them."
         )
+    # Before the model loads (#200): a missing input used to cost a parakeet
+    # load before probe() noticed it.
+    if not media.exists():
+        raise MissingPath(f"{media} does not exist.")
     # Before the engine loads or a second of audio is decoded (#191). The first
     # write to `out` comes at parakeet's first checkpoint, and whisper's only
     # at the very end: on 2026-10-02 a whisper run decoded for 441 s and then
@@ -970,15 +1135,15 @@ def transcribe(
     # dikhao refuses a frame into a missing directory: a typo in `-o` would
     # otherwise put the transcript somewhere nobody looks.
     if not out.parent.is_dir():
-        raise FileNotFoundError(
+        raise MissingPath(
             f"cannot write {out}: the directory {out.parent} does not exist. "
             f"Create it first (mkdir -p {out.parent}) or pass another -o."
         )
     # The same for the heartbeat (#197). Its first write came after the model
-    # loaded and a chunk decoded, and the CLI's handler then failed again
-    # writing "failed" into the same missing directory.
+    # loaded and a chunk decoded, and the handler that writes "failed" then
+    # failed again writing into the same missing directory.
     if status_path is not None and not status_path.parent.is_dir():
-        raise FileNotFoundError(
+        raise MissingPath(
             f"cannot write the status file {status_path}: the directory "
             f"{status_path.parent} does not exist. Create it first "
             f"(mkdir -p {status_path.parent}) or pass another --status."
@@ -1041,8 +1206,7 @@ def transcribe(
 
     def report(p: Progress, state: str, stalled_s: float | None = None) -> None:
         write_status(p, state, stalled_s)
-        if on_progress:
-            on_progress(p, state)
+        on_progress(p, state)
 
     stream = media_mod.probe(media)
 
@@ -1147,7 +1311,7 @@ def transcribe(
                 # callback, and a bar that moved without evidence would be a
                 # bar that lies.
                 whisper_progress: Callable[[float, float], None] | None = None
-                if anchor_s is not None and prompt is not None:
+                if reports_progress(engine, prompt, anchor_s):
 
                     def _whisper_progress(done_s: float, total_s: float) -> None:
                         nonlocal audio_total_s
@@ -1288,11 +1452,17 @@ def transcribe(
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
-            # an index into that file and has to keep pointing at it.
-            "audio": str(media),
-            # No separate engine field: the model id already names it, and
-            # tests/test_suno.py pins this key set precisely so a downstream
-            # reader can rely on it.
+            # an index into that file and has to keep pointing at it. Absolute
+            # (#201): written as typed, a relative path was relative to a
+            # folder the file never recorded, and 23 of 97 transcripts under
+            # scratch/ named a recording nothing reading them later could find.
+            "audio": str(media.resolve()),
+            # Which engine wrote it (#172). The model id alone did not say:
+            # under sherpa it is whatever directory the run was given, and a
+            # token's `c` means something different under each engine, so a
+            # reader tinting by it has to know which. Ahead of `model`, so the
+            # speaker keys still land straight after `model` (_with_speakers).
+            "engine": engine,
             "model": model_id,
             "text": transcription.text,
             # Always written, `[]` when nothing was taken out, so that a
@@ -1316,6 +1486,11 @@ def transcribe(
             payload = _label_speakers(
                 payload, audio, out, stream.duration_s, report, require_diarize
             )
+
+        # After the last write to `out`, never after the first: labelling
+        # rewrites it, and the tag has to hold the bytes that stayed (#119).
+        # Onto `media`, the recording the user handed us, never the temp wav.
+        filetag.tag_transcript(media, out)
 
         # Removed once labelling is over, not as soon as `out` is written
         # (#101). whisper's banked result goes at the same moment and for the

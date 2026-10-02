@@ -45,6 +45,7 @@ from dsj.suno import (
     silences,
     transcribe,
 )
+from dsj.suno import main as suno_main
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -174,6 +175,28 @@ def test_transcribe_writes_the_timestamped_index(
         "charOffset": 0,
     }
     assert on_disk["audio"] == str(fake_media)
+
+
+def test_a_recording_named_relative_to_where_the_run_started_is_written_absolute(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`dsj suno rec.wav -o t.json` from the folder holding rec.wav (#201).
+
+    Written as typed, `audio` was relative to a folder the transcript never
+    recorded, and nothing that opened it later could find the recording.
+    """
+    fake_parakeet(tokens=[])
+    monkeypatch.chdir(fake_media.parent)
+    (tmp_path / "out").mkdir()
+
+    assert suno_main([fake_media.name, "-o", "out/t.json", "--no-diarize"]) == 0
+
+    audio = json.loads((tmp_path / "out" / "t.json").read_text())["audio"]
+    assert Path(audio).is_absolute()
+    assert audio == str(fake_media.resolve())
 
 
 def test_transcribe_on_an_empty_result_still_writes_a_file(
@@ -618,36 +641,156 @@ def test_the_transcript_is_written_through_the_atomic_writer(
     assert out in seen
 
 
+def _load_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make parakeet's model load raise, before transcribe() has written any heartbeat."""
+
+    def from_pretrained(model_id: str) -> Any:
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr("parakeet_mlx.from_pretrained", from_pretrained)
+
+
 def test_the_failure_status_is_written_through_the_atomic_writer(
-    fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """main()'s except-handler writes the one document a watcher polls hardest.
+    """transcribe() writes the one document a watcher polls hardest, atomically.
 
     A watcher distinguishing "died" from "not started yet" reads this file in a
     tight loop, so it is the reader most likely to land inside a torn write.
+    Driven through transcribe() itself since #103 moved the write there from
+    the CLI: a stub that replaced transcribe() would now test nothing.
     """
-    import dsj.suno as transcribe_mod
-
+    _load_fails(monkeypatch)
     status = tmp_path / "status.json"
     seen = _spy_on_atomic_write(monkeypatch)
 
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("model exploded")
-
-    monkeypatch.setattr(transcribe_mod, "transcribe", boom)
-
     with pytest.raises(RuntimeError):
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(tmp_path / "out.json"), "--status", str(status)]
-        )
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
 
     assert seen == [status]
     failed = json.loads(status.read_text())
     assert failed["state"] == "failed"
     assert "model exploded" in failed["error"]
+
+
+def _decode_fails_on_second_chunk(model: FakeModel, crash: BaseException) -> None:
+    """The stub engine decodes its first chunk, then raises `crash` on the next."""
+    real = model.generate
+
+    def generate(mel: Any, **kwargs: Any) -> Any:
+        if model.mels:
+            raise crash
+        return real(mel, **kwargs)
+
+    model.generate = generate  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_a_library_caller_gets_failed_when_the_engine_raises_partway(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Called in process, as #113's server will, a crash still reaches the status file (#103).
+
+    Before, only the CLI wrote `failed`, so a direct caller's file kept the last
+    `running` frame forever: a progress bar frozen at that chunk.
+    """
+    model = fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    _decode_fails_on_second_chunk(model, OSError(28, "No space left on device"))
+    status = tmp_path / "status.json"
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    with pytest.raises(OSError, match="No space left"):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status, on_progress=capture)
+
+    assert "running" in states, "the failure has to come after a running frame to prove anything"
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "OSError: [Errno 28] No space left on device",
+    }
+
+
+def test_a_library_caller_gets_failed_when_the_engine_lookup_raises(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure before any heartbeat exists still writes one: the engine is not there (#103)."""
+    import dsj.suno as transcribe_mod
+    from dsj.asr import EngineUnavailable
+
+    def get_engine(name: str) -> Any:
+        raise EngineUnavailable(f"{name} cannot run here")
+
+    monkeypatch.setattr(transcribe_mod, "get_engine", get_engine)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(EngineUnavailable):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "EngineUnavailable: parakeet cannot run here",
+    }
+
+
+def test_a_library_caller_gets_failed_when_the_model_load_raises(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same for the model load, which also comes before the first heartbeat (#103)."""
+    _load_fails(monkeypatch)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(RuntimeError):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "RuntimeError: model exploded",
+    }
+
+
+@pytest.mark.parametrize("name", ["SIGINT", "SIGTERM"])
+def test_a_library_caller_gets_interrupted_with_where_it_had_got_to(
+    name: str,
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Ctrl-C or `kill` in process writes the same document the CLI's run does (#103, #143).
+
+    `Terminated` is what the CLI's SIGTERM handler raises; a bare
+    KeyboardInterrupt is what Python raises for SIGINT.
+    """
+    import dsj.suno as transcribe_mod
+
+    crash = transcribe_mod.Terminated() if name == "SIGTERM" else KeyboardInterrupt()
+    model = fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    _decode_fails_on_second_chunk(model, crash)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "interrupted",
+        "pid": os.getpid(),
+        "signal": name,
+        "during": "running",
+        "audio_done_s": CHUNK_S,
+        "audio_total_s": 360.0,
+    }
 
 
 # --- speaker labels ------------------------------------------------------
@@ -725,8 +868,53 @@ def test_no_diarize_output_is_the_old_schema_exactly(
     payload = transcribe(fake_media, out, diarize=False)
 
     assert calls == []
-    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
+    assert set(payload) == {"audio", "engine", "model", "text", "unclear", "sentences"}
     assert set(payload["sentences"][0]) == {"start", "end", "text", "tokens"}
+
+
+def test_a_mov_whose_sound_is_already_model_shaped_still_reaches_the_diarizer_as_a_wav(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """16 kHz mono pcm_s16le in a .mov is extracted, so the labelling runs (#205).
+
+    The sound already matched what the model reads, so the extraction was
+    skipped and senko was handed the .mov itself: `file does not start with
+    RIFF id`, and a transcript with no speakers. The stand-in diarizer refuses
+    a file the way senko does, so the labels below exist only if what it was
+    handed is a WAV.
+    """
+    monkeypatch.setattr(media_mod, "probe", REAL_PROBE)
+    monkeypatch.setattr(media_mod, "needs_conversion", REAL_NEEDS_CONVERSION)
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    mov = tmp_path / "edit.mov"
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=5:duration=2",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=16000",
+         "-ac", "1", "-c:a", "pcm_s16le", "-c:v", "mpeg4", str(mov)],
+        check=True,
+    )
+    stream = REAL_PROBE(mov)
+    assert (stream.codec_name, stream.sample_rate, stream.channels) == ("pcm_s16le", 16_000, 1)
+
+    headers: list[bytes] = []
+
+    def read_like_senko(wav: Path) -> None:
+        headers.append(wav.read_bytes()[:4])
+        if headers[-1] != b"RIFF":
+            raise RuntimeError("file does not start with RIFF id")
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(**_one_speaker(then=read_like_senko))
+
+    payload = transcribe(mov, tmp_path / "out.json", resume=False)
+
+    assert headers == [b"RIFF"]
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert {s["speaker"] for s in payload["sentences"]} == {0}
 
 
 def test_diarization_failure_leaves_a_complete_unlabelled_transcript(
@@ -1296,7 +1484,7 @@ def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
     payload = transcribe(fake_media, out, diarize=False)
 
     assert json.loads(out.read_text()) == payload
-    assert list(payload) == ["audio", "model", "text", "unclear", "sentences"]
+    assert list(payload) == ["audio", "engine", "model", "text", "unclear", "sentences"]
     assert [s["text"] for s in payload["sentences"]] == [" We looked at it.", " Then we left."]
     assert payload["text"] == "We looked at it. Then we left."
     assert payload["unclear"] == [{"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}]
@@ -1534,6 +1722,8 @@ def test_sherpa_tokens_carry_the_decoders_end_and_confidence(
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="sherpa", diarize=False)
 
+    # Named, because `model` is only a directory under sherpa (#172).
+    assert payload["engine"] == "sherpa"
     tokens = [t for s in payload["sentences"] for t in s["tokens"]]
     assert [(t["t"], t["w"], t["e"], t["c"]) for t in tokens] == [
         (0.0, " see", 0.24, 0.5),
@@ -2045,7 +2235,9 @@ def test_an_out_in_a_missing_directory_is_refused_before_anything_loads(
     assert f"the directory {missing} does not exist" in said
     assert f"mkdir -p {missing}" in said
     assert loaded == []
-    assert not status.exists(), "a heartbeat was written, so the run got past the check"
+    # The refusal's own failure document (#103), never a progress frame, which
+    # would mean the run got past the check.
+    assert json.loads(status.read_text())["state"] == "failed"
     assert not missing.exists(), "refused, not created"
 
 
@@ -2069,31 +2261,37 @@ def _loaders_that_record(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 @pytest.mark.parametrize("engine", ["parakeet", "whisper"])
 def test_a_status_in_a_missing_directory_is_refused_before_anything_loads(
-    engine: str, fake_media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    engine: str,
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Refused up front like -o (#197), and the refusal is the error the user sees.
 
     Before, the run loaded its model and decoded a chunk, the first heartbeat
     write failed, and the CLI's own handler then failed writing "failed" into
     the same missing directory: the traceback was about the status file twice
-    over. Driven through the CLI so that handler is on trial too.
+    over. Driven through the CLI so that handler is on trial too: since #200 it
+    prints the refusal as its one line, and nothing else.
     """
     import dsj.suno as transcribe_mod
 
     loaded = _loaders_that_record(monkeypatch)
     missing = tmp_path / "nope"
     out = tmp_path / "out.json"
+    capsys.readouterr()
 
-    with pytest.raises(FileNotFoundError) as refused:
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(out), "--engine", engine,
-             "--status", str(missing / "status.json")]
-        )
+    assert transcribe_mod.main(
+        [str(fake_media), "-o", str(out), "--engine", engine,
+         "--status", str(missing / "status.json")]
+    ) == 1
 
-    said = str(refused.value)
+    said = capsys.readouterr().err
+    assert said.startswith("dsj: cannot write the status file")
+    assert said.count("\n") == 1, said
     assert f"the directory {missing} does not exist" in said
     assert f"mkdir -p {missing}" in said
-    assert refused.value.__context__ is None, "the handler raised while handling the refusal"
     assert loaded == []
     assert not out.exists()
     assert not missing.exists(), "refused, not created"
@@ -2113,15 +2311,211 @@ def test_a_failing_run_still_writes_failed_and_its_own_error_to_a_valid_status(
     missing = tmp_path / "nope"
     status = tmp_path / "status.json"
 
-    with pytest.raises(FileNotFoundError):
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(missing / "out.json"), "--status", str(status)]
-        )
+    # One line on stderr and exit 1 (#200), and the document still written.
+    assert transcribe_mod.main(
+        [str(fake_media), "-o", str(missing / "out.json"), "--status", str(status)]
+    ) == 1
 
     failed = json.loads(status.read_text())
     assert failed["state"] == "failed"
     assert failed["pid"] == os.getpid()
-    assert failed["error"].startswith("FileNotFoundError: ")
+    assert failed["error"].startswith("MissingPath: ")
     assert f"the directory {missing} does not exist" in failed["error"]
     assert "pass another -o" in failed["error"]
     assert loaded == []
+
+
+# --- the transcript as a file tag on the recording (#119) ----------------
+
+
+def _file_facts(path: Path) -> tuple[str, int, int]:
+    """What a tag write must not change: the recording's bytes, size and mtime."""
+    import hashlib
+
+    st = path.stat()
+    return hashlib.sha256(path.read_bytes()).hexdigest(), st.st_size, st.st_mtime_ns
+
+
+@pytest.mark.parametrize("labelled", [False, True])
+def test_the_xattr_holds_the_sidecar_bytes_and_leaves_the_recording_alone(
+    labelled: bool,
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Byte for byte, including after labelling wrote the sidecar a second time.
+
+    And the recording is untouched: its SHA-256, size and mtime are what a
+    checkpoint's fingerprint and the content id are built on, so a tag that
+    moved any of them would cost the next run its resume.
+    """
+    from dsj.filetag import TRANSCRIPT_TAG, read_tag
+
+    fake_parakeet(tokens=_tokens())
+    if labelled:
+        fake_turns(**_one_speaker())
+    out = tmp_path / "out.json"
+    before = _file_facts(fake_media)
+
+    transcribe(fake_media, out, diarize=labelled)
+
+    assert ("speakers" in json.loads(out.read_text())) is labelled
+    assert read_tag(fake_media, TRANSCRIPT_TAG) == out.read_bytes()
+    assert _file_facts(fake_media) == before
+
+
+def test_reading_prefers_the_sidecar_and_falls_back_to_the_xattr(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+) -> None:
+    """The sidecar is the truth; the tag answers only once the sidecar is gone."""
+    from dsj.filetag import read_transcript, sidecar_for
+
+    fake_parakeet(tokens=_tokens())
+    sidecar = sidecar_for(fake_media)
+    written = transcribe(fake_media, sidecar)
+    assert sidecar == fake_media.with_name(f"{fake_media.stem}.dsj.json")
+
+    # A sidecar that now differs from the tag, so "prefers" is observable.
+    edited = written | {"model": "edited after the run"}
+    sidecar.write_text(json.dumps(edited))
+    assert read_transcript(fake_media) == edited
+
+    sidecar.unlink()
+    assert read_transcript(fake_media) == json.loads(json.dumps(written))
+
+
+def test_reading_with_neither_xattr_nor_sidecar_names_both(tmp_path: Path) -> None:
+    from dsj.filetag import read_transcript
+
+    recording = tmp_path / "rec.m4a"
+    recording.write_bytes(b"not transcribed")
+
+    with pytest.raises(FileNotFoundError) as missing:
+        read_transcript(recording)
+
+    said = str(missing.value)
+    assert str(tmp_path / "rec.dsj.json") in said
+    assert "com.jaano.transcript" in said
+
+
+def test_a_failed_xattr_write_keeps_the_transcript_and_says_so(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A recording that cannot take a tag (read-only, an odd file system) still gets a run.
+
+    The transcript is on disk before the tag is tried, and it is the truth;
+    exiting 1 over the safety net would make a caller throw it away.
+    """
+    import errno
+
+    import dsj.filetag as filetag
+
+    def refuse(path: Path, name: str, data: bytes) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted", str(path))
+
+    monkeypatch.setattr(filetag, "write_tag", refuse)
+    fake_parakeet(tokens=_tokens())
+    out = tmp_path / "out.json"
+    status = tmp_path / "status.json"
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(fake_media, out, status_path=status)
+
+    assert json.loads(out.read_text())["sentences"]
+    assert json.loads(status.read_text())["state"] == "done"
+    assert f"transcript not tagged onto {fake_media}" in caplog.text
+    assert "Operation not permitted" in caplog.text
+
+
+def _recording_at(path: Path) -> Path:
+    """A stand-in recording at `path`: transcribe()'s probe is stubbed in this module."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF")
+    return path
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        ("Library", "CloudStorage", "GoogleDrive-someone", "My Drive", "Hi-Q Recordings"),
+        ("Library", "Mobile Documents", "com~apple~CloudDocs", "Recordings"),
+    ],
+)
+def test_a_recording_in_a_cloud_synced_folder_is_not_tagged(
+    folder: tuple[str, ...],
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Google Drive and iCloud Drive, by path, under a fake home (#202).
+
+    The transcript is written as ever and the recording carries no tag: what a
+    sync client does when a file it syncs gains one is not measured.
+    """
+    from dsj.filetag import TRANSCRIPT_TAG, read_tag
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    media = _recording_at(home.joinpath(*folder) / "standup.m4a")
+    out = media.with_name("standup.dsj.json")
+    fake_parakeet(tokens=_tokens())
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(media, out, diarize=False)
+
+    assert json.loads(out.read_text())["sentences"]
+    assert read_tag(media, TRANSCRIPT_TAG) is None
+    (said,) = [r.getMessage() for r in caplog.records if "not tagged" in r.getMessage()]
+    assert str(home.joinpath(*folder[:2])) in said
+    assert f"so only {out} holds it" in said
+    assert "cloud-synced folder" in said
+
+
+def test_a_folder_a_file_provider_syncs_is_found_by_its_domain_tag(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Desktop & Documents in iCloud keeps ordinary paths; its folder carries the domain tag.
+
+    The tag is put on a temporary folder here, standing in for ~/Documents.
+    """
+    from dsj.filetag import PROVIDER_DOMAIN_TAG, TRANSCRIPT_TAG, read_tag, write_tag
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    documents = tmp_path / "home" / "Documents"
+    documents.mkdir(parents=True)
+    write_tag(documents, PROVIDER_DOMAIN_TAG, b"com.apple.CloudDocs.iCloudDriveFileProvider")
+    media = _recording_at(documents / "talks" / "standup.m4a")
+    fake_parakeet(tokens=_tokens())
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(media, tmp_path / "out.json", diarize=False)
+
+    assert read_tag(media, TRANSCRIPT_TAG) is None
+    assert f"{documents} is synced by a file provider" in caplog.text
+
+
+def test_a_domain_tag_on_the_recording_itself_does_not_count(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+) -> None:
+    """A recording copied out of a synced folder keeps its tags; it is local now, so tag it."""
+    from dsj.filetag import PROVIDER_DOMAIN_TAG, TRANSCRIPT_TAG, read_tag, write_tag
+
+    media = _recording_at(tmp_path / "local" / "standup.m4a")
+    write_tag(media, PROVIDER_DOMAIN_TAG, b"com.apple.CloudDocs.iCloudDriveFileProvider")
+    out = tmp_path / "out.json"
+    fake_parakeet(tokens=_tokens())
+
+    transcribe(media, out, diarize=False)
+
+    assert read_tag(media, TRANSCRIPT_TAG) == out.read_bytes()

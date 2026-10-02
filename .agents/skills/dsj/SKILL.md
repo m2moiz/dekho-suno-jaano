@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.2.3
+  version: 0.3.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -27,10 +27,11 @@ against about 10,000 for its transcript.
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
 (show me). Two more work on the transcript alone: `likho` (write) turns a finished one
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
-file those tools made into a transcript, in place of `suno`.
+file those tools made into a transcript, in place of `suno`. The sixth, `ui`, is for a
+person rather than an agent: it opens the app in a browser.
 
-The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
-`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+The transcript is one JSON object. Its top-level keys are `audio`, `engine`, `model`,
+`text`, `unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
 and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
 and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
 field is in [references/payload.md](references/payload.md).
@@ -57,7 +58,7 @@ was written against the `version` in its own header above. If the two differ, a 
 named below may not exist in that build, and using one fails as `No such option`, which
 reads like a typo and is not one.
 
-`dsj --help` lists the five verbs. There is no `dsj doctor`, and no way to ask the tool
+`dsj --help` lists the six verbs. There is no `dsj doctor`, and no way to ask the tool
 which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
@@ -79,7 +80,7 @@ for the change before running the patched tool, and put a measurement, with the 
 that produced it, behind any constant you introduce. Then gate it as
 [Changing dsj itself](#changing-dsj-itself) says.
 
-## The five verbs
+## The six verbs
 
 ### suno
 
@@ -106,6 +107,11 @@ dsj suno recording.mov -o transcript.json
 
 Progress renders on stderr. **Nothing goes to stdout**, so empty stdout says nothing
 about whether it worked.
+
+A run that finishes also adds its recording and transcript to the library `dsj ui`
+lists (`$DSJ_LIBRARY` when set), with no `ui` extra needed. If the library cannot be
+written, stderr says `transcript not added to the library at <path>` with the error's
+class, the transcript is kept, and the exit code is still 0.
 
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
 anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
@@ -227,9 +233,46 @@ times came from, `import:srt` or `import:vtt`, and no imported token has a `c`:
   no `e`, because a tag marks a start only. An untagged cue is one token, as for SRT.
 - **JSON** must be a dsj transcript. It passes through unchanged but for `audio`.
 
-Speakers come back from VTT voice tags, and from SRT only in the form `likho` writes,
-`SPEAKER_01: ` ahead of the words. A file with no labels imports with no `speakers` and
+Speakers come back from VTT voice tags, and from SRT only as `SPEAKER_01: ` (the form
+`likho` writes) or `Speaker 2: ` ahead of the words. Any other capitals and a colon
+(`NOTE: `, `OK: `) stay in the text as words. A file with no labels imports with no `speakers` and
 no `diarization`, exactly like a transcript that was never labelled.
+
+### ui
+
+Open the app in a browser. It is for a person reading transcripts, not for an agent:
+everything it shows comes from the files the other verbs write, so query those instead.
+
+```bash
+dsj ui
+dsj ui --print-url
+```
+
+| Flag | |
+|---|---|
+| `--print-url` | print the URL and serve, without opening a browser |
+
+It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
+on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` request needs
+that token as `Authorization: Bearer <token>`, and a request whose `Host` is not that
+loopback address is refused with 403, token or not. The page itself needs no token.
+
+It serves until Ctrl-C or `kill`, or until no page is open: the page sends
+`POST /api/heartbeat` every 15 s (about once a minute while its tab is hidden), and
+`POST /api/bye` as it goes away; the server stops 10 s after the last open page's
+goodbye unless a page beats, or after three minutes with no request at all, so a server
+nobody opens stops on its own. A transcription started from the page holds it up.
+Start it with `&` if you need the shell back. A second `dsj ui` while one is running
+prints the running one's URL and exits 0 without binding a port; the running one's
+details are in `ui.lock` beside the library (`$DSJ_LIBRARY`'s folder when that is set).
+The page lists the library, which holds every finished `dsj suno` run and every job
+started from the page (`GET /api/recordings`: every recording, newest first, each
+with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_count`,
+`mark_count`, `language`) and serves one transcript's JSON unchanged at
+`GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
+
+It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
+in a second with `UIUnavailable`, whose message is the line that installs it.
 
 ## The transcript is the index
 
@@ -411,13 +454,14 @@ decode ends leaves nothing behind.
 | Exit | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | An uncaught exception, printed as a traceback on stderr |
+| 1 | `suno`: a mistake you can put right (a missing input or output directory, a bad `--engine`, an engine not installed), printed as one line, `dsj: <message>`. Anything else: an uncaught exception, printed as a traceback on stderr |
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
 | 130 | Interrupted by Ctrl-C. For `suno`, re-run to resume; under whisper only a run stopped after its decode resumes |
 | 143 | Stopped by `kill`. The same as 130 otherwise |
 | 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 
-**Read the last line of stderr, not the first.** A failure is a traceback, and when
+**Read the last line of stderr, not the first.** A failure you caused is that one
+line; any other failure is a traceback, and when
 ffmpeg is involved its own log prints above the exception, so the useful sentence can be
 twenty lines down:
 
@@ -441,6 +485,24 @@ From a clone, the check that a change works is `uv run just check`, never `uv ru
 pytest` alone. `just check` runs the type checker, ruff and the fast tests; pytest skips
 the type checker, so a green pytest is no evidence. Paste the line `just check` ends
 with before calling the change done.
+
+**Working on the UI** (`ui/` and `dsj/ui/`, the code behind `dsj ui`). The same five rules
+as the repo's `AGENTS.md`:
+
+1. Commands: `just ui-dev` to develop; `just ui-build` before any commit that touches
+   `ui/`, committing what it writes to `dsj/ui/static/`; `just api` after changing
+   `dsj/ui/schemas.py` or a route; `just check` before calling anything done. A fresh
+   clone needs `(cd ui && npm ci)` first, because `just check` fails rather than skips
+   without `ui/node_modules`.
+2. Where files go: frontend source in `ui/src/`, its tests in `ui/tests/`, the server in
+   `dsj/ui/`. The built page `dsj/ui/static/` and the generated types
+   `ui/src/api/schema.d.ts` are never hand-edited.
+3. TypeScript is pinned to 6.0.3; do not install 7.x. `typescript-eslint@8.70.1` declares
+   `"typescript": ">=4.8.4 <6.1.0"`, and 6.0.3 is the newest version inside it.
+4. The package is `@base-ui/react`, not `@base-ui-components/react`. It was renamed; the
+   old name is frozen at `1.0.0-rc.0` and its import resolves to nothing.
+5. Never hand-write a UI primitive or type a `@base-ui/react/*` import from memory. Run
+   `npx shadcn@4.21.0 add <name>` from `ui/` and let it write the import.
 
 ## References
 

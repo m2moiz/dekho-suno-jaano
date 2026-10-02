@@ -47,11 +47,13 @@ _VTT_TIMING = re.compile(
 _VTT_STAMP = re.compile(r"<(?:(\d+):)?(\d{2}):(\d{2})\.(\d{3})>")
 _VTT_VOICE = re.compile(r"<v(?:\.[^\s>]*)?\s+([^>]*)>")
 _TAG = re.compile(r"(<[^>]*>)")
-# The label likho writes ahead of an SRT cue's words, `SPEAKER_01: `. SRT has no
-# speaker field, so this is a convention and read narrowly: capitals, digits and
-# underscores, then a colon and a space. `Q: ` and `JOHN: ` read as speakers
-# too, which is what they are in the caption files that use them.
-_SRT_LABEL = re.compile(r"([A-Z][A-Z0-9_]*): (.*)")
+# A speaker's label ahead of an SRT cue's words. SRT has no speaker field, so
+# this is a convention and read narrowly: `SPEAKER_01: `, the label the
+# diarizer gives and likho writes, or `Speaker 2: `, the form many caption tools
+# write. Any other capitals and a colon are words someone said (`NOTE: the
+# meeting moved`, `OK: so`), and reading them as a speaker dropped them from
+# the text and invented a speaker called NOTE (#176).
+_SRT_LABEL = re.compile(r"(SPEAKER_\d+|Speaker \d+): (.*)")
 
 
 class ParhoError(ValueError):

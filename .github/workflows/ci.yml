@@ -96,7 +96,25 @@ jobs:
       # --extra sherpa joined for the same reason as whisper: pyright must
       # resolve the backend the engine module imports, even on a Mac that
       # will never run it.
-      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
+      # --extra ui joined with `dsj ui` (#111): its tests start the real server,
+      # and pyright must resolve fastapi to check dsj/ui/ at all.
+      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
+
+      # Node for the frontend checks inside `just check` (#155, #157, #114).
+      # Exact tag, checked to resolve on 2026-10-02 (`gh api
+      # repos/actions/setup-node/git/ref/tags/v7.0.0`), for the reason the
+      # setup-uv comment above gives. 26.8.2 is the Node ui/ was built with.
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26.8.2
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # Setup, like `uv sync` above, not a UI-only check: every frontend check
+      # is still run by `just check`, and FAILS without ui/node_modules rather
+      # than skipping, so dropping this line turns CI red, not quietly green.
+      - run: npm ci
+        working-directory: ui
 
       # From PyPI rather than a third-party action or a piped install script.
       # rust-just 1.58.0 publishes a macosx_11_0_arm64 wheel, checked against

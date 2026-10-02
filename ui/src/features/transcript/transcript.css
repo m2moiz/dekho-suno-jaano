@@ -1,0 +1,51 @@
+/* The transcript as something to read for forty minutes (#58, #57 section 11.1).
+ *
+ * Literata for the words and the system face for everything else, a 68
+ * character measure, 1.7 leading, 1.25em between speaker turns, ragged right
+ * and never justified. Only the normal-width weight axis is imported: 7 files,
+ * 176 KB, and the browser fetches just the scripts on the page.
+ */
+@import "@fontsource-variable/literata/wght.css";
+
+.transcript {
+  max-width: 68ch;
+  font-family: "Literata Variable", Georgia, serif;
+  font-size: 1.125rem;
+  line-height: 1.7;
+  text-align: left;
+  hyphens: manual;
+}
+
+.transcript section + section {
+  margin-top: 1.25em;
+}
+
+.transcript h2 {
+  font: 500 0.8125rem/1.4 system-ui, sans-serif;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.transcript p {
+  margin: 0;
+  /* Every word is a seek target (#60). */
+  cursor: pointer;
+}
+
+/* The word being said (#60). A background only: ::highlight() takes colour,
+ * background and decoration, never border-radius or padding (#57 section 7).
+ * Amber, light enough in light mode and dark enough in dark mode that the
+ * body text on it keeps its contrast. */
+::highlight(dsj-playhead) {
+  background-color: light-dark(oklch(0.9 0.12 85), oklch(0.42 0.09 75));
+  color: var(--foreground);
+}
+
+/* Words the recogniser was unsure of, when switched on (#62). Rose, so it
+ * never reads as the playhead's amber. Body text on it measures 14.9:1 light
+ * and 7.8:1 dark (ui/tests/unit/confidence.test.tsx computes both from these
+ * values; #62 asks for 4.5:1). */
+::highlight(dsj-unsure) {
+  background-color: light-dark(oklch(0.92 0.06 25), oklch(0.38 0.09 25));
+  color: var(--foreground);
+}

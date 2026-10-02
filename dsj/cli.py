@@ -1,17 +1,19 @@
-"""The `dsj` command -- one Typer app, five verbs.
+"""The `dsj` command -- one Typer app, six verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
     dsj likho  transcript.json -o captions.srt     # write
     dsj parho  recording.mov captions.vtt -o transcript.json    # read
+    dsj ui                                         # the app, in a browser
 
 Urdu imperatives, and they are not decoration: the first three name the things
 the tool does in the order it does them. Suno gives you what was said, dekho
 gives you when the picture changed, dikhao gives you the picture itself. Jaano
 -- know -- is what you get from all three, which is why it is the command.
 Likho writes what suno heard out for the tools that are not dsj, and parho reads
-a transcript those tools made back in, in place of suno.
+a transcript those tools made back in, in place of suno. `ui` is plain English
+because it is not a step in that sequence: it is the window over all of them.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
 and `dsj.dekho.main` are thin shims onto the commands below, so
@@ -55,13 +57,16 @@ from typing import Annotated
 
 import typer
 
+from dsj.asr import EngineUnavailable
+
 # Module level, not lazy. These are DEFAULTS, and a lazily-resolved default
 # cannot appear in --help: the first version of this file used 0 as a "not
 # given" sentinel and Typer duly advertised `[default: 0]` for a budget whose
 # real default is 150. Measured cost of the import: ~90ms, inside the noise of
 # `dsj --help` at 120-200ms. The heavy workers below stay lazy.
 from dsj.dekho import DEFAULT_BUDGET, DEFAULT_DELTA, DEFAULT_FPS, DEFAULT_MIN_GAP_S
-from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES
+from dsj.media import FFmpegNotFound
+from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, RunRefused, Terminated
 
 app = typer.Typer(
     add_completion=False,
@@ -123,25 +128,53 @@ def _stderr_logger(name: str) -> None:
     logger.propagate = False
 
 
+# The failures of `dsj suno` that are its caller's to fix, each already a
+# sentence carrying its remedy: a mistake in the arguments (RunRefused), and an
+# engine or ffmpeg that is not installed. Listed, never `Exception`: everything
+# else is a bug in dsj and keeps its traceback (#200).
+_CALLERS_TO_FIX: tuple[type[Exception], ...] = (RunRefused, EngineUnavailable, FFmpegNotFound)
+
 # EX_TEMPFAIL from sysexits.h, "try again later": the run did not fail, it
 # never started, and the same command will work once the other run is over.
 EXIT_ALREADY_RUNNING = 75
 
 
-class _Terminated(KeyboardInterrupt):
-    """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
-
-    A KeyboardInterrupt so that everything already written to survive Ctrl-C
-    survives `kill` too: the temp file cleanup in atomic.py, the checkpoint the
-    chunk loop banked, the temporary directory the extracted audio sits in.
-    Python's default for SIGTERM is to end the process on the spot, which skips
-    all of it, and the status file kept saying `running` about a process that no
-    longer existed (#143, observed 2026-09-22).
-    """
-
-
 def _raise_terminated(_signum: int, _frame: FrameType | None) -> None:
-    raise _Terminated
+    """SIGTERM becomes Terminated where the run is, so `kill` stops it as Ctrl-C does (#143).
+
+    The default goes back first, so a second `kill` ends the process at once
+    instead of interrupting the `interrupted` document transcribe() is writing.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise Terminated
+
+
+def _record_in_library(out: Path, engine: str, language: str | None) -> None:
+    """Add a finished run to the library, so `dsj ui` lists it (#57, #156).
+
+    The owner's answer, on 2 Oct 2026, to #127's open adoption question: a
+    transcript made in the terminal shows up in the app. Here and not in
+    transcribe(), because the app's own jobs call transcribe() and record their
+    run themselves (dsj/ui/jobs.py); in both places, every app job would be
+    recorded twice.
+
+    Every failure is caught, unlike _CALLERS_TO_FIX: the transcript is already
+    written and is the truth, and the library is only an index over it, so a
+    library that cannot be opened or written costs the app's list one row and
+    never the run. The warning names the library's file and the error's class.
+    The store is plain sqlite3 (dsj/ui/__init__.py), so this needs no `ui` extra.
+    """
+    from dsj.ui.store import Library, library_path
+
+    try:
+        with Library.open() as library:
+            library.record_run(out, engine=engine, language=language)
+    except Exception as exc:
+        print(
+            f"transcript not added to the library at {library_path()}, so `dsj ui` will "
+            f"not list it: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
 
 
 @app.command("suno")
@@ -186,10 +219,9 @@ def suno(
 ) -> int:
     """Listen: transcribe media to a timestamped index."""
     from dsj import runlock
-    from dsj.atomic import atomic_write_text
     from dsj.suno import Progress, clock, render_bar
+    from dsj.suno import roman_urdu as roman_urdu_settings
     from dsj.suno import transcribe as run_transcribe
-    from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
 
     _stderr_logger("dsj.suno")
 
@@ -199,32 +231,22 @@ def suno(
     tty = sys.stderr.isatty()
     last_state = ""
     last_total = 0.0
-    last_progress: Progress | None = None
 
     def show(p: Progress, state: str) -> None:
         # A phase change ends the rewritten line, so the finished extraction bar
         # stays on screen instead of being overwritten by transcription's 0%.
-        nonlocal last_state, last_total, last_progress
+        nonlocal last_state, last_total
         if tty and last_state and state != last_state:
             print(file=sys.stderr)
         last_state = state
         last_total = p.audio_total_s
-        last_progress = p
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
-    # --roman-urdu is sugar over the two flags under it, and it is spelled as
-    # sugar rather than as a mode so that an explicit --language or --prompt
-    # beside it still wins. The prompt it sets is measured, not invented: see
-    # dsj/whisper.py.
+    # --roman-urdu is sugar over the flags under it, defined once in dsj/suno.py
+    # so that a run started from `dsj ui` gets exactly what this one does (#113).
     anchor_s = None
     if roman_urdu:
-        engine = "whisper" if engine == "parakeet" else engine
-        language = language or "ur"
-        prompt = prompt or ROMAN_URDU_PROMPT
-        # The bias does not survive an hour on whisper's own window threading,
-        # so the flag that asks for it also pays for keeping it. Measured; see
-        # dsj/whisper.py.
-        anchor_s = ANCHOR_CHUNK_S
+        engine, language, prompt, anchor_s = roman_urdu_settings(engine, language, prompt)
 
     # Resolved here, not in transcribe(): this file owns every default in the
     # project, and a default that lives in two places is a default that will
@@ -259,7 +281,7 @@ def suno(
     except runlock.AlreadyRunning as busy:
         if sigterm_installed:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        print(busy, file=sys.stderr)
+        print(f"dsj: {busy}", file=sys.stderr)
         raise typer.Exit(EXIT_ALREADY_RUNNING) from None
 
     started = time.monotonic()
@@ -278,53 +300,19 @@ def suno(
             prompt=prompt,
             anchor_s=anchor_s,
         )
-    except Exception as exc:
-        # Record and re-raise: a detached watcher polling the heartbeat has no
-        # other way to distinguish "died" from "not started yet". The traceback
-        # still reaches the terminal untouched. Not into a directory that does
-        # not exist: transcribe() refuses that status path up front, and trying
-        # here would raise over its refusal (#197).
-        if status and status.parent.is_dir():
-            # Atomic for the same reason as the heartbeat, and more so: the
-            # watcher polling for exactly this document is in a tight read loop,
-            # which makes it the reader most likely to land inside a torn write.
-            failed = {
-                "state": "failed",
-                "pid": os.getpid(),
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            atomic_write_text(status, json.dumps(failed))
-        raise
-    except KeyboardInterrupt as exc:
-        # Ctrl-C and `kill`. KeyboardInterrupt is not an Exception, so before
-        # #143 both went past the branch above and the heartbeat said `running`
-        # forever. Default restored first, so a second `kill` ends the process
-        # at once instead of interrupting this write.
-        if sigterm_installed:
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-            sigterm_installed = False
-        terminated = isinstance(exc, _Terminated)
-        if status:
-            stopped: dict[str, object] = {
-                "state": "interrupted",
-                "pid": os.getpid(),
-                "signal": "SIGTERM" if terminated else "SIGINT",
-            }
-            # Where it had got to, with the phase that number belongs to: an
-            # extracting frame's audio_done_s counts extraction, not transcript.
-            if last_progress is not None:
-                stopped |= {
-                    "during": last_state,
-                    "audio_done_s": last_progress.audio_done_s,
-                    "audio_total_s": last_progress.audio_total_s,
-                }
-            atomic_write_text(status, json.dumps(stopped))
-        if terminated:
-            # 128 + 15, what a shell reports for a process SIGTERM ended, so
-            # `wait` and anything already reading 143 see what they saw before.
-            raise SystemExit(143) from None
-        # Typer turns this into exit 130.
-        raise
+    except Terminated:
+        # transcribe() has already written `interrupted` to --status (#103), as
+        # it writes `failed` for an exception, which passes through untouched.
+        # 128 + 15, what a shell reports for a process SIGTERM ended, so
+        # `wait` and anything already reading 143 see what they saw before.
+        # A Ctrl-C passes through too, and Typer turns it into exit 130.
+        raise SystemExit(143) from None
+    except _CALLERS_TO_FIX as exc:
+        # One line, not a traceback (#200). transcribe() has already written
+        # `failed` to --status. Anything not listed is a bug in dsj, and keeps
+        # its traceback.
+        print(f"dsj: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from None
     finally:
         os.close(held)
         if sigterm_installed:
@@ -332,6 +320,7 @@ def suno(
     if tty:
         print(file=sys.stderr)
     elapsed = time.monotonic() - started
+    _record_in_library(out, engine, language)
     # The done frame's total, read off the frame rather than recomputed, so
     # this line and the status file cannot name two lengths for one run (#52).
     # It used to be rebuilt from the last sentence: `done: 0:00 audio` for
@@ -472,9 +461,30 @@ def parho(
     # and further from the typo.
     if not media.exists():
         raise FileNotFoundError(media)
-    # utf-8-sig: caption files from Windows tools often open with a BOM.
-    payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
+    # utf-8-sig: caption files from Windows tools often open with a BOM. The
+    # recording by its absolute path, as `dsj suno` names it (#201).
+    payload = parse(source.read_text(encoding="utf-8-sig"), str(media.resolve()))
     atomic_write_text(out, json.dumps(payload))
+    return 0
+
+
+@app.command("ui")
+def ui(
+    print_url: Annotated[
+        bool,
+        typer.Option("--print-url", help="print the URL and serve, without opening a browser"),
+    ] = False,
+) -> int:
+    """Open the app: every recording dsj knows, in a browser window."""
+    from dsj.ui import require_extra
+
+    # Inside the command, not at the top of this file: fastapi costs every
+    # `dsj --help` and every `dsj suno` its import time otherwise, and most
+    # installs never open the app.
+    require_extra()
+    from dsj.ui.server import serve
+
+    serve(open_browser=not print_url)
     return 0
 
 

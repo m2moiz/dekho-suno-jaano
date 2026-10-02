@@ -82,7 +82,7 @@ def test_every_extra_is_shown_as_something_to_install() -> None:
 
 
 def test_the_readme_checks_can_fail() -> None:
-    """A guard on the guard: a fourth engine and a seventh extra must both be noticed."""
+    """A guard on the guard: a fourth engine and an undeclared extra must both be noticed."""
     text = README.read_text()
     assert engine_problems(text, (*ENGINES, "fake")) == [
         "fake is an engine the README never names"

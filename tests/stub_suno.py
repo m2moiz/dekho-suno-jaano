@@ -16,6 +16,9 @@ Two environment variables steer it:
                             or until its parent process is gone
     STUB_LOADED=<path>      touched when the model is loaded, so a test can prove a
                             refused run never got that far
+    STUB_UNAVAILABLE=<why>  the engine cannot run here, for that reason
+    STUB_BUG=1              the chunk loop raises an error dsj never planned for, the
+                            stand-in for a bug in dsj itself (#200)
 
 The audio is a 300-second recording that does not exist: probe() says so and
 load_audio() hands back that many zeros.
@@ -59,12 +62,17 @@ ENGINE = SimpleNamespace(
 
 
 def _get_engine(name: str) -> tuple[asr.EngineSpec, Any]:
+    why = os.environ.get("STUB_UNAVAILABLE")
+    if why:
+        raise asr.EngineUnavailable(f"the {name} engine cannot run here: {why}")
     return asr.EngineSpec(name, "tests.stub_suno", "chunk"), ENGINE
 
 
 def _transcribe_chunked(
     engine: Any, audio_data: Any, *, on_chunk: Any = None, **_: Any
 ) -> SimpleNamespace:
+    if os.environ.get("STUB_BUG") == "1":
+        raise RuntimeError("stub_suno: a bug in dsj itself")
     total = len(audio_data)
     # One chunk banked and reported, as the real loop does after its first decode,
     # so the checkpoint and a `running` frame are both on disk before any hold.
@@ -86,7 +94,7 @@ def _transcribe_chunked(
 def _probe(path: Path) -> media.AudioStream:
     if not path.exists():
         raise FileNotFoundError(path)
-    return media.AudioStream("pcm_s16le", RATE, 1, AUDIO_S)
+    return media.AudioStream("pcm_s16le", RATE, 1, AUDIO_S, "wav")
 
 
 def _needs_conversion(_stream: media.AudioStream, _rate: int) -> bool:

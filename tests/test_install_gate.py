@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -267,3 +268,62 @@ def test_a_bare_install_is_a_core_with_no_engine_and_says_so(tmp_path: Path) -> 
     )
     assert refusal.returncode == 0, refusal.stderr
     assert "parakeet-mlx is not installed" in refusal.stdout
+
+    # And `dsj ui`, whose extra a bare install also lacks (#111): a refusal that
+    # names the install line, in the real console script, not a ModuleNotFoundError.
+    ui = subprocess.run(
+        [str(binary), "ui", "--print-url"], capture_output=True, text=True, check=False,
+        timeout=120,
+    )
+    assert ui.returncode == 1, ui.stderr
+    assert "UIUnavailable" in ui.stderr
+    assert 'uv tool install "dsj[mac,ui] @ git+https://' in ui.stderr
+
+
+def test_the_ui_extra_serves_its_page_with_no_node_on_path(tmp_path: Path) -> None:
+    """#154: the committed build is what lets an install skip Node entirely.
+
+    The README's line with `[ui]` in place of `[mac]`, and the same one
+    substitution as the gate above: a local `git+file://` clone for github.com,
+    so the branch under test is what installs. PATH is cut to the system
+    directories for the install and for the run, and the test first proves
+    that no `node` is reachable on it.
+    """
+    uv = shutil.which("uv")
+    assert uv is not None
+    bare_path = os.pathsep.join(["/usr/bin", "/bin"])
+    assert shutil.which("node", path=bare_path) is None, "node is on the cut-down PATH"
+    tool_dir = tmp_path / "tools"
+    env = os.environ | {
+        "PATH": bare_path,
+        "UV_TOOL_DIR": str(tool_dir),
+        "UV_TOOL_BIN_DIR": str(tool_dir / "bin"),
+    }
+
+    install = subprocess.run(
+        [uv, "tool", "install", "--force", f"dsj[ui] @ git+file://{REPO}"],
+        capture_output=True, text=True, env=env, check=False, timeout=900,
+    )
+    assert install.returncode == 0, f"{install.stdout}\n{install.stderr}"
+
+    served = subprocess.Popen(
+        [str(tool_dir / "bin" / "dsj"), "ui", "--print-url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        assert served.stdout is not None
+        url = served.stdout.readline().strip()
+        # Since #112 the address carries the launch token after `#t=`, a fragment
+        # the browser keeps and never sends; the page itself is served without it.
+        assert re.fullmatch(r"http://127\.0\.0\.1:\d+/#t=[A-Za-z0-9_-]+", url), url
+        with urllib.request.urlopen(url, timeout=30) as reply:
+            assert reply.status == 200
+            page = reply.read().decode()
+        assert '<div id="root"></div>' in page
+        asset = re.search(r'src="(/assets/[^"]+\.js)"', page)
+        assert asset is not None, page
+        with urllib.request.urlopen(url.rstrip("/") + asset.group(1), timeout=30) as reply:
+            assert reply.status == 200
+    finally:
+        served.terminate()
+        served.wait(timeout=30)

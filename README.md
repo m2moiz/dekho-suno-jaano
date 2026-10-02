@@ -103,6 +103,11 @@ the interesting part.
   error. `tests/test_install_gate.py` runs the install below and checks it.
 - **ffmpeg** on `PATH`, for anything that is not already a 16 kHz mono WAV.
 - [`uv`][uv] for dependency management.
+- **For `dsj ui` only: Safari 17.2, Chrome 105 or Firefox 140**, or newer. The
+  reader paints the word being spoken with the CSS Custom Highlight API, which
+  older browsers lack without any error; the app checks for it before it shows
+  anything and names what is missing instead of loading a page that quietly
+  does nothing. Floors from `@mdn/browser-compat-data` 8.1.2.
 
 [pmlx]: https://github.com/senstella/parakeet-mlx
 [uv]: https://docs.astral.sh/uv/
@@ -135,12 +140,13 @@ carries more than you want:
 
 | Extra | Pulls in | For |
 |---|---|---|
-| `dsj[mac]` | `parakeet`, `whisper`, `diarize` | The working Mac setup |
+| `dsj[mac]` | `parakeet`, `whisper`, `diarize`, `ui` | The working Mac setup |
 | `dsj[android]` | `sherpa` | The phone |
 | `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
 | `dsj[whisper]` | `mlx-whisper` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch |
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
+| `dsj[ui]` | `fastapi`, `uvicorn` | `dsj ui`, the app in a browser |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -149,7 +155,7 @@ invocation is prefixed with `uv run`:
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
 cd dekho-suno-jaano
-uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
 uv run dsj suno recording.mov -o transcript.json
 ```
 
@@ -364,6 +370,34 @@ second run start beside the first. `DSJ_SUNO_LOCK=<path>` moves it, which is
 how the test suite keeps out of a real run's way; two runs under different
 lock paths do not see each other.
 
+**A copy of the transcript rides on the recording.** On a Mac, once the
+transcript is written, the same bytes go into a hidden file tag on the
+recording, `com.jaano.transcript`. The recording's contents, size and
+modified time stay exactly as they were, so a checkpoint for it stays good.
+`xattr -p com.jaano.transcript recording.mov` prints it. If the tag cannot be
+written (a read-only recording, say), the run says so on stderr and finishes
+anyway.
+
+A recording in a cloud-synced folder is never tagged, and the run says so in
+one line on stderr; the transcript JSON is its only copy (#202). What a sync
+client does when a file it syncs gains a tag of several MB is not measured, and
+it may upload the whole recording again. dsj counts a folder as synced when it
+is under `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) or
+`~/Library/Mobile Documents` (iCloud Drive), or when a folder above the
+recording carries macOS's `com.apple.file-provider-domain-id` tag, which is how
+iCloud's Desktop & Documents sync would show itself in the ordinary `~/Desktop`
+and `~/Documents` (that last signal is not yet seen on a real iCloud folder).
+The app transcribes such files too, the same way.
+
+From Python, `dsj.filetag.read_transcript(recording)` returns the transcript
+from `<stem>.dsj.json` beside the recording, and from the tag only when that
+file is missing. The JSON file is the real copy; the tag is a local safety net.
+Three ordinary things drop the tag without a word, measured in #117: remuxing
+with `ffmpeg -c copy`, saving through `avconvert` with `PresetPassthrough` (what
+QuickTime Player uses), and a trip through Google Drive's servers. A `cp` or
+`mv` on the Mac keeps it. Off a Mac nothing is tagged, and the JSON file is the
+only copy.
+
 ### Dekho — change marks
 
 A second pass adds the timestamps where the picture changed most. It is
@@ -456,14 +490,50 @@ not the file name. The recording must exist and is named in `audio`, not
 opened. What the file cannot hold is not invented: `model` is `import:srt` or
 `import:vtt`, an SRT sentence is one token spanning its cue, a VTT cue with
 word timestamp tags becomes word tokens with starts but no ends, and no
-imported token has a confidence. Speakers come back from VTT voice tags and
-from the `SPEAKER_01: ` prefix `likho` writes into SRT.
+imported token has a confidence. Speakers come back from VTT voice tags and,
+in SRT, from the `SPEAKER_01: ` prefix `likho` writes or a `Speaker 2: ` one;
+any other capitals and a colon (`NOTE: `) stay in the text as words.
+
+### ui: the app
+
+`dsj ui` opens the app in your browser: a page served from this machine, on
+`127.0.0.1` and a port the kernel picks. It lists every recording in the
+library ([below](#the-library)), newest first, and under each its transcripts:
+when each finished, which engine and model made it, its speakers and its marks.
+A transcript the library adopted rather than saw being made shows its engine
+as "unknown"; one never labelled says "speakers not labelled", which is not
+"1 speaker"; a recording whose file has moved stays listed, greyed, at the
+path it was last seen. Importing, transcribing and reading arrive with the rest
+of v0.3.0 ([#127](https://github.com/m2moiz/dekho-suno-jaano/issues/127)).
+
+```bash
+dsj ui                # opens the browser
+dsj ui --print-url    # prints the URL and serves, without opening one
+```
+
+It needs the `ui` extra, which `dsj[mac]` carries. The page is built ahead of
+time and ships inside the package, so an install needs no Node.
+
+Only this Mac's own page can use it. The URL carries a key after `#`, which
+the page takes and wipes from the address bar; every request has to bring it
+back, and a request that names any host but this machine's is refused. Close
+the window and the server stops about ten seconds later: the page says goodbye
+as it closes (#206). A page that never gets to say so (a crashed tab) stops it
+after three minutes of silence instead. A tab hidden behind another keeps it
+running, and a transcription started from the page outlives the window. Run
+`dsj ui` again while it is open and you get the running one's address, not a
+second copy.
+
+It follows the Mac's light or dark Appearance, live, until you pick Light or
+Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
+the browser's per-port storage, survives the new port each launch gets.
 
 ## Output
 
 ```jsonc
 {
-  "audio": "/path/to/recording.mov",   // the SOURCE, not a temp wav
+  "audio": "/path/to/recording.mov",   // the SOURCE, absolute, not a temp wav
+  "engine": "parakeet",                // parakeet, whisper or sherpa; absent before #172
   "model": "mlx-community/parakeet-tdt-0.6b-v3",
   "speakers": ["SPEAKER_00", "SPEAKER_01"],   // only when diarization ran
   "diarization": "senko 0.1.0",               // absent if it did not
@@ -542,6 +612,29 @@ Two things about this shape are deliberate:
   of tiles against 2.2% at `look`. Use `t` to know *when*, `look` to know
   *where to point a camera*.
 
+### The library
+
+The app (`dsj ui`, v0.3.0) remembers every recording and transcript in one
+SQLite file, created the first time it is opened. Every `dsj suno` run that
+finishes adds its recording and its transcript to it, in the terminal as in the
+app, so a transcript made with `dsj suno` is listed the next time the app opens.
+That needs no `ui` extra. If the library cannot be written (a newer dsj made
+it, say), the run says so in one line on stderr, keeps the transcript and still
+exits 0. The file is:
+
+- on a Mac, `~/Library/Application Support/dsj/library.db`
+- elsewhere, `$XDG_DATA_HOME/dsj/library.db` (`~/.local/share/dsj/library.db`)
+- anywhere, `DSJ_LIBRARY=<path>` instead, which is how the tests keep out of yours
+
+It is an index and nothing more. The transcript JSON files stay the truth and
+the library never writes to one, so deleting `library.db` loses the list, not a
+transcript: every file still opens, and handing the same files to the library
+again rebuilds it. A recording is known by its contents (#120), not its path, so
+one that was renamed or moved shows as missing until it is pointed at the new
+name, and then keeps every transcript it had. That new name lives only in the
+library, so after a rebuild the recording reads missing again until it is
+pointed at it a second time.
+
 ## Development
 
 ```bash
@@ -550,6 +643,8 @@ just typecheck   # pyright strict, package and tests
 just check       # THE gate: types, lint, fast tests. What CI runs.
 just verify      # everything incl. the end-to-end gates, with coverage
 just mutate      # mutation testing over the pure modules
+just ui-build    # rebuild the page dsj ui serves, from ui/ into dsj/ui/static/ (needs Node)
+just ui-dev      # the API on :8721 and Vite on :5173, both reloading on save
 ```
 
 `just verify` is the session-close gate and takes ~20 minutes: it runs real ASR
@@ -782,7 +877,7 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho
+  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho | ui
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
@@ -791,6 +886,7 @@ dsj/            the package
   parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR
   checkpoint.py    resume, and the validated boundary that reads it
   identity.py      the content id a recording keeps through a rename, move or copy
+  filetag.py       the transcript's copy as a hidden tag on the recording, macOS only
   merge.py         token-vote speaker labelling
   asr.py           the one shape every ASR engine returns
   parakeet.py      the parakeet engine, the default, on MLX
@@ -798,6 +894,9 @@ dsj/            the package
   sherpa.py        the sherpa engine: parakeet's weights on ONNX, for the phone
   diarize.py       the fail-soft senko boundary
   atomic.py        write-or-do-not-write, for files a reader may be watching
+  ui/              dsj ui: the local server, and static/, the built page it serves
+  ui/store.py      the library: every recording and transcript, in one SQLite file
+ui/                the page's source: Vite, React, TypeScript, Tailwind, shadcn
 tests/             fast unit tests, plus the two slow end-to-end gates
 scratch/           working probes; the data beside them is gitignored
 docs/              the reasoning that did not fit here
