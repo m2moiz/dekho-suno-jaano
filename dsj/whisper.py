@@ -263,7 +263,7 @@ def _anchored(
     prompt: str,
     anchor_s: float,
     overlap_s: float,
-    on_progress: Callable[[float], None] | None,
+    on_progress: Callable[[float, float], None] | None,
 ) -> list[dict[str, Any]]:
     """Transcribe in windows, re-seeding `prompt` at the head of each one.
 
@@ -355,8 +355,12 @@ def _anchored(
                 cast("list[dict[str, Any]]", result.get("segments") or []), start / SAMPLE_RATE
             )
         )
+        # Both lengths from the decoded samples (#173). The total used to be
+        # left to the caller, which had only ffprobe's duration of the
+        # container, so a padded or rounded container put the last window
+        # short of 100% or past it.
         if on_progress is not None:
-            on_progress(end / SAMPLE_RATE)
+            on_progress(end / SAMPLE_RATE, total / SAMPLE_RATE)
 
     # A window with a next one always runs its full length, so the seconds two
     # neighbours share start at the later one's start and last the overlap.
@@ -472,7 +476,7 @@ def transcribe_whisper(
     language: str | None = None,
     prompt: str | None = None,
     anchor_s: float | None = None,
-    on_progress: Callable[[float], None] | None = None,
+    on_progress: Callable[[float, float], None] | None = None,
 ) -> Transcription:
     """Transcribe `audio` end to end with whisper.
 
@@ -493,9 +497,11 @@ def transcribe_whisper(
         anchor_s: Window length, in seconds, to re-seed `prompt` at. None
             leaves whisper's own window loop alone; ignored without a prompt,
             there being nothing to anchor.
-        on_progress: Called with seconds of audio finished, after each anchored
-            window. Never called on the unchunked path, which has no hook to
-            call it from.
+        on_progress: Called after each anchored window with the seconds of
+            audio finished and the seconds there are, both counted in the
+            samples whisper decoded, so their ratio ends at exactly 1.0.
+            Never called on the unchunked path, which has no hook to call it
+            from.
 
     Returns:
         The full text and the payload's sentences, one per whisper segment.

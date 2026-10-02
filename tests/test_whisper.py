@@ -745,7 +745,7 @@ def test_anchored_windows_step_by_anchor_minus_overlap(monkeypatch: pytest.Monke
 def test_anchored_reports_progress_at_each_windows_real_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`on_progress` fires once per window, with the window's end in seconds.
+    """`on_progress` fires once per window, with the window's end and the decoded length.
 
     Same 16s/10s/6s geometry as the step test above: windows end at 10s, 14s
     and 16s (the last clipped to the real length, not the nominal 18s a fourth
@@ -756,14 +756,55 @@ def test_anchored_reports_progress_at_each_windows_real_end(
         samples=16 * whisper_mod.SAMPLE_RATE,
         results=[_result(segments=[]) for _ in range(3)],
     )
-    seen: list[float] = []
+    seen: list[tuple[float, float]] = []
 
-    def on_progress(done_s: float) -> None:
-        seen.append(done_s)
+    def on_progress(done_s: float, total_s: float) -> None:
+        seen.append((done_s, total_s))
 
     transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0, on_progress=on_progress)
 
-    assert seen == [10.0, 14.0, 16.0]
+    assert seen == [(10.0, 16.0), (14.0, 16.0), (16.0, 16.0)]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+@pytest.mark.parametrize("probed_s", [15.5, 16.5])
+def test_anchored_progress_reaches_exactly_one_whatever_the_probe_said(
+    probed_s: float, monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """Done and total come from one length, the decoded one, so 100% is 100% (#173).
+
+    ffprobe reads a container's duration, and whisper decodes the samples in
+    it; padding and rounding put the two apart. Here the decode is 16 s and the
+    probe says half a second more or less. Dividing the decoded seconds by the
+    probe's ended the last window at 103% or 97%. The done frame names the same
+    total as the running frames, as #52 holds for the other paths.
+    """
+    from dsj import media
+
+    def probe(path: Path) -> media.AudioStream:
+        return media.AudioStream("pcm_s16le", whisper_mod.SAMPLE_RATE, 1, probed_s)
+
+    monkeypatch.setattr(media, "probe", probe)
+    _stub_anchored(
+        monkeypatch,
+        samples=16 * whisper_mod.SAMPLE_RATE,
+        results=[_result(segments=[]) for _ in range(3)],
+    )
+    frames: list[tuple[str, float, float]] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        frames.append((state, p.fraction, p.audio_total_s))
+
+    transcribe(
+        fake_media, tmp_path / "out.json", engine="whisper", prompt="seed", anchor_s=10.0,
+        diarize=False, on_progress=capture,
+    )
+
+    windows = [f for f in frames if f[0] == "running"][1:]
+    assert [fraction for _, fraction, _ in windows] == [10 / 16, 14 / 16, 1.0]
+    assert {total for _, _, total in windows} == {16.0}
+    assert frames[-1] == ("done", 1.0, 16.0)
 
 
 def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(

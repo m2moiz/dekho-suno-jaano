@@ -1002,9 +1002,10 @@ def transcribe(
         ckpt_path = checkpoint_path_for(out)
         resumed_from_s = 0.0
         # The recording's length as this run's transcription frames report it,
-        # kept so the done frame can report the same number (#52). whisper's
-        # frames take ffprobe's duration; the chunk branch below replaces it
-        # with the decoded length, which is what its running frames divide by.
+        # kept so the done frame can report the same number (#52). It starts as
+        # ffprobe's duration, which an unanchored whisper run keeps; an
+        # anchored one and the chunk branch below replace it with the decoded
+        # length, which is what their running frames divide by (#173).
         audio_total_s = stream.duration_s
         if spec.kind == "file":
             from dsj.whisper import fingerprint_fields as whisper_fields
@@ -1054,12 +1055,14 @@ def transcribe(
                 # and nothing until the end: mlx-whisper takes no progress
                 # callback, and a bar that moved without evidence would be a
                 # bar that lies.
-                whisper_progress: Callable[[float], None] | None = None
+                whisper_progress: Callable[[float, float], None] | None = None
                 if anchor_s is not None and prompt is not None:
 
-                    def _whisper_progress(done_s: float) -> None:
+                    def _whisper_progress(done_s: float, total_s: float) -> None:
+                        nonlocal audio_total_s
+                        audio_total_s = total_s
                         report(
-                            Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
+                            Progress(done_s, total_s, time.monotonic() - whisper_started),
                             "running",
                         )
 
