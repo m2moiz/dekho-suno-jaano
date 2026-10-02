@@ -63,7 +63,7 @@ import typer
 # real default is 150. Measured cost of the import: ~90ms, inside the noise of
 # `dsj --help` at 120-200ms. The heavy workers below stay lazy.
 from dsj.dekho import DEFAULT_BUDGET, DEFAULT_DELTA, DEFAULT_FPS, DEFAULT_MIN_GAP_S
-from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES
+from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, Terminated
 
 app = typer.Typer(
     add_completion=False,
@@ -130,20 +130,14 @@ def _stderr_logger(name: str) -> None:
 EXIT_ALREADY_RUNNING = 75
 
 
-class _Terminated(KeyboardInterrupt):
-    """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
-
-    A KeyboardInterrupt so that everything already written to survive Ctrl-C
-    survives `kill` too: the temp file cleanup in atomic.py, the checkpoint the
-    chunk loop banked, the temporary directory the extracted audio sits in.
-    Python's default for SIGTERM is to end the process on the spot, which skips
-    all of it, and the status file kept saying `running` about a process that no
-    longer existed (#143, observed 2026-09-22).
-    """
-
-
 def _raise_terminated(_signum: int, _frame: FrameType | None) -> None:
-    raise _Terminated
+    """SIGTERM becomes Terminated where the run is, so `kill` stops it as Ctrl-C does (#143).
+
+    The default goes back first, so a second `kill` ends the process at once
+    instead of interrupting the `interrupted` document transcribe() is writing.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise Terminated
 
 
 @app.command("suno")
@@ -188,7 +182,6 @@ def suno(
 ) -> int:
     """Listen: transcribe media to a timestamped index."""
     from dsj import runlock
-    from dsj.atomic import atomic_write_text
     from dsj.suno import Progress, clock, render_bar
     from dsj.suno import transcribe as run_transcribe
     from dsj.whisper import ANCHOR_CHUNK_S, ROMAN_URDU_PROMPT
@@ -201,17 +194,15 @@ def suno(
     tty = sys.stderr.isatty()
     last_state = ""
     last_total = 0.0
-    last_progress: Progress | None = None
 
     def show(p: Progress, state: str) -> None:
         # A phase change ends the rewritten line, so the finished extraction bar
         # stays on screen instead of being overwritten by transcription's 0%.
-        nonlocal last_state, last_total, last_progress
+        nonlocal last_state, last_total
         if tty and last_state and state != last_state:
             print(file=sys.stderr)
         last_state = state
         last_total = p.audio_total_s
-        last_progress = p
         print(render_bar(p, state), end="\r" if tty else "\n", file=sys.stderr, flush=True)
 
     # --roman-urdu is sugar over the two flags under it, and it is spelled as
@@ -280,53 +271,13 @@ def suno(
             prompt=prompt,
             anchor_s=anchor_s,
         )
-    except Exception as exc:
-        # Record and re-raise: a detached watcher polling the heartbeat has no
-        # other way to distinguish "died" from "not started yet". The traceback
-        # still reaches the terminal untouched. Not into a directory that does
-        # not exist: transcribe() refuses that status path up front, and trying
-        # here would raise over its refusal (#197).
-        if status and status.parent.is_dir():
-            # Atomic for the same reason as the heartbeat, and more so: the
-            # watcher polling for exactly this document is in a tight read loop,
-            # which makes it the reader most likely to land inside a torn write.
-            failed = {
-                "state": "failed",
-                "pid": os.getpid(),
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            atomic_write_text(status, json.dumps(failed))
-        raise
-    except KeyboardInterrupt as exc:
-        # Ctrl-C and `kill`. KeyboardInterrupt is not an Exception, so before
-        # #143 both went past the branch above and the heartbeat said `running`
-        # forever. Default restored first, so a second `kill` ends the process
-        # at once instead of interrupting this write.
-        if sigterm_installed:
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-            sigterm_installed = False
-        terminated = isinstance(exc, _Terminated)
-        if status:
-            stopped: dict[str, object] = {
-                "state": "interrupted",
-                "pid": os.getpid(),
-                "signal": "SIGTERM" if terminated else "SIGINT",
-            }
-            # Where it had got to, with the phase that number belongs to: an
-            # extracting frame's audio_done_s counts extraction, not transcript.
-            if last_progress is not None:
-                stopped |= {
-                    "during": last_state,
-                    "audio_done_s": last_progress.audio_done_s,
-                    "audio_total_s": last_progress.audio_total_s,
-                }
-            atomic_write_text(status, json.dumps(stopped))
-        if terminated:
-            # 128 + 15, what a shell reports for a process SIGTERM ended, so
-            # `wait` and anything already reading 143 see what they saw before.
-            raise SystemExit(143) from None
-        # Typer turns this into exit 130.
-        raise
+    except Terminated:
+        # transcribe() has already written `interrupted` to --status (#103), as
+        # it writes `failed` for an exception, which passes through untouched.
+        # 128 + 15, what a shell reports for a process SIGTERM ended, so
+        # `wait` and anything already reading 143 see what they saw before.
+        # A Ctrl-C passes through too, and Typer turns it into exit 130.
+        raise SystemExit(143) from None
     finally:
         os.close(held)
         if sigterm_installed:

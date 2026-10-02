@@ -103,7 +103,7 @@ def source_states() -> set[str]:
     """The `state` values the code can write into a `--status` file.
 
     Two shapes produce one: `report(progress, "running")` in suno.py, and the literal
-    `{"state": "failed", ...}` the CLI writes when a run raises.
+    `{"state": "failed", ...}` transcribe() writes when a run raises (#103).
     """
     states: set[str] = set()
     for path in (REPO / "dsj" / "suno.py", REPO / "dsj" / "cli.py"):

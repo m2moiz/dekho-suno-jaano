@@ -618,36 +618,156 @@ def test_the_transcript_is_written_through_the_atomic_writer(
     assert out in seen
 
 
+def _load_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make parakeet's model load raise, before transcribe() has written any heartbeat."""
+
+    def from_pretrained(model_id: str) -> Any:
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr("parakeet_mlx.from_pretrained", from_pretrained)
+
+
 def test_the_failure_status_is_written_through_the_atomic_writer(
-    fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """main()'s except-handler writes the one document a watcher polls hardest.
+    """transcribe() writes the one document a watcher polls hardest, atomically.
 
     A watcher distinguishing "died" from "not started yet" reads this file in a
     tight loop, so it is the reader most likely to land inside a torn write.
+    Driven through transcribe() itself since #103 moved the write there from
+    the CLI: a stub that replaced transcribe() would now test nothing.
     """
-    import dsj.suno as transcribe_mod
-
+    _load_fails(monkeypatch)
     status = tmp_path / "status.json"
     seen = _spy_on_atomic_write(monkeypatch)
 
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("model exploded")
-
-    monkeypatch.setattr(transcribe_mod, "transcribe", boom)
-
     with pytest.raises(RuntimeError):
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(tmp_path / "out.json"), "--status", str(status)]
-        )
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
 
     assert seen == [status]
     failed = json.loads(status.read_text())
     assert failed["state"] == "failed"
     assert "model exploded" in failed["error"]
+
+
+def _decode_fails_on_second_chunk(model: FakeModel, crash: BaseException) -> None:
+    """The stub engine decodes its first chunk, then raises `crash` on the next."""
+    real = model.generate
+
+    def generate(mel: Any, **kwargs: Any) -> Any:
+        if model.mels:
+            raise crash
+        return real(mel, **kwargs)
+
+    model.generate = generate  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_a_library_caller_gets_failed_when_the_engine_raises_partway(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Called in process, as #113's server will, a crash still reaches the status file (#103).
+
+    Before, only the CLI wrote `failed`, so a direct caller's file kept the last
+    `running` frame forever: a progress bar frozen at that chunk.
+    """
+    model = fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    _decode_fails_on_second_chunk(model, OSError(28, "No space left on device"))
+    status = tmp_path / "status.json"
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    with pytest.raises(OSError, match="No space left"):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status, on_progress=capture)
+
+    assert "running" in states, "the failure has to come after a running frame to prove anything"
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "OSError: [Errno 28] No space left on device",
+    }
+
+
+def test_a_library_caller_gets_failed_when_the_engine_lookup_raises(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure before any heartbeat exists still writes one: the engine is not there (#103)."""
+    import dsj.suno as transcribe_mod
+    from dsj.asr import EngineUnavailable
+
+    def get_engine(name: str) -> Any:
+        raise EngineUnavailable(f"{name} cannot run here")
+
+    monkeypatch.setattr(transcribe_mod, "get_engine", get_engine)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(EngineUnavailable):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "EngineUnavailable: parakeet cannot run here",
+    }
+
+
+def test_a_library_caller_gets_failed_when_the_model_load_raises(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same for the model load, which also comes before the first heartbeat (#103)."""
+    _load_fails(monkeypatch)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(RuntimeError):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "failed",
+        "pid": os.getpid(),
+        "error": "RuntimeError: model exploded",
+    }
+
+
+@pytest.mark.parametrize("name", ["SIGINT", "SIGTERM"])
+def test_a_library_caller_gets_interrupted_with_where_it_had_got_to(
+    name: str,
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """Ctrl-C or `kill` in process writes the same document the CLI's run does (#103, #143).
+
+    `Terminated` is what the CLI's SIGTERM handler raises; a bare
+    KeyboardInterrupt is what Python raises for SIGINT.
+    """
+    import dsj.suno as transcribe_mod
+
+    crash = transcribe_mod.Terminated() if name == "SIGTERM" else KeyboardInterrupt()
+    model = fake_parakeet(sample_rate=RATE, tokens=[], audio_s=360.0)
+    _decode_fails_on_second_chunk(model, crash)
+    status = tmp_path / "status.json"
+
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, tmp_path / "out.json", status_path=status)
+
+    assert json.loads(status.read_text()) == {
+        "state": "interrupted",
+        "pid": os.getpid(),
+        "signal": name,
+        "during": "running",
+        "audio_done_s": CHUNK_S,
+        "audio_total_s": 360.0,
+    }
 
 
 # --- speaker labels ------------------------------------------------------
@@ -2045,7 +2165,9 @@ def test_an_out_in_a_missing_directory_is_refused_before_anything_loads(
     assert f"the directory {missing} does not exist" in said
     assert f"mkdir -p {missing}" in said
     assert loaded == []
-    assert not status.exists(), "a heartbeat was written, so the run got past the check"
+    # The refusal's own failure document (#103), never a progress frame, which
+    # would mean the run got past the check.
+    assert json.loads(status.read_text())["state"] == "failed"
     assert not missing.exists(), "refused, not created"
 
 
