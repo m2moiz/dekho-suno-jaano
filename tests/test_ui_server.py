@@ -10,6 +10,7 @@ then fail, which is what CI's `--extra ui` is for.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import re
 import signal
@@ -30,7 +31,7 @@ from fastapi.testclient import TestClient
 import dsj.ui.server
 from dsj.cli import main
 from dsj.ui import UIUnavailable
-from dsj.ui.server import STATIC, create_app
+from dsj.ui.server import IDLE_S, STATIC, Heartbeat, create_app
 
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
@@ -544,3 +545,36 @@ def test_a_killed_dsj_ui_does_not_lock_out_the_next() -> None:
     finally:
         second.terminate()
         second.wait(timeout=30)
+
+
+# When each request from a dsj ui tab reached the server, in seconds from the
+# first, measured on 2026-10-02 (#204): headless Chromium through agent-browser,
+# the tab put behind another at about 27 s and left there. Every 15 s while it was
+# in front; from 105 s on, Chromium's throttling of hidden tabs held the page's
+# 15 s timer to one beat a minute. With the old one-minute cutoff the server
+# stopped itself 531 s after the tab was hidden, on a 60.045 s gap.
+HIDDEN_TAB_BEATS = (
+    0.0, 15.0, 30.342, 45.384, 60.39, 75.365, 90.381, 105.372, 138.379, 198.385,
+    258.482, 318.458, 378.388, 438.313, 498.336, 558.381,
+)
+
+
+def test_a_tab_hidden_behind_another_does_not_let_the_server_stop() -> None:
+    """Replay the measured beats on a fake clock: the server must still be up at each one."""
+    now = [0.0]
+    beats = Heartbeat(clock=lambda: now[0])
+    for at in HIDDEN_TAB_BEATS[1:]:
+        # The moment just before this beat lands is the longest the page is silent.
+        now[0] = at - 1e-6
+        assert beats.idle_s() < IDLE_S, f"stopped before the beat at {at} s"
+        now[0] = at
+        beats.beat()
+
+
+def test_the_cutoff_leaves_a_whole_throttled_beat_to_spare() -> None:
+    """One hidden-tab beat lost (a busy moment, a sleeping network) still must not stop it."""
+    worst = max(b - a for a, b in itertools.pairwise(HIDDEN_TAB_BEATS))
+    assert worst > 60  # the measurement that made the old 60 s cutoff wrong
+    # Silent for two slowed beats instead of one: still half a minute short of the cutoff.
+    spare = IDLE_S - 2 * worst
+    assert spare >= 30

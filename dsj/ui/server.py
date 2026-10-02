@@ -24,7 +24,7 @@ it only has to guess the port. So only this machine's own page may use this one
      reply even when it guesses the port and the token check lets it through.
   5. No route takes a filesystem path. The page names a recording by id and
      the server looks the path up itself.
-  6. The page heartbeats, and the process exits after a minute without one.
+  6. The page heartbeats, and the process exits after three minutes without one.
      A lock file lets a second `dsj ui` find the first instead of binding a
      rival.
 """
@@ -78,8 +78,13 @@ STATIC = Path(__file__).resolve().parent / "static"
 HOST = "127.0.0.1"
 
 # How long the server outlives the last sign of a page, in seconds (#112 rule 6).
-# The page beats every 15 s, so a minute is four missed beats, not one.
-IDLE_S = 60.0
+# The page beats every 15 s while it is in front. Behind another tab, Chromium
+# holds that timer to one beat a minute: measured 2026-10-02 (#204), gaps of
+# 59.9 to 61.0 s over two runs, and a one-minute cutoff stopped the server
+# 531 s after the tab was hidden. Three minutes rides out one of those beats going missing
+# with a minute to spare (tests/test_ui_server.py replays the measured beats).
+# The cost: a closed window stops the server within three minutes, not one.
+IDLE_S = 180.0
 
 # The prefixes whose requests must carry the token. The page and its assets
 # are everything else, and are served to any loopback request (#112 rule 2).

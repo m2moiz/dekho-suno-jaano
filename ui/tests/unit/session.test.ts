@@ -84,3 +84,36 @@ describe("startHeartbeat", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });
+
+describe("a hidden tab (#204)", () => {
+  function setVisibility(state: DocumentVisibilityState) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+
+  it("beats the moment it comes back into view, not at its next slowed tick", async () => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, "", `/#t=${TOKEN}`);
+    takeToken();
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+    const stop = startHeartbeat();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Going out of view sends nothing of its own.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchMock.mock.calls[1]?.[0].url ?? "").pathname).toBe("/api/heartbeat");
+    stop();
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

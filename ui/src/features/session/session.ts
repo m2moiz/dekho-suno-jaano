@@ -56,12 +56,16 @@ export function sessionToken(): string | null {
   return token;
 }
 
-// The server exits a minute after the last beat (#112 rule 6), so a closed
-// window does not leave it running. Four beats a minute, so one lost to a busy
-// moment is not the one that stops it.
+// The server exits three minutes after the last beat (#112 rule 6, IDLE_S in
+// dsj/ui/server.py), so a closed window does not leave it running. Every 15 s
+// while the tab is in front; a hidden tab's timer is slowed by the browser to
+// about once a minute (measured in Chromium, #204), which the cutoff allows for.
 export const BEAT_MS = 15_000;
 
-/** Beat now, then every BEAT_MS, and on the tab coming back into view. */
+/**
+ * Beat now, then every BEAT_MS, and the moment the tab comes back into view,
+ * so a tab the browser has slowed down does not wait for its next slow tick.
+ */
 export function startHeartbeat(win: Window = window): () => void {
   const beat = () => {
     // A failed beat is not an error to put in front of the reader: the next
