@@ -2,12 +2,14 @@ import { type RefObject, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { fromThrown, showError } from "@/features/errors/appError";
+import { durationLabel } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { sessionToken } from "@/features/session/session";
 import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
 import { Playhead } from "./playhead";
 import { SpeedControl } from "./SpeedControl";
+import { readVideoShown, saveVideoShown } from "./video";
 import { Waveform } from "./Waveform";
 
 /**
@@ -17,6 +19,20 @@ import { Waveform } from "./Waveform";
  */
 export function mediaSrc(recordingId: number): string {
   return `/api/recording/${recordingId}/media?t=${encodeURIComponent(sessionToken() ?? "")}`;
+}
+
+/**
+ * Play, and put any refusal in front of the reader, except the one that is no
+ * failure: a pause, or a newer seek, that lands before playing starts rejects
+ * the play() it interrupted with an AbortError. Seen in chromium on
+ * 2026-10-02, a word clicked and paused at once put "The play() request was
+ * interrupted by a call to pause()" in the error dialog.
+ */
+function play(element: HTMLMediaElement): void {
+  element.play().catch((thrown: unknown) => {
+    if (thrown instanceof DOMException && thrown.name === "AbortError") return;
+    showError(fromThrown(thrown));
+  });
 }
 
 // Keys that scroll the page. Pressing one means the reader wants to look
@@ -41,9 +57,18 @@ type Props = {
  * The recording under the transcript (#60): click a word to hear it, and the
  * word being said is highlighted as it plays, with the view following it until
  * the reader scrolls away.
+ *
+ * A screen recording plays in a <video> on the same playhead, so the picture,
+ * the words and the waveform move together (#80); anything else in an <audio>,
+ * with no empty picture box.
  */
 export function Player({ recording, reading, article }: Props) {
-  const media = useRef<HTMLAudioElement>(null);
+  const media = useRef<HTMLMediaElement>(null);
+  const hasVideo = recording.video_codec !== null;
+  const [videoShown, setVideoShown] = useState(() => readVideoShown());
+  const [playing, setPlaying] = useState(false);
+  const [noPicture, setNoPicture] = useState(false);
+  const clock = useRef<HTMLSpanElement>(null);
   const playhead = useRef<Playhead | null>(null);
   const [following, setFollowing] = useState(true);
   // Views that move with the playhead's frame: the waveform's cursor (#61).
@@ -55,7 +80,7 @@ export function Player({ recording, reading, article }: Props) {
     if (element === null) return;
     element.currentTime = seconds;
     playhead.current?.follow();
-    element.play().catch((thrown: unknown) => showError(fromThrown(thrown)));
+    play(element);
   };
   const seekRef = useRef(seek);
   seekRef.current = seek;
@@ -79,8 +104,19 @@ export function Player({ recording, reading, article }: Props) {
     });
     playhead.current = head;
 
-    const play = () => head.start();
-    const pause = () => head.stop();
+    const started = () => {
+      head.start();
+      setPlaying(true);
+    };
+    const stopped = () => {
+      head.stop();
+      setPlaying(false);
+    };
+    // A video track the browser cannot draw (ProRes in Chromium, measured for
+    // #59) plays its sound over a blank box and raises no error, so say so.
+    const loaded = () => {
+      if (element instanceof HTMLVideoElement) setNoPicture(element.videoWidth === 0);
+    };
     const seeked = () => {
       if (element.paused) head.paint();
     };
@@ -110,21 +146,23 @@ export function Player({ recording, reading, article }: Props) {
       if (SCROLL_KEYS.has(event.key) && typing == null) head.unfollow();
     };
 
-    element.addEventListener("play", play);
-    element.addEventListener("pause", pause);
-    element.addEventListener("ended", pause);
+    element.addEventListener("play", started);
+    element.addEventListener("pause", stopped);
+    element.addEventListener("ended", stopped);
     element.addEventListener("seeked", seeked);
     element.addEventListener("error", failed);
+    element.addEventListener("loadedmetadata", loaded);
     root.addEventListener("click", click);
     window.addEventListener("wheel", scrolledByHand, { passive: true });
     window.addEventListener("touchmove", scrolledByHand, { passive: true });
     window.addEventListener("keydown", key);
     return () => {
-      element.removeEventListener("play", play);
-      element.removeEventListener("pause", pause);
-      element.removeEventListener("ended", pause);
+      element.removeEventListener("play", started);
+      element.removeEventListener("pause", stopped);
+      element.removeEventListener("ended", stopped);
       element.removeEventListener("seeked", seeked);
       element.removeEventListener("error", failed);
+      element.removeEventListener("loadedmetadata", loaded);
       root.removeEventListener("click", click);
       window.removeEventListener("wheel", scrolledByHand);
       window.removeEventListener("touchmove", scrolledByHand);
@@ -134,8 +172,48 @@ export function Player({ recording, reading, article }: Props) {
     };
   }, [reading, article, recording.id, frames]);
 
+  // The time, written by the playhead's own frame, for when the picture and
+  // its controls are folded away.
+  useEffect(() => {
+    const tick = (seconds: number) => {
+      const duration = media.current?.duration ?? Number.NaN;
+      if (clock.current === null) return;
+      const total = Number.isFinite(duration) ? ` / ${durationLabel(duration)}` : "";
+      clock.current.textContent = `${durationLabel(seconds)}${total}`;
+    };
+    frames.add(tick);
+    return () => {
+      frames.delete(tick);
+    };
+  }, [frames]);
+
+  const attach = (element: HTMLMediaElement | null) => {
+    media.current = element;
+  };
+  const src = mediaSrc(recording.id);
+
   return (
     <div className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur">
+      {hasVideo && (
+        // Folded away with display: none, which leaves the element playing.
+        <div className={videoShown ? undefined : "hidden"}>
+          <video
+            ref={attach}
+            src={src}
+            controls
+            playsInline
+            preload="metadata"
+            className="mx-auto max-h-[35vh] w-full rounded-md bg-black"
+            aria-label="Recording"
+          />
+          {noPicture && (
+            <p className="text-sm text-muted-foreground">
+              This browser cannot show this recording's picture ({recording.video_codec}). The sound
+              plays.
+            </p>
+          )}
+        </div>
+      )}
       <Waveform
         recordingId={recording.id}
         media={media}
@@ -143,14 +221,47 @@ export function Player({ recording, reading, article }: Props) {
         onSeek={(seconds) => seekRef.current(seconds)}
       />
       <div className="flex items-center gap-3">
-        <audio
-          ref={media}
-          src={mediaSrc(recording.id)}
-          controls
-          preload="metadata"
-          className="h-10 flex-1"
-          aria-label="Recording"
-        />
+        {hasVideo ? (
+          <>
+            {!videoShown && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const element = media.current;
+                  if (element === null) return;
+                  if (element.paused) play(element);
+                  else element.pause();
+                }}
+              >
+                {playing ? "Pause" : "Play"}
+              </Button>
+            )}
+            <span
+              ref={clock}
+              className={`flex-1 text-sm text-muted-foreground tabular-nums ${videoShown ? "invisible" : ""}`}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setVideoShown(!videoShown);
+                saveVideoShown(!videoShown);
+              }}
+            >
+              {videoShown ? "Hide picture" : "Show picture"}
+            </Button>
+          </>
+        ) : (
+          <audio
+            ref={attach}
+            src={src}
+            controls
+            preload="metadata"
+            className="h-10 flex-1"
+            aria-label="Recording"
+          />
+        )}
         <SpeedControl media={media} />
         {!following && (
           <Button variant="outline" size="sm" onClick={() => playhead.current?.follow()}>

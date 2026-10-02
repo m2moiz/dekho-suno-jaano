@@ -138,3 +138,30 @@ test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ 
   console.log(`tinted reader frame times: ${JSON.stringify(result)}`);
   expect(result.p95).toBeLessThanOrEqual(P95_CEILING_MS);
 });
+
+test("with a screen recording's picture open, scroll p95 stays under 20 ms", async ({ page }) => {
+  const dir = scratchDir();
+  // The picture's length does not matter to scrolling; its being on the page does.
+  const video = path.join(dir, "screen.mov");
+  const made = spawnSync("ffmpeg", [
+    "-y", "-loglevel", "error",
+    "-f", "lavfi", "-i", "testsrc2=size=1280x800:rate=30:duration=20",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=20",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", video,
+  ]);
+  expect(made.status).toBe(0);
+  const seeded = seed({ ...syntheticTranscript(), audio: video }, dir);
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
+  await expect(page.locator("video")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (document.querySelector("video") as HTMLVideoElement).videoWidth)).toBe(1280);
+  const dom = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return { scrollHeight: document.documentElement.scrollHeight, viewport: window.innerHeight };
+  });
+  const frames = Math.min(FRAMES, Math.floor((dom.scrollHeight - dom.viewport) / STEP_PX));
+  expect(frames).toBeGreaterThanOrEqual(150);
+  const result = { ...dom, frames, ...summarise((await scrollFrames(page, frames)).slice(1)) };
+  console.log(`reader with video frame times: ${JSON.stringify(result)}`);
+  expect(result.p95).toBeLessThanOrEqual(P95_CEILING_MS);
+});
