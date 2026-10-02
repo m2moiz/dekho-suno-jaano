@@ -286,10 +286,16 @@ with `{"audio_done_s": 240.0, "audio_total_s": 240.0, "state": "done", "fraction
 
 Anything reading `.fraction` unconditionally crashes on it, jq included: `.fraction * 100`
 against this document is `null (null) and number (100) cannot be multiplied`, and jq exits
-5. Branch on `state` first and default the rest:
+5. Branch on `state` first and default the rest. This is SKILL.md's polling recipe, and it
+reads all three shapes:
 
 ```bash
-jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fraction // 0) * 100 | floor)%" end' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
 
 `error` is `"<ExceptionClassName>: <message>"`.
@@ -317,7 +323,7 @@ keeps saying `running` forever. Before trusting a frame whose `state` is not `do
 `failed` or `interrupted`, check its `pid`:
 
 ```bash
-pid=$(jq -r .pid run.json)
+pid=$(jq -r '.pid' run.json)
 if kill -0 "$pid" 2>/dev/null; then echo alive; else echo "gone: the run died"; fi
 ```
 

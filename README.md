@@ -326,7 +326,12 @@ and poll the heartbeat:
 
 ```bash
 dsj suno meeting.mov -o out.json --status run.json &
-jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
 
 `state` moves `extracting → running → diarizing → done`, or `failed` with an

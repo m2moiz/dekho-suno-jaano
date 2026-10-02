@@ -276,8 +276,20 @@ An hour of audio is not something to block on. Detach it and poll the heartbeat:
 
 ```bash
 dsj suno meeting.mov -o out.json --status run.json &
-jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s" end' run.json
+jq -r 'if .state == "failed" then "failed (pid \(.pid // "?")): \(.error)"
+  elif .state == "interrupted" then "interrupted by \(.signal) (pid \(.pid))"
+    + if .during then " during \(.during) at \(.audio_done_s | floor)s of \(.audio_total_s | floor)s" else " before its first frame" end
+  else "\(.state) \((.fraction // 0) * 100 | floor)% eta \(.eta_s // "?")s (pid \(.pid // "?"))"
+    + if .stalled_s then ", stalled for \(.stalled_s | floor)s" else "" end
+  end' run.json
 ```
+
+It names the writer's `pid` on every line, says which signal stopped an `interrupted`
+run and how far it had got (never a made-up `0%`: that document has no `fraction`), and
+adds `stalled for Ns` while extraction stands still. Example lines:
+`running 42% eta 122.9s (pid 48213)`,
+`interrupted by SIGTERM (pid 48213) during running at 105s of 300s`,
+`failed (pid 48213): FileNotFoundError: /nope.mov`.
 
 `state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`, or
 `interrupted` when Ctrl-C or `kill` stopped it.
