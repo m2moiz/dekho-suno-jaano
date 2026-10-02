@@ -63,7 +63,10 @@ def wait_for_memory() -> None:
 
 
 def busy() -> bool:
-    return subprocess.run(["pgrep", "-f", "dsj suno"], capture_output=True).returncode == 0
+    # A sweep's own runs start as `python -c "...dsj.cli import main..." suno`,
+    # which "dsj suno" alone does not match, so a second sweep would not wait.
+    pattern = "dsj suno|dsj.cli import main"
+    return subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode == 0
 
 
 def commit() -> str:
