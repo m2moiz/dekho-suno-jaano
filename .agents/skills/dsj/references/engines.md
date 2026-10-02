@@ -75,7 +75,7 @@ fallback: if the chosen engine cannot run, nothing is transcribed and the run ex
 | Platform | Apple Silicon, Metal | Apple Silicon, Metal | Anywhere sherpa-onnx has wheels |
 | Languages | 25, all European. No Urdu | Whatever whisper reads, including Urdu | Same weights as parakeet |
 | Checkpoint and resume | Yes | **No.** An interrupted run starts over | Yes |
-| Progress reporting | Per chunk | **One frame at 0%**, then nothing until the end | Per chunk |
+| Progress reporting | Per chunk | With `--roman-urdu`, per window of about two minutes. Otherwise **one frame at 0%**, then nothing until transcription ends | Per chunk |
 | Speaker labels | With the diarize extra | With the diarize extra | Not on the android bundle |
 | Needs `--model` | No | No | **Yes**, see below |
 

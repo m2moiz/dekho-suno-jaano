@@ -268,7 +268,7 @@ How often each state is written:
 |---|---|
 | `extracting` | About twice a second, and only when the input is not already a 16 kHz mono wav |
 | `running` (parakeet, sherpa) | Once per chunk, so once per 105 seconds of audio |
-| `running` (whisper) | **Once, at 0%**, then nothing until the end. Whisper owns its own window loop and exposes no hook |
+| `running` (whisper) | With `--roman-urdu`, once per window of about two minutes: dsj cuts the windows itself. Any other whisper run, **once, at 0%**, then nothing until transcription ends: mlx-whisper takes no progress callback |
 | `diarizing` | **Exactly twice**, at the start and the end. Senko has no per-chunk callback and inventing a bar would be a lie |
 | `done` | Once |
 

@@ -492,8 +492,10 @@ def transcribe(
     above describes it. "whisper" exists for the languages parakeet does not
     have -- see dsj/whisper.py -- and differs in two ways worth knowing
     before you choose it: it owns its own window loop, so there is no
-    checkpoint and no resume, and it reports no progress between start and
-    finish. `language` and `prompt` are whisper's; parakeet takes neither.
+    checkpoint and no resume, and only an anchored run (`anchor_s` and
+    `prompt`, which `--roman-urdu` sets) reports progress between start and
+    finish, once per window. `language` and `prompt` are whisper's; parakeet
+    takes neither.
     `model_id` defaults to whichever engine's model, so it is usually left
     alone.
     """

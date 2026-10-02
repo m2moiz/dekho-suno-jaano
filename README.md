@@ -196,10 +196,13 @@ prompt outright — 280 of 280 words in Urdu script, and 218s rather than 85s fo
 the same clip. Turbo is the default here for that reason, and changing it means
 re-measuring.
 
-Two things the whisper engine does not do: it writes **no checkpoint**, so an
-interrupted run starts over, and it reports **no progress** between start and
-finish — it owns its own window loop and exposes no hook to bank or count one
-from. It runs at 3.2x realtime on code-switched Urdu with `--roman-urdu` and
+The whisper engine writes **no checkpoint**, so an interrupted run starts over:
+it owns its own window loop and exposes no hook to bank one from. How much
+progress it reports depends on the run. `--roman-urdu` cuts the audio into
+two-minute windows itself and reports after each one. Any other whisper run,
+`--prompt` and `--language` included, reports 0% and then **nothing until
+transcription ends**, because mlx-whisper takes no progress callback. It runs
+at 3.2x realtime on code-switched Urdu with `--roman-urdu` and
 6.4x on English, against parakeet's ~13x; the commands that reproduce both, and
 the memory state each was measured in, are in `dsj/whisper.py`'s docstring. All
 three cost more the longer the recording, which is why parakeet stays the
