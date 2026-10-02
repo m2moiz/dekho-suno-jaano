@@ -40,3 +40,12 @@
   background-color: light-dark(oklch(0.9 0.12 85), oklch(0.42 0.09 75));
   color: var(--foreground);
 }
+
+/* Words the recogniser was unsure of, when switched on (#62). Rose, so it
+ * never reads as the playhead's amber. Body text on it measures 14.9:1 light
+ * and 7.8:1 dark (ui/tests/unit/confidence.test.tsx computes both from these
+ * values; #62 asks for 4.5:1). */
+::highlight(dsj-unsure) {
+  background-color: light-dark(oklch(0.92 0.06 25), oklch(0.38 0.09 25));
+  color: var(--foreground);
+}

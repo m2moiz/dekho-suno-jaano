@@ -61,6 +61,8 @@ export type Words = {
   offset: Uint32Array;
   /** Its length in that text, in UTF-16 units. */
   length: Uint32Array;
+  /** Its least sure token's `c` (#62), or NaN where the file has none. */
+  confidence: Float32Array;
 };
 
 export type Reading = { turns: Turn[]; words: Words; speakers: string[] };
@@ -136,6 +138,7 @@ export function read(doc: TranscriptDoc): Reading {
   const turnOf: number[] = [];
   const offsets: number[] = [];
   const lengths: number[] = [];
+  const confidences: number[] = [];
   let turn: Turn | undefined;
   let previous: Sentence | undefined;
   for (const sentence of doc.sentences) {
@@ -162,7 +165,15 @@ export function read(doc: TranscriptDoc): Reading {
         turnOf.push(turns.length - 1);
         offsets.push(turn.text.length);
         lengths.push(0);
+        confidences.push(Number.NaN);
         turn.count += 1;
+      }
+      // A word is as sure as its least sure piece: one doubtful sub-word
+      // token makes the word one to check.
+      if (token.c !== undefined) {
+        const last = confidences.length - 1;
+        const soFar = confidences[last] ?? Number.NaN;
+        confidences[last] = Number.isNaN(soFar) ? token.c : Math.min(soFar, token.c);
       }
       turn.text += token.w;
       lengths[lengths.length - 1] = turn.text.length - (offsets[offsets.length - 1] ?? 0);
@@ -177,6 +188,7 @@ export function read(doc: TranscriptDoc): Reading {
       turn: Uint32Array.from(turnOf),
       offset: Uint32Array.from(offsets),
       length: Uint32Array.from(lengths),
+      confidence: Float32Array.from(confidences),
     },
   };
 }

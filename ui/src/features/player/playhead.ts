@@ -60,6 +60,8 @@ export class Playhead {
     this.onFollowing = onFollowing;
     this.range = document.createRange();
     this.highlight = new Highlight();
+    // Over the unsure-word tint (#62) where the two meet: where you are wins.
+    this.highlight.priority = 1;
     CSS.highlights.set(HIGHLIGHT, this.highlight);
   }
 

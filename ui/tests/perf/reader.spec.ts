@@ -104,3 +104,37 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
   expect(tick.samples).toBeGreaterThan(200);
   expect(tick.p95).toBeLessThanOrEqual(TICK_P95_CEILING_MS);
 });
+
+test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ page }) => {
+  const dir = scratchDir();
+  // The fixture with a confidence on every token, one token in ten under
+  // whisper's cut-off, so about a tenth of the words are tinted, as on the real
+  // transcript the cut-off was measured on (#62).
+  const fixture = syntheticTranscript();
+  let n = 0;
+  const sentences = fixture.sentences.map((s) => ({
+    ...s,
+    tokens: s.tokens.map((t) => ({ ...t, c: n++ % 10 === 0 ? 0.3 : 0.95 })),
+  }));
+  const seeded = seed(
+    { ...fixture, model: "mlx-community/whisper-large-v3-turbo", sentences, audio: `${dir}/none.wav` },
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
+  await page.getByRole("button", { name: /^Unsure words/ }).click();
+  const tinted = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      ranges: CSS.highlights.get("dsj-unsure")?.size ?? 0,
+      scrollHeight: document.documentElement.scrollHeight,
+      viewport: window.innerHeight,
+    };
+  });
+  expect(tinted.ranges).toBeGreaterThan(1000);
+  const frames = Math.min(FRAMES, Math.floor((tinted.scrollHeight - tinted.viewport) / STEP_PX));
+  expect(frames).toBeGreaterThanOrEqual(150);
+  const result = { ...tinted, frames, ...summarise((await scrollFrames(page, frames)).slice(1)) };
+  console.log(`tinted reader frame times: ${JSON.stringify(result)}`);
+  expect(result.p95).toBeLessThanOrEqual(P95_CEILING_MS);
+});

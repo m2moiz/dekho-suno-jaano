@@ -7,6 +7,7 @@ import type { RecordingRow } from "@/features/library/types";
 import { Player } from "@/features/player/Player";
 import { parseTranscript, read, type Reading } from "./document";
 import { TranscriptView } from "./TranscriptView";
+import { UnsureToggle } from "./UnsureToggle";
 
 type Opened = { recording: RecordingRow; model: string; reading: Reading };
 type Loaded = { state: "loading" } | { state: "failed" } | ({ state: "ready" } & Opened);
@@ -70,9 +71,12 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
       )}
       {loaded.state === "ready" && (
         <>
-          <header className="mb-8">
-            <h2 className="text-xl font-semibold text-balance">{fileName(loaded.recording.path)}</h2>
-            <p className="text-sm text-muted-foreground">{loaded.model}</p>
+          <header className="mb-8 flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-balance">{fileName(loaded.recording.path)}</h2>
+              <p className="text-sm text-muted-foreground">{loaded.model}</p>
+            </div>
+            <UnsureToggle reading={loaded.reading} model={loaded.model} article={article} />
           </header>
           <TranscriptView reading={loaded.reading} articleRef={article} />
           {loaded.recording.missing ? (
