@@ -26,6 +26,7 @@ __all__ = [
     "extract_tile_grid",
     "has_video",
     "loudness",
+    "mute",
     "needs_conversion",
     "probe",
     "sound_copy",
@@ -37,7 +38,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -494,6 +495,158 @@ def sound_copy(media: Path, dest: Path) -> Path:
         )
     os.replace(tmp, dest)  # noqa: PTH105
     return dest
+
+
+# How finely a mute lands, in seconds. ffmpeg switches a filter on and off per
+# frame of samples, not per sample, and a decoder's frame is long: measured on a
+# 16 kHz wav, a mute asked for at 1.0 to 1.5 s landed at 1.024 to 1.536 s,
+# 1024-sample frames. Cutting the stream into 5 ms frames first put it at 1.000
+# to 1.504 s. Each span is widened by one frame at its start, so silence covers
+# every sample asked for and at most one frame more at either edge.
+MUTE_FRAME_S = 0.005
+
+# Codecs whose re-encode loses nothing, so they take no bit rate.
+_LOSSLESS = ("flac", "alac")
+
+
+@dataclass(frozen=True)
+class _Encoding:
+    codec_name: str
+    bit_rate: int | None
+    sample_rate: int
+    # Where the sound starts in the file's own clock, which is the clock ffmpeg's
+    # filters read `t` in. A transcript counts from the first sample of the
+    # sound, so a span moves by this much: measured on a .mov whose sound starts
+    # 0.479 s in, a mute at 1.0 to 1.5 in the filter's clock was silent at 0.549
+    # to 1.042 s of the sound.
+    offset_s: float
+
+
+def _encoding(media: Path) -> _Encoding:
+    proc = subprocess.run(
+        [
+            _tool("ffprobe"), "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=codec_name,bit_rate,sample_rate,start_time",
+            "-show_entries", "format=start_time",
+            "-print_format", "json", str(media),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise MediaError(f"ffprobe could not read {media}: {proc.stderr.strip()}")
+    info: dict[str, Any] = json.loads(proc.stdout)
+    streams: list[dict[str, Any]] = info.get("streams") or []
+    if not streams:
+        raise NoAudioStream(f"{media} has no audio stream, so there is nothing to mute.")
+    stream = streams[0]
+    fmt: dict[str, Any] = info.get("format", {})
+    rate = stream.get("bit_rate")
+    return _Encoding(
+        codec_name=str(stream["codec_name"]),
+        bit_rate=int(rate) if rate and str(rate).isdigit() else None,
+        sample_rate=int(stream["sample_rate"]),
+        offset_s=float(stream.get("start_time") or 0.0) - float(fmt.get("start_time") or 0.0),
+    )
+
+
+def mute(
+    media: Path,
+    spans: Sequence[tuple[float, float]],
+    out: Path,
+    *,
+    replace: bool = False,
+    on_progress: Callable[[float], None] | None = None,
+) -> Path:
+    """Write `media` to `out` with silence over every span, and nothing else changed.
+
+    `spans` are (start, end) in seconds from the first sample of the sound, the
+    clock a transcript counts in. The sound is re-encoded with its own codec and
+    bit rate, because a filter cannot run on encoded audio; a lossy codec
+    therefore loses a little outside the spans too, and a wav comes out the same
+    sample for sample there. The picture, when there is one, is copied untouched
+    (`-c:v copy`). The container is the input's: `out` must have its suffix.
+
+    Written beside `out` under a temporary name and renamed at the end, so an
+    interrupted render (Ctrl-C, SIGTERM, a crash) leaves no `out` and no
+    temporary file either: ffmpeg is stopped and its half-written file removed.
+
+    `on_progress` is called with seconds of the recording written so far, about
+    twice a second.
+
+    Raises:
+        ValueError: `out` is `media` itself, or a different container.
+        FileExistsError: `out` exists and `replace` was not asked for.
+        NoAudioStream: `media` has no sound to mute.
+        MediaError: ffmpeg could not do it; its own log is in the message.
+    """
+    if out.exists() and out.resolve() == media.resolve():
+        raise ValueError(f"{out} is the recording itself; a render never writes over its input")
+    if out.suffix.lower() != media.suffix.lower():
+        raise ValueError(
+            f"{out} would change the container from {media.suffix or 'none'} to "
+            f"{out.suffix or 'none'}; a render keeps the input's, so name it *{media.suffix}"
+        )
+    if out.exists() and not replace:
+        raise FileExistsError(f"{out} already exists, and replacing it was not asked for")
+    if not out.parent.is_dir():
+        raise MediaError(f"cannot write {out}: the directory {out.parent} does not exist.")
+
+    enc = _encoding(media)
+    frame = max(1, round(enc.sample_rate * MUTE_FRAME_S))
+    widen = frame / enc.sample_rate
+    windows = "+".join(
+        f"between(t,{a + enc.offset_s - widen:.6f},{b + enc.offset_s:.6f})" for a, b in spans
+    )
+    audio_filter = (
+        f"asetnsamples=n={frame}:p=0,volume=volume=0:enable='{windows}'" if spans else "anull"
+    )
+    lossy = not (enc.codec_name.startswith("pcm_") or enc.codec_name in _LOSSLESS)
+    rate = ["-b:a", str(enc.bit_rate)] if lossy and enc.bit_rate else []
+    # The suffix stays last, because ffmpeg picks the container from it.
+    tmp = out.with_name(f".{out.stem}.{os.getpid()}.tmp{out.suffix}")
+    cmd = [
+        _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-progress", "pipe:1", "-nostats", "-stats_period", "0.5", "-y",
+        "-i", str(media),
+        # Every picture and sound stream, the picture copied as it is. A data or
+        # subtitle stream is not carried: not every container can take one back.
+        "-map", "0:v?", "-map", "0:a", "-c", "copy",
+        "-af", audio_filter, "-c:a", enc.codec_name, *rate,
+        str(tmp),
+    ]
+    # stderr to a file and Popen as a context manager, for extract_audio's reasons.
+    with (
+        tempfile.TemporaryFile("w+") as errfile,
+        subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errfile, text=True) as proc,
+    ):
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "out_time_us" and value != "N/A" and on_progress:
+                    on_progress(max(int(value), 0) / 1_000_000)
+            returncode = _reap(proc, what="its progress stream reaching EOF")
+        except BaseException:
+            # BaseException: Ctrl-C and SIGTERM (dsj.suno.Terminated) are the
+            # interrupts this is for. ffmpeg is a separate process that would go
+            # on writing the temp file after we leave, and Popen's exit waits
+            # for it, so it is stopped here rather than waited out.
+            proc.kill()
+            proc.wait()
+            tmp.unlink(missing_ok=True)
+            raise
+        errfile.seek(0)
+        stderr = errfile.read().strip()
+    if returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise MediaError(
+            f"ffmpeg failed to mute {len(spans)} spans of {media} (exit {returncode}):\n{stderr}"
+        )
+    if out.exists() and not replace:
+        tmp.unlink(missing_ok=True)
+        raise FileExistsError(f"{out} appeared while rendering, and replacing it was not asked for")
+    os.replace(tmp, out)  # noqa: PTH105
+    return out
 
 
 # How far before the target the coarse seek lands, in seconds. Big enough to

@@ -48,6 +48,7 @@ from __future__ import annotations
 __all__ = [
     "FORMAT",
     "FORMAT_VERSION",
+    "PAD_S",
     "SHIPPED_LISTS",
     "WORDS_ENV",
     "Document",
@@ -57,6 +58,7 @@ __all__ = [
     "Item",
     "Match",
     "Paragraph",
+    "RenderRefused",
     "TranscriptUnusable",
     "WordList",
     "WordListError",
@@ -71,7 +73,9 @@ __all__ = [
     "move",
     "mute",
     "normalize",
+    "render",
     "save",
+    "spans_to_mute",
     "user_words_path",
     "validate",
     "word_lists",
@@ -84,11 +88,12 @@ import re
 import sys
 import tomllib
 import unicodedata
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
+from dsj import media as media_mod
 from dsj.atomic import atomic_write_text
 
 # The file says what it is and which shape it has. A reader meeting a version it
@@ -625,3 +630,110 @@ def flag(doc: Document, found: Found) -> Document:
     for match in found.matches:
         doc = mute(doc, match.start, match.stop)
     return doc
+
+
+# --------------------------------------------------------------------------
+# Rendering the bleeped file (#65)
+# --------------------------------------------------------------------------
+
+# How far a mute reaches past each side of a flagged word, in seconds. The 0.1
+# is #44's starting guess, and it has not been chosen by ear yet: the owner's
+# listening check at the timestamps a render logs decides it. What has been
+# measured is the cost. In fluent speech words abut: on the parakeet transcript
+# of scratch/clip45.wav (114 words), 84 of 113 word boundaries have no gap at
+# all, and a pad of 0.05 s reaches into the next or previous word at 90 of them,
+# 0.1 s at 97. So any pad shaves the edge of a neighbouring word; without one,
+# the edge of the flagged word can be heard, since parakeet times words on an
+# 80 ms grid and whisper only infers its ends. A zero-length word (e == t) is
+# muted by its pad alone.
+PAD_S = 0.1
+
+# Two items closer than this are one stretch of the recording, not a cut: the
+# times are rounded to the millisecond and summed.
+_TOUCH_S = 0.002
+
+
+class RenderRefused(ValueError):
+    """The document holds a change the render does not make, or another recording."""
+
+
+def spans_to_mute(
+    doc: Document, *, duration_s: float, pad_s: float = PAD_S
+) -> list[tuple[float, float]]:
+    """The stretches of the recording to silence: muted items, padded, merged, in order.
+
+    The render mutes and does nothing else (#128: no cut, no trim, no re-timing),
+    so the document must still play its one recording from the start in order.
+    A deleted or moved entry would be rendered as though it were not, which is
+    the silent wrong answer, so it is refused instead.
+
+    Raises:
+        RenderRefused: more than one source, or entries out of order or missing.
+    """
+    sources = {entry.source for entry in doc.content if isinstance(entry, Item)}
+    if len(sources) > 1:
+        raise RenderRefused(
+            f"the document plays from {len(sources)} recordings; a render mutes one"
+        )
+    reached = 0.0
+    previous = 0.0
+    spans: list[tuple[float, float]] = []
+    for index, entry in enumerate(doc.content):
+        if not isinstance(entry, Item):
+            continue
+        if entry.source_start < previous or entry.source_start > reached + _TOUCH_S:
+            raise RenderRefused(
+                f"{_where(index, entry)} does not follow the entry before it in the "
+                f"recording, so something was deleted or moved; a render only mutes"
+            )
+        previous = entry.source_start
+        reached = max(reached, entry.source_end)
+        if not entry.muted:
+            continue
+        start = max(entry.source_start - pad_s, 0.0)
+        end = min(entry.source_end + pad_s, duration_s)
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return [(round(a, 3), round(b, 3)) for a, b in spans if b > a]
+
+
+def render(
+    doc: Document,
+    media: Path,
+    out: Path,
+    *,
+    replace: bool = False,
+    on_progress: Callable[[float, float], None] | None = None,
+) -> list[tuple[float, float]]:
+    """Write `media` to `out` with every muted item of `doc` silenced (#65).
+
+    The one render, for `dsj hatao` and for the app alike. `media` must be the
+    recording the document plays from: a document made for one recording and
+    rendered onto another would mute the wrong moments, in silence.
+    `on_progress` is called with seconds written and the recording's length.
+
+    Returns:
+        The spans silenced, padded and merged, in seconds.
+
+    Raises:
+        RenderRefused: `media` is not the document's recording, or the document
+            holds a delete or a move.
+        and whatever dsj.media.mute raises.
+    """
+    recordings = {Path(doc.sources[e.source]) for e in doc.content if isinstance(e, Item)}
+    if recordings and recordings != {media.resolve()}:
+        raise RenderRefused(
+            f"the document plays {sorted(map(str, recordings))}, not {media.resolve()}"
+        )
+    total = media_mod.probe(media).duration_s
+    spans = spans_to_mute(doc, duration_s=total)
+    media_mod.mute(
+        media,
+        spans,
+        out,
+        replace=replace,
+        on_progress=(lambda done: on_progress(done, total)) if on_progress else None,
+    )
+    return spans

@@ -367,3 +367,52 @@ def test_every_shipped_list_loads_and_ships_inside_the_package() -> None:
     for path in hatao.word_lists():
         assert path.parent == package / "words"
         assert hatao.load_words([path]).spellings, f"{path.name} has no spellings"
+
+
+# --------------------------------------------------------------------------
+# What the render silences (#65)
+# --------------------------------------------------------------------------
+
+
+def test_muted_words_are_padded_merged_and_kept_inside_the_recording(recording: Path) -> None:
+    doc = hatao.from_transcript(_spoken([" a", " b", " c", " d", " e"]), recording,
+                                duration_s=4.55)
+    words = list(hatao._words(doc))  # pyright: ignore[reportPrivateUsage]
+    # a (0.0-0.5) and b (1.0-1.5): padded, they stay apart; d (3.0-3.5) and e
+    # (4.0-4.5) with a pad of 0.6 meet and merge, and e's pad stops at the end.
+    for index in (0, 1, 3, 4):
+        doc = hatao.mute(doc, *words[index])
+    assert hatao.spans_to_mute(doc, duration_s=4.55, pad_s=0.1) == [
+        (0.0, 0.6), (0.9, 1.6), (2.9, 3.6), (3.9, 4.55),
+    ]
+    assert hatao.spans_to_mute(doc, duration_s=4.55, pad_s=0.6) == [(0.0, 2.1), (2.4, 4.55)]
+
+
+def test_a_zero_length_word_is_muted_by_its_pad(recording: Path) -> None:
+    payload = _spoken([" x", " y"])
+    payload["sentences"][0]["tokens"][1]["e"] = 1.0  # e == t
+    doc = hatao.from_transcript(payload, recording)
+    doc = hatao.mute(doc, *list(hatao._words(doc))[1])  # pyright: ignore[reportPrivateUsage]
+    assert hatao.spans_to_mute(doc, duration_s=2.0) == [(0.9, 1.1)]
+
+
+def test_a_render_refuses_a_delete_or_a_move(recording: Path) -> None:
+    doc = hatao.from_transcript(_spoken([" a", " b", " c"]), recording)
+    with pytest.raises(hatao.RenderRefused, match="deleted or moved"):
+        hatao.spans_to_mute(hatao.delete(doc, 2, 3), duration_s=3.0)
+    with pytest.raises(hatao.RenderRefused, match="deleted or moved"):
+        hatao.spans_to_mute(hatao.move(doc, 4, 6, 1), duration_s=3.0)
+    two = Document({**doc.sources, "1": "/other.mov"}, (*doc.content, Item("1", 0.0, 1.0, "")))
+    with pytest.raises(hatao.RenderRefused, match="2 recordings"):
+        hatao.spans_to_mute(two, duration_s=3.0)
+
+
+def test_a_render_refuses_a_recording_the_document_was_not_made_for(
+    recording: Path, tmp_path: Path
+) -> None:
+    doc = hatao.from_transcript(_spoken([" a"]), recording)
+    other = tmp_path / "other.mov"
+    other.write_bytes(recording.read_bytes())
+    with pytest.raises(hatao.RenderRefused, match=r"not .*other\.mov"):
+        hatao.render(doc, other, tmp_path / "out.mov")
+    assert not (tmp_path / "out.mov").exists()
