@@ -100,3 +100,7 @@ whitelist.dev_app  # dsj/ui/server.py
 # Set by the idle watchdog, read inside uvicorn's own serve loop, which vulture
 # does not scan: uvicorn.Server polls `should_exit` and shuts down when it is True.
 whitelist.should_exit  # dsj/ui/server.py -- _watch
+
+# A FastAPI route: the @router.get decorator registers it, and FastAPI calls it
+# for each request. Its other routes' names happen to be used elsewhere too.
+whitelist.waveform  # dsj/ui/routes/media.py

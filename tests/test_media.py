@@ -268,3 +268,36 @@ def test_loudness_reports_a_file_ffmpeg_cannot_read(tmp_path: Path) -> None:
 
     with pytest.raises(media.MediaError, match="failed to read the audio"):
         media.loudness(bad, 0.1)
+
+
+def test_envelope_is_each_buckets_min_and_max_as_signed_bytes(ready_wav: Path) -> None:
+    """The 2 s sine is amplitude 1/8: every 20 ms bucket spans -16 to 16 of 127 (#61)."""
+    pairs = np.frombuffer(media.envelope(ready_wav), dtype=np.int8).reshape(-1, 2)
+    assert pairs.shape == (2 * media.ENVELOPE_RATE, 2)
+    assert (pairs[:, 0] == -16).all()
+    assert (pairs[:, 1] == 16).all()
+
+
+def test_envelope_shows_a_silence_as_flat_and_keeps_the_last_part_bucket(
+    tmp_path: Path,
+) -> None:
+    """1 s of silence then 0.51 s of tone: 50 flat buckets, then 26, the last a part one."""
+    out = tmp_path / "gap.wav"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=1",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.51:sample_rate=16000",
+        "-filter_complex", "[0][1]concat=n=2:v=0:a=1", "-ar", "16000", str(out),
+    )
+    pairs = np.frombuffer(media.envelope(out), dtype=np.int8).reshape(-1, 2)
+    assert pairs.shape == (76, 2)
+    assert (pairs[:50] == 0).all()
+    assert (pairs[51:, 1] > 10).all()
+    assert (pairs[51:, 0] < -10).all()
+
+
+def test_envelope_reports_a_file_ffmpeg_cannot_read(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"RIFF")
+
+    with pytest.raises(media.MediaError, match="failed to read the audio"):
+        media.envelope(bad)

@@ -175,3 +175,85 @@ def test_the_query_token_does_not_get_past_the_host_check(big: tuple[Path, int])
     app, token = create_app(port=8721)
     foreign = TestClient(app, base_url="http://attacker.example")
     assert foreign.get(f"/api/recording/{rid}/media?t={token}").status_code == 403
+
+
+def tone(path: Path, seconds: float = 2) -> Path:
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"sine=frequency=440:duration={seconds}:sample_rate=16000", str(path)],
+        check=True,
+    )
+    return path
+
+
+def test_the_waveform_is_the_envelope_as_raw_bytes(tmp_path: Path) -> None:
+    from dsj.media import ENVELOPE_RATE
+
+    rid = added(tone(tmp_path / "talk.wav"))
+    client, _ = page()
+    reply = client.get(f"/api/recording/{rid}/waveform")
+    assert reply.status_code == 200, reply.text
+    assert reply.headers["content-type"] == "application/octet-stream"
+    assert len(reply.content) == 2 * 2 * ENVELOPE_RATE
+
+
+def test_opening_the_same_recording_again_recomputes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dsj.media
+
+    rid = added(tone(tmp_path / "talk.wav"))
+    calls: list[Path] = []
+    real = dsj.media.envelope
+
+    def counted(media: Path) -> bytes:
+        calls.append(media)
+        return real(media)
+
+    monkeypatch.setattr(dsj.media, "envelope", counted)
+    first = page()[0].get(f"/api/recording/{rid}/waveform").content
+    # A second launch of dsj ui: a new app, the same library and the same cache.
+    second = page()[0].get(f"/api/recording/{rid}/waveform").content
+    assert first == second
+    assert len(calls) == 1
+
+
+def test_the_cache_follows_the_contents_not_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dsj.media
+    from dsj.ui.routes.media import waveform_cache
+    from dsj.ui.store import Library
+
+    path = tone(tmp_path / "talk.wav")
+    rid = added(path)
+    page()[0].get(f"/api/recording/{rid}/waveform")
+    with Library.open() as library:
+        found = library.recording(rid)
+    assert found is not None and found.content_id is not None
+    assert waveform_cache(found.content_id).is_file()
+
+    # Renamed and pointed at again: the same contents, so the same envelope file.
+    moved = path.rename(tmp_path / "renamed.wav")
+    with Library.open() as library:
+        library.relink(rid, moved)
+    def recomputed(_media: Path) -> bytes:
+        pytest.fail("the envelope was computed again")
+
+    monkeypatch.setattr(dsj.media, "envelope", recomputed)
+    assert page()[0].get(f"/api/recording/{rid}/waveform").status_code == 200
+
+
+def test_the_waveform_route_refuses_what_the_media_route_refuses(tmp_path: Path) -> None:
+    path = tone(tmp_path / "talk.wav")
+    rid = added(path)
+    client, _ = page()
+    assert client.get("/api/recording/..%2F1/waveform").status_code == 404
+    assert client.get("/api/recording/999/waveform").status_code == 404
+    app, token = create_app(port=8721)
+    bare = TestClient(app, base_url=LOOPBACK)
+    assert bare.get(f"/api/recording/{rid}/waveform").status_code == 401
+    # The media element's query token is for the media route alone.
+    assert bare.get(f"/api/recording/{rid}/waveform?t={token}").status_code == 401
+    path.unlink()
+    assert client.get(f"/api/recording/{rid}/waveform").status_code == 404

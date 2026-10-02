@@ -224,3 +224,48 @@ test("at half speed and at double speed the highlight keeps time with the record
     expect(painted).toEqual([wordAt(sentences, time)]);
   }
 });
+
+test("clicking the waveform moves the same playhead a word does, and the page never fetches the audio", async ({ page }) => {
+  // The page's own requests go through the API client, which always sends the
+  // token as a header; the <audio> element's carry it in the query instead.
+  // (resourceType cannot tell them apart: WebKit does not call the element's
+  // requests "media".)
+  const fetched: string[] = [];
+  page.on("request", (request) => {
+    if (request.headers()["authorization"] !== undefined) fetched.push(new URL(request.url()).pathname);
+  });
+  const dir = scratchDir();
+  const sentences = Array.from({ length: 10 }, (_, k) =>
+    sentence(k * 4, k % 2, Array.from({ length: 8 }, (_, i) => ` v${k}w${i}`)),
+  );
+  const seeded = seed(transcript(silence(dir, 40, "wave.wav"), sentences), dir);
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p")).toHaveCount(10);
+  await expect.poll(() => page.evaluate(() => document.querySelector("audio")?.readyState ?? 0)).toBeGreaterThan(0);
+
+  const canvas = page.getByLabel("Waveform");
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error("the waveform is not on the page");
+  const seek = page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const audio = document.querySelector("audio") as HTMLAudioElement;
+        audio.addEventListener("seeking", () => resolve(audio.currentTime), { once: true });
+      }),
+  );
+  // A quarter of the way along 40 s.
+  await page.mouse.click(box.x + box.width / 4, box.y + box.height / 2);
+  expect(Math.abs((await seek) - 10)).toBeLessThan(0.5);
+  const { time, painted } = await pausedAt(page);
+  expect(painted).toEqual([wordAt(sentences, time)]);
+  const cursorX = await page.evaluate(() => {
+    const cursor = document.querySelector('[aria-label="Waveform"] + div') as HTMLElement;
+    return new DOMMatrixReadOnly(getComputedStyle(cursor).transform).m41;
+  });
+  expect(Math.abs(cursorX - (time / 40) * box.width)).toBeLessThan(2);
+
+  // What the page itself asked for: the envelope, never the recording.
+  const route = `/api/recording/${seeded.recording}`;
+  expect(fetched).toContain(`${route}/waveform`);
+  expect(fetched.filter((p) => p.startsWith(`${route}/media`))).toEqual([]);
+});

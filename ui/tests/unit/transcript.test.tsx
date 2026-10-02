@@ -182,8 +182,17 @@ describe("TranscriptPage", () => {
   };
 
   beforeEach(() => {
-    // The page mounts the player, whose playhead paints with the Highlight API.
+    // The page mounts the player, whose playhead paints with the Highlight API
+    // and whose waveform watches its own size and the colour scheme, none of
+    // which jsdom has.
     installHighlights();
+    globalThis.ResizeObserver ??= class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    };
+    window.matchMedia ??= () =>
+      ({ matches: false, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList;
     window.history.replaceState(null, "", "/?recording=2&transcript=7#t=a-token");
     takeToken();
     fetchMock.mockReset();
@@ -193,6 +202,7 @@ describe("TranscriptPage", () => {
       if (path === "/api/transcripts/7") {
         return Response.json(doc([sentence(0, [" Hello", " there."])]));
       }
+      if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3, -5, 5]));
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
@@ -201,8 +211,13 @@ describe("TranscriptPage", () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByText(" Hello there.", { normalizer: (s) => s })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "review.m4a" })).toBeTruthy();
+    // The library, the transcript and the waveform; the recording itself is the
+    // <audio> element's own request, with the token in its query (#59).
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const sent = fetchMock.mock.calls.map(([request]) => request.headers.get("Authorization"));
-    expect(sent).toEqual(["Bearer a-token", "Bearer a-token"]);
+    expect(sent).toEqual(["Bearer a-token", "Bearer a-token", "Bearer a-token"]);
+    expect(document.querySelector("audio")?.getAttribute("src")).toBe("/api/recording/2/media?t=a-token");
+    expect(currentError()).toBeNull();
   });
 
   it("shows the error dialog when the library has no such transcript", async () => {

@@ -8,6 +8,7 @@ import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
 import { Playhead } from "./playhead";
 import { SpeedControl } from "./SpeedControl";
+import { Waveform } from "./Waveform";
 
 /**
  * The recording's address, by its library id (#59). A media element sends no
@@ -45,6 +46,19 @@ export function Player({ recording, reading, article }: Props) {
   const media = useRef<HTMLAudioElement>(null);
   const playhead = useRef<Playhead | null>(null);
   const [following, setFollowing] = useState(true);
+  // Views that move with the playhead's frame: the waveform's cursor (#61).
+  const [frames] = useState(() => new Set<(seconds: number) => void>());
+
+  /** Hear `seconds`: the one seek a word, the waveform and anything later share. */
+  const seek = (seconds: number) => {
+    const element = media.current;
+    if (element === null) return;
+    element.currentTime = seconds;
+    playhead.current?.follow();
+    element.play().catch((thrown: unknown) => showError(fromThrown(thrown)));
+  };
+  const seekRef = useRef(seek);
+  seekRef.current = seek;
 
   useEffect(() => {
     const element = media.current;
@@ -54,7 +68,15 @@ export function Player({ recording, reading, article }: Props) {
     for (const p of root.querySelectorAll<HTMLElement>("p[data-turn]")) {
       if (p.firstChild instanceof Text) texts[Number(p.dataset["turn"])] = p.firstChild;
     }
-    const head = new Playhead({ media: element, reading, texts, onFollowing: setFollowing });
+    const head = new Playhead({
+      media: element,
+      reading,
+      texts,
+      onFollowing: setFollowing,
+      onFrame: (seconds) => {
+        for (const frame of frames) frame(seconds);
+      },
+    });
     playhead.current = head;
 
     const play = () => head.start();
@@ -79,10 +101,7 @@ export function Player({ recording, reading, article }: Props) {
       if (hit === null) return;
       const word = wordAtOffset(reading, hit.turn, hit.offset);
       const at = reading.words.start[word];
-      if (at === undefined) return;
-      element.currentTime = at;
-      head.follow();
-      element.play().catch((thrown: unknown) => showError(fromThrown(thrown)));
+      if (at !== undefined) seekRef.current(at);
     };
     const scrolledByHand = () => head.unfollow();
     const key = (event: KeyboardEvent) => {
@@ -113,24 +132,32 @@ export function Player({ recording, reading, article }: Props) {
       head.dispose();
       playhead.current = null;
     };
-  }, [reading, article, recording.id]);
+  }, [reading, article, recording.id, frames]);
 
   return (
-    <div className="sticky bottom-0 mt-8 flex items-center gap-3 border-t bg-background/95 py-3 backdrop-blur">
-      <audio
-        ref={media}
-        src={mediaSrc(recording.id)}
-        controls
-        preload="metadata"
-        className="h-10 flex-1"
-        aria-label="Recording"
+    <div className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur">
+      <Waveform
+        recordingId={recording.id}
+        media={media}
+        frames={frames}
+        onSeek={(seconds) => seekRef.current(seconds)}
       />
-      <SpeedControl media={media} />
-      {!following && (
-        <Button variant="outline" size="sm" onClick={() => playhead.current?.follow()}>
-          Follow playback
-        </Button>
-      )}
+      <div className="flex items-center gap-3">
+        <audio
+          ref={media}
+          src={mediaSrc(recording.id)}
+          controls
+          preload="metadata"
+          className="h-10 flex-1"
+          aria-label="Recording"
+        />
+        <SpeedControl media={media} />
+        {!following && (
+          <Button variant="outline" size="sm" onClick={() => playhead.current?.follow()}>
+            Follow playback
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

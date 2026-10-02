@@ -59,12 +59,32 @@ export interface paths {
         /**
          * Media
          * @description The recording's file, whole or by the byte range the request asks for.
-         *
-         *     The id is taken as text and checked here, as the transcript route does, so
-         *     `..`, `-1` or anything but a plain number is the same 404 as an id the
-         *     library never had, and never a 422 echoing the input.
          */
         get: operations["media_api_recording__recording_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recording/{recording_id}/waveform": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Waveform
+         * @description The shape of the recording's sound, for the page to draw without decoding it (#61).
+         *
+         *     Pairs of signed bytes, min then max, ENVELOPE_RATE buckets a second
+         *     (dsj.media.envelope). Computed once per recording and kept on disk; every
+         *     later request reads the file.
+         */
+        get: operations["waveform_api_recording__recording_id__waveform_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -250,6 +270,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    waveform_api_recording__recording_id__waveform_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

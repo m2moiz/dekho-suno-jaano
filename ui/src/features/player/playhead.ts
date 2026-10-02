@@ -40,6 +40,12 @@ export type PlayheadOptions = {
   texts: Text[];
   /** Told when following stops (the reader scrolled away) or starts again. */
   onFollowing: (following: boolean) => void;
+  /**
+   * Told the media's time on every frame it paints, so another view of the
+   * same clock (the waveform's cursor, #61) moves in the same frame and owns
+   * no time of its own.
+   */
+  onFrame?: (seconds: number) => void;
 };
 
 export class Playhead {
@@ -47,17 +53,19 @@ export class Playhead {
   private readonly reading: Reading;
   private readonly texts: Text[];
   private readonly onFollowing: (following: boolean) => void;
+  private readonly onFrame: (seconds: number) => void;
   private readonly range: Range;
   private readonly highlight: Highlight;
   private frame = 0;
   private shown = -1;
   private following = true;
 
-  constructor({ media, reading, texts, onFollowing }: PlayheadOptions) {
+  constructor({ media, reading, texts, onFollowing, onFrame }: PlayheadOptions) {
     this.media = media;
     this.reading = reading;
     this.texts = texts;
     this.onFollowing = onFollowing;
+    this.onFrame = onFrame ?? (() => undefined);
     this.range = document.createRange();
     this.highlight = new Highlight();
     // Over the unsure-word tint (#62) where the two meet: where you are wins.
@@ -100,7 +108,9 @@ export class Playhead {
 
   /** Paint once, for a seek while paused. */
   paint(): void {
-    this.show(wordAtTime(this.reading.words, this.media.currentTime));
+    const seconds = this.media.currentTime;
+    this.show(wordAtTime(this.reading.words, seconds));
+    this.onFrame(seconds);
   }
 
   dispose(): void {
