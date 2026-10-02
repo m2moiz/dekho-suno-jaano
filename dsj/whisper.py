@@ -243,7 +243,8 @@ def _anchored(
     can also force an earlier reset, dropping the seed sooner than the token
     budget alone would. On a voice note that is invisible -- the bias it set
     still holds. On an hour it is fatal: one window returning Urdu script,
-    which a hallucination loop over silence produces on its own, becomes the
+    which a repetition loop produces on its own (#140 measured those over
+    speech-level audio, not silence), becomes the
     prompt for the next, and the run never comes back. Measured over four
     recordings on 20 Sep 2026, the share of each transcript returned in Urdu
     script despite `--roman-urdu` was 41%, 80%, 97% and 99%, worst on the
