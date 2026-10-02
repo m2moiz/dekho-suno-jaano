@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.2.0
+  version: 0.2.1
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
