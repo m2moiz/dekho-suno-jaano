@@ -1,6 +1,6 @@
 # Why the marks pass has no resume
 
-`jaano suno` checkpoints and resumes; `jaano dekho` does not, and a kill
+`dsj suno` checkpoints and resumes; `dsj dekho` does not, and a kill
 part-way through a scan throws the whole decode away. This is the record of why
 that asymmetry is deliberate — including the measurement that came out the
 opposite way from what the argument against a resume expected.
@@ -162,11 +162,12 @@ degenerate case of a cache that happens to be short.
 ## 5. What the machinery costs, counted
 
 The ASR resume is the only comparable thing in this repo, and it is not 209
-lines of `checkpoint.py`:
+lines of `checkpoint.py`. The counts are as of 2026-08-12, when this was
+written and the package still had its old name; the files have grown since:
 
 | | lines |
 |---|---|
-| `jaano/checkpoint.py` | 209 |
+| `dsj/checkpoint.py` | 209 |
 | `tests/test_checkpoint.py` | 296 |
 | `tests/test_resume_cli.py` | 198 |
 | `tests/test_resume_gate.py` | 77 |

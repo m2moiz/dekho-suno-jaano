@@ -1,6 +1,6 @@
 # Visual marks: what was measured, and what it killed
 
-`jaano/dekho.py` writes a bounded list of timestamps into the transcript at
+`dsj/dekho.py` writes a bounded list of timestamps into the transcript at
 the moments the picture changed most. This is the record of how that design was
 arrived at, including the three approaches that were built, measured, and
 thrown away. Every number here came from a command; nothing is estimated.
