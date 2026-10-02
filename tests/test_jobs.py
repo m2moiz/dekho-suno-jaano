@@ -252,6 +252,31 @@ def test_a_run_that_crashes_shows_as_failed_with_its_error(
     os.close(runlock.acquire({"pid": os.getpid()}))
 
 
+def test_a_job_shows_as_finished_only_after_it_lets_go_of_the_lock(
+    engine: Callable[..., StubEngine],
+    recording: tuple[Path, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page that sees a job finish and starts the next at once is not refused by it.
+
+    Under `just verify`'s load the worker thread published `failed` before it
+    closed the lock, and the next acquire was refused. Closing the lock slowly
+    here makes that order fail every time, not one run in many.
+    """
+    real_close = os.close
+
+    def slow_close(fd: int) -> None:
+        time.sleep(0.3)
+        real_close(fd)
+
+    monkeypatch.setattr(jobs_mod.os, "close", slow_close)
+    engine(load_raises=RuntimeError("model exploded"))
+    client = page()
+    client.post(f"/api/recordings/{recording[1]}/transcribe", json={"diarize": False})
+    assert last_job(client, finished)["state"] == "failed"
+    real_close(runlock.acquire({"pid": os.getpid()}))
+
+
 def test_labelling_that_cannot_run_is_a_note_on_a_finished_run(
     engine: Callable[..., StubEngine],
     recording: tuple[Path, int],

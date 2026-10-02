@@ -12,7 +12,7 @@ const PHASES: Record<Job["state"], string> = {
   running: "Transcribing",
   retrying: "Reading unclear stretches again",
   diarizing: "Labelling speakers",
-  saving: "Adding it to the library",
+  saving: "Finishing",
   done: "Transcribed",
   failed: "Failed",
 };

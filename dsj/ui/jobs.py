@@ -132,14 +132,17 @@ class Job:
 
         Two states are the page's own, around the ones the run writes:
         `starting` before the first frame, while the model loads, and `saving`
-        between the run's `done` and its library row being written.
+        between the run's last frame (`done`, `failed` or `interrupted`) and the
+        job's own outcome. A job is finished only by its outcome, which is set
+        after the run lock is let go: a page that starts the next job the moment
+        this one reads finished must not be refused by it.
         """
         frame: dict[str, Any] = {}
         # Absent until the run's first frame. Written by rename, never torn.
         with contextlib.suppress(FileNotFoundError):
             frame = json.loads(self.status_path.read_text())
         state = self.outcome or frame.get("state", "starting")
-        if state == "done" and self.outcome is None:
+        if self.outcome is None and state in ("done", "failed", "interrupted"):
             state = "saving"
         return {
             "id": self.id,
@@ -294,21 +297,26 @@ class Jobs:
         log = logging.getLogger("dsj.suno")
         log.addHandler(notes)
         log.setLevel(logging.INFO)
+        transcript_id: int | None = None
+        error: str | None = None
         try:
             with self._hold():
                 # Looked up at call time, so a test can stand in for it.
                 suno.transcribe(**arguments)
                 with Library.open() as library:
                     row = library.record_run(job.out, engine=job.engine, language=job.language)
-            job.transcript_id = row.id
-            job.outcome = "done"
+            transcript_id = row.id
         except Exception as exc:
             # The run has already written `failed` to its status file (#103);
             # this also covers a failure after it, writing the library row.
-            job.error = f"{type(exc).__name__}: {exc}"
-            job.outcome = "failed"
+            error = f"{type(exc).__name__}: {exc}"
             # On the terminal, as an exception in a route reaches it (#82).
             traceback.print_exception(exc, file=sys.stderr)
         finally:
             log.removeHandler(notes)
             os.close(held)
+        # Published only after the lock is let go: a page that sees this job
+        # finished and starts the next one at once must not be refused by it.
+        job.transcript_id = transcript_id
+        job.error = error
+        job.outcome = "done" if error is None else "failed"
