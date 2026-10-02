@@ -361,6 +361,10 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
 # - Edges: whisper starts a real word up to 0.52 s before the speech it belongs
 #   to (17 words at the fixture's gap ends across 10 transcripts, 11 of them the
 #   next clip's first word), so a word that close to an edge stays.
+# - Every level above is the source media decoded to float, 16 kHz mono, and
+#   transcribe() reads it the same way (#193). The owner's files are stereo,
+#   and the 16-bit wav dsj extracts from them reads 3.01 dB quieter, enough to
+#   find silences on 101117 that are not there.
 LOUDNESS_FRAME_S = 0.1
 SILENCE_DB = -55.0
 SILENCE_MIN_S = 5.0
@@ -934,11 +938,17 @@ def transcribe(
         else:
             audio = media
 
-        # Before the decode, not after it: one cheap pass (measured 0.13 s for
-        # the fixture's 14 minutes of wav, 1.2 s for 28 minutes of m4a), and
-        # audio ffmpeg cannot read fails here rather than after an hour of
-        # whisper.
-        stretches = silences(media_mod.loudness(audio, LOUDNESS_FRAME_S))
+        # Read from `media`, never from the extracted wav: SILENCE_DB was placed
+        # on the float decode of the source, and ffmpeg mixes stereo to mono at
+        # 0.5 + 0.5 for the wav's 16 bits but 0.707 + 0.707 for float, so every
+        # frame of a stereo recording reads 3.01 dB quieter in the wav (#193).
+        # On the owner's stereo files that found two silences on 101117 that
+        # #181 measured are not there. A mono source decodes the same either
+        # way. Before the decode, not after it: one cheap pass (measured 0.13 s
+        # for the fixture's 14 minutes of wav, 0.6 s and 1.6 s for 13 and 28
+        # minutes of m4a, 0.5 s for a 1.5 GB, 10 minute .mov), and audio ffmpeg
+        # cannot read fails here rather than after an hour of whisper.
+        stretches = silences(media_mod.loudness(media, LOUDNESS_FRAME_S))
 
         ckpt_path: Path | None = None
         resumed_from_s = 0.0

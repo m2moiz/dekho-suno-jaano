@@ -10,6 +10,7 @@ real speech with a measured margin, or shown not to exist.
     uv run python scratch/speech_loudness.py apply
     uv run python scratch/speech_loudness.py vad-run   # #189: senko's VAD alone, cached
     uv run python scratch/speech_loudness.py vad       # #189: VAD against the loudness rule
+    uv run python scratch/speech_loudness.py scale     # #193: dsj's own audio path against `apply`
 
 `measure` is the measurement the threshold was chosen on. `apply` runs the
 rule dsj now ships (dsj.suno's silences and _without_silence, on
@@ -590,9 +591,89 @@ def vad_owner(root: Path) -> None:
     print("\n".join(detail))
 
 
+# ---------------------------------------------------------------------------
+# #193: does dsj read loudness on the scale #181 measured?
+#
+# `measure` and `apply` decode the original media to float. A real run used to
+# read the 16-bit wav dsj extracts, and ffmpeg mixes stereo to mono at
+# 0.5 L + 0.5 R for integer output but 0.707 L + 0.707 R for float, so every
+# frame of a stereo file read 3.01 dB quieter there. `scale` puts each
+# transcript through dsj.suno.transcribe itself, with whisper's decode replaced
+# by the transcript on disk and the loop retry off, so no model runs: what it
+# reports is what the product's own audio path finds, next to `apply`'s view.
+
+
+def replay(media: Path, payload: dict[str, Any], out: Path) -> tuple[list[Span], dict[str, Any]]:
+    """dsj.suno.transcribe on `media` with `payload`'s sentences as the decode; its silences and payload."""
+    import dsj.suno as suno
+    import dsj.whisper as whisper
+
+    sentences = [
+        {k: v for k, v in s.items() if k != "speaker"}
+        | {"tokens": [{k: v for k, v in t.items() if k != "speaker"} for t in s.get("tokens") or []]}
+        for s in payload["sentences"]
+    ]
+    decoded = Transcription(text="".join(str(s.get("text") or "") for s in sentences).strip(),
+                            sentences=sentences)
+    seen: list[list[Span]] = []
+
+    def recording(frame_db: np.ndarray, frame_s: float = LOUDNESS_FRAME_S) -> list[Span]:
+        seen.append(silences(frame_db, frame_s))
+        return seen[-1]
+
+    saved = (whisper.transcribe_whisper, suno.silences, suno.RETRY_LOOPS)
+    whisper.transcribe_whisper = lambda *_, **__: decoded  # type: ignore[assignment]
+    suno.silences = recording  # type: ignore[assignment]
+    suno.RETRY_LOOPS = False
+    try:
+        result = suno.transcribe(media, out, engine="whisper", diarize=False, resume=False)
+    finally:
+        whisper.transcribe_whisper, suno.silences, suno.RETRY_LOOPS = saved
+    assert len(seen) == 1, f"transcribe measured loudness {len(seen)} times"
+    return seen[0], dict(result)
+
+
+def scale(root: Path) -> None:
+    def spans(stretches: list[Span]) -> str:
+        if len(stretches) > 3:
+            return f"{len(stretches)}, {sum(b - a for a, b in stretches):.1f} s, {stretches[0][0]:.1f} to {stretches[-1][1]:.1f}"
+        return ", ".join(f"{a:.1f} to {b:.1f}" for a, b in stretches) or "none"
+
+    def no_speech(result: dict[str, Any]) -> str:
+        taken = [u for u in result["unclear"] if u["reason"] == NO_SPEECH_REASON]
+        return f"{sum(int(u['words']) for u in taken)} in {len(taken)}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out.json"
+        print("| fixture transcript | `apply` silences | dsj silences | no speech: words in stretches "
+              "| words in 10 · 30 · 60 s gaps, on disk | after dsj |")
+        print("|---|---|---|---|---|---|")
+        media = FIXTURE / "podcast.wav"
+        ours = silences(loudness(media, LOUDNESS_FRAME_S))
+        for path in (RUNS / "m33-turbo-ru" / "podcast.json", FIXTURE / "roman.json"):
+            found, result = replay(media, json.loads(path.read_text()), out)
+            before, after = measure_fixture(path, None).gap_words, measure_fixture(out, None).gap_words
+            print(f"| {path.parent.name}/{path.name} | {spans(ours)} | {spans(found)} | {no_speech(result)} "
+                  f"| {' · '.join(map(str, before))} | {' · '.join(map(str, after))} |")
+
+        print()
+        print("| owner's transcript | `apply` silences | dsj silences | no speech: words in stretches | where |")
+        print("|---|---|---|---|---|")
+        for name in NAMES:
+            media = audio_of(root, name)
+            ours = silences(loudness(media, LOUDNESS_FRAME_S))
+            for path in [*sorted(RUNS.glob(f"*/{name}.json")), root / "transcripts" / f"{name}.json"]:
+                found, result = replay(media, json.loads(path.read_text()), out)
+                taken = [u for u in result["unclear"] if u["reason"] == NO_SPEECH_REASON]
+                where = f"{clock(taken[0]['start'])} to {clock(taken[-1]['end'])}" if taken else "-"
+                same = "same" if found == ours else spans(found)
+                print(f"| {name.removeprefix('recording-')} {path.parent.name} | {spans(ours)} | {same} "
+                      f"| {no_speech(result)} | {where} |")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
-    parser.add_argument("command", choices=("measure", "apply", "vad-run", "vad"))
+    parser.add_argument("command", choices=("measure", "apply", "vad-run", "vad", "scale"))
     args = parser.parse_args(argv)
     folder = os.environ.get("DSJ_REAL_AUDIO")
     if not folder:
@@ -604,6 +685,8 @@ def main(argv: list[str]) -> int:
         apply(root)
     elif args.command == "vad-run":
         vad_run(root)
+    elif args.command == "scale":
+        scale(root)
     else:
         vad_fixture()
         vad_owner(root)

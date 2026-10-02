@@ -264,6 +264,12 @@ def loudness(media: Path, frame_s: float, sample_rate: int = 16_000) -> NDArray[
     costs about 36,000 numbers in memory and never the samples themselves.
     Digital silence reads as -180 dB rather than minus infinity.
 
+    The mix is ffmpeg's for float output, which keeps 0.707 of each stereo
+    channel. Its mix for 16-bit output, which extract_audio writes, scales to
+    0.5 so nothing clips, and reads 3.01 dB quieter (#193). So pass the source,
+    not a wav extract_audio made from it: dsj.suno's silence threshold was
+    measured on this scale.
+
     Raises:
         MediaError: if ffmpeg exits non-zero.
     """

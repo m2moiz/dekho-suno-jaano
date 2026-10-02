@@ -74,7 +74,8 @@ engine; on a parakeet transcript of a 17-minute English call it matched nothing.
 
 **No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
 than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
-public fixture. Every word that starts more than 1 s inside the stretch is taken out, and
+public fixture. The level is read from the input file decoded to mono float, where ffmpeg
+mixes a stereo recording at 0.707 of each channel, the scale the threshold was measured on. Every word that starts more than 1 s inside the stretch is taken out, and
 the stretch is recorded with how many there were. A word within 1 s of its edge stays,
 because whisper starts a real word up to half a second before its speech. Unlike a loop,
 there is nothing to listen to: the audio is silent. The check runs before the loop check,

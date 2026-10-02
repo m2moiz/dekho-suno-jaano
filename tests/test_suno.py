@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import sys
 import wave
 from pathlib import Path
@@ -61,6 +62,8 @@ RATE = 16_000
 # The real one, taken before already_extracted_media swaps in its stub, for the
 # tests that run the silence rule on a real wav (#181).
 REAL_LOUDNESS = media_mod.loudness
+REAL_PROBE = media_mod.probe
+REAL_NEEDS_CONVERSION = media_mod.needs_conversion
 
 
 def _tokens() -> list[FakeToken]:
@@ -1775,6 +1778,97 @@ def test_without_silence_nothing_is_taken_out(
     assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON, LOOP_REASON]
     assert len(payload["sentences"]) == 3
     assert payload["sentences"][1]["text"] == " Bye now. Thanks for watching."
+
+
+def _tones(path: Path, rate: int, channels: int, pieces: list[tuple[float, float]]) -> Path:
+    """A 16-bit wav of 220 Hz tones, (seconds, RMS dBFS) each, the same in every channel."""
+    parts: list[NDArray[np.float64]] = []
+    for seconds, rms_db in pieces:
+        wave_ = np.sin(2 * np.pi * 220 * np.arange(round(seconds * rate)) / rate)
+        parts.append(wave_ / np.sqrt(np.mean(wave_**2)) * 10 ** (rms_db / 20))
+    mono = np.round(np.concatenate(parts) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.repeat(mono[:, None], channels, axis=1).tobytes())
+    return path
+
+
+# Loud, 8 s at -56.5 dB, loud, 8 s at -63 dB, loud. As a mono file both quiet
+# stretches are under SILENCE_DB. As stereo, with each channel at those levels,
+# the float mix SILENCE_DB was measured on reads them 3.01 dB louder: -53.5 dB
+# is not silence, -60 dB still is (#193).
+_SCALE_PIECES: list[tuple[float, float]] = [(3, -20), (8, -56.5), (3, -20), (8, -63), (3, -20)]
+
+
+def _silences_transcribe_finds(
+    media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[float, float]]:
+    """The silences transcribe() itself reads from `media`, through the real ffmpeg path."""
+    monkeypatch.setattr(media_mod, "probe", REAL_PROBE)
+    monkeypatch.setattr(media_mod, "needs_conversion", REAL_NEEDS_CONVERSION)
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+
+    def empty(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text="", sentences=[])
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", empty)
+    found: list[list[tuple[float, float]]] = []
+
+    def recording(frame_db: NDArray[np.float64], frame_s: float = 0.1) -> list[tuple[float, float]]:
+        found.append(silences(frame_db, frame_s))
+        return found[-1]
+
+    monkeypatch.setattr("dsj.suno.silences", recording)
+    transcribe(media, tmp_path / f"{media.name}.json", diarize=False, resume=False)
+    [stretches] = found
+    return stretches
+
+
+@pytest.mark.parametrize("container", ["wav 16 kHz", "wav 44.1 kHz", "float wav", "m4a", "mp3"])
+def test_a_stereo_recording_reads_on_the_scale_the_threshold_was_measured_on(
+    container: str,
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same stereo signal gives the same silences whatever file it arrives in (#193).
+
+    Every one of these is converted before decoding, and the silences used to
+    be read from that 16-bit wav, where ffmpeg mixes stereo at 0.5 + 0.5 and
+    every frame reads 3.01 dB quieter than the float decode #181 measured
+    SILENCE_DB on. -56.5 dB a channel then passed for silence.
+    """
+    fake_parakeet(tokens=[])
+    rate = 16_000 if container == "wav 16 kHz" else 44_100
+    media = _tones(tmp_path / "stereo.wav", rate, 2, _SCALE_PIECES)
+    if container in ("float wav", "m4a", "mp3"):
+        encoded = tmp_path / {"float wav": "f.wav", "m4a": "a.m4a", "mp3": "a.mp3"}[container]
+        codec = {"float wav": "pcm_f32le", "m4a": "aac", "mp3": "libmp3lame"}[container]
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(media), "-c:a", codec, str(encoded)],
+            check=True,
+        )
+        media = encoded
+    assert REAL_PROBE(media).channels == 2
+
+    assert _silences_transcribe_finds(media, tmp_path, monkeypatch) == [(14.0, 22.0)]
+
+
+@pytest.mark.parametrize("rate", [16_000, 44_100])
+def test_a_mono_recording_reads_at_the_level_it_was_written(
+    rate: int,
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mono has no mix to differ: both quiet stretches are silence, converted or not."""
+    fake_parakeet(tokens=[])
+    media = _tones(tmp_path / "mono.wav", rate, 1, _SCALE_PIECES)
+    assert REAL_NEEDS_CONVERSION(REAL_PROBE(media), 16_000) is (rate != 16_000)
+
+    assert _silences_transcribe_finds(media, tmp_path, monkeypatch) == [(3.0, 11.0), (14.0, 22.0)]
 
 
 def test_parakeet_never_decodes_a_loop_again(
