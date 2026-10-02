@@ -27,8 +27,13 @@ typecheck:
 # No formatter, deliberately. This codebase has a hand-set style -- aligned
 # argv lists, comment-dense blocks -- and running one is a whole-tree diff
 # nobody asked for.
-check: typecheck api-fresh
+#
+# The frontend is held by the same command (#157): tsc over ui/, the API types
+# against the Python models (#155), and vitest. Each fails, never skips, when
+# ui/node_modules is missing. Browsers are not here; they are in `verify`.
+check: typecheck ui-typecheck api-fresh
     uv run ruff check .
+    {{ quote(just_executable()) }} ui-test
     uv run pytest
 
 # Everything, with coverage. The session-close gate, and the named observer
@@ -42,9 +47,15 @@ check: typecheck api-fresh
 # was collected" into the middle of a 22-minute run, and exited 0. Every
 # coverage number quoted after the rename measured a package that did not
 # exist. A floor turns that silence into a failure -- no data reads as 0%.
-verify: typecheck urdu-fixture
+#
+# Then everything `check` runs on the frontend, and the browser tests in real
+# chromium and Playwright's webkit (ui/playwright.config.ts says what they do
+# not cover).
+verify: typecheck ui-typecheck api-fresh urdu-fixture
     uv run ruff check .
+    {{ quote(just_executable()) }} ui-test
     uv run pytest -m "slow or not slow" --cov=dsj --cov-report=term-missing:skip-covered --cov-fail-under=90
+    {{ quote(just_executable()) }} ui-e2e
 
 # The public Urdu-English test recording (#148): 12.5 minutes of one
 # code-switching speaker from UrduSpeech (CC-BY-4.0), stitched, with three quiet
@@ -125,6 +136,23 @@ _api-types out: _ui-modules
     } > "$types"
     chmod 644 "$types"
     mv "$types" {{ quote(out) }}
+
+# The frontend's types: ui/src, its tests and its configs, under the pinned
+# TypeScript 6.0.3 (#115). A type error anywhere in ui/ fails `check`.
+ui-typecheck: _ui-modules
+    cd ui && ./node_modules/.bin/tsc --noEmit
+
+# Vitest with React Testing Library, ui/tests/unit only (ui/vitest.config.ts).
+# Vitest exits non-zero when it finds no test files, so emptying the directory
+# fails too.
+ui-test: _ui-modules
+    cd ui && ./node_modules/.bin/vitest run
+
+# Playwright on chromium and webkit against the real `dsj ui --print-url`,
+# started by ui/tests/e2e/global-setup.ts. In `verify`, not `check`. A fresh
+# machine needs the browsers once: (cd ui && npx playwright install chromium webkit).
+ui-e2e: _ui-modules
+    cd ui && ./node_modules/.bin/playwright test
 
 # Every frontend check FAILS without ui/node_modules rather than skipping. A
 # check that switches itself off reports green in exactly the broken state:
