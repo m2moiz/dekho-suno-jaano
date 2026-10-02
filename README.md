@@ -460,6 +460,21 @@ word timestamp tags becomes word tokens with starts but no ends, and no
 imported token has a confidence. Speakers come back from VTT voice tags and
 from the `SPEAKER_01: ` prefix `likho` writes into SRT.
 
+### ui: the app
+
+`dsj ui` opens the app in your browser: a page served from this machine, on
+`127.0.0.1` and a port the kernel picks. Today it only says the library is
+empty; listing, transcribing and reading recordings arrive with the rest of
+v0.3.0 ([#127](https://github.com/m2moiz/dekho-suno-jaano/issues/127)).
+
+```bash
+dsj ui                # opens the browser
+dsj ui --print-url    # prints the URL and serves, without opening one
+```
+
+It needs the `ui` extra, which `dsj[mac]` carries. The page is built ahead of
+time and ships inside the package, so an install needs no Node.
+
 ## Output
 
 ```jsonc
@@ -551,6 +566,8 @@ just typecheck   # pyright strict, package and tests
 just check       # THE gate: types, lint, fast tests. What CI runs.
 just verify      # everything incl. the end-to-end gates, with coverage
 just mutate      # mutation testing over the pure modules
+just ui-build    # rebuild the page dsj ui serves, from ui/ into dsj/ui/static/ (needs Node)
+just ui-dev      # the API on :8721 and Vite on :5173, both reloading on save
 ```
 
 `just verify` is the session-close gate and takes ~20 minutes: it runs real ASR
@@ -783,7 +800,7 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho
+  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho | ui
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
   media.py         ffmpeg: audio out, tile grids out, dikhao frames out
@@ -799,6 +816,8 @@ dsj/            the package
   sherpa.py        the sherpa engine: parakeet's weights on ONNX, for the phone
   diarize.py       the fail-soft senko boundary
   atomic.py        write-or-do-not-write, for files a reader may be watching
+  ui/              dsj ui: the local server, and static/, the built page it serves
+ui/                the page's source: Vite, React, TypeScript, Tailwind, shadcn
 tests/             fast unit tests, plus the two slow end-to-end gates
 scratch/           working probes; the data beside them is gitignored
 docs/              the reasoning that did not fit here

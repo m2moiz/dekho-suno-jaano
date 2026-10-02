@@ -239,7 +239,16 @@ everything it shows comes from the files the other verbs write, so query those i
 
 ```bash
 dsj ui
+dsj ui --print-url
 ```
+
+| Flag | |
+|---|---|
+| `--print-url` | print the URL and serve, without opening a browser |
+
+It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
+on stdout. It serves until Ctrl-C or `kill`, so start it with `&` if you need the shell
+back, and stop it by that pid. The library it shows is empty for now.
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.

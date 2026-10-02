@@ -67,3 +67,22 @@ mutate:
     rm -rf mutants
     uv run mutmut run
     uv run mutmut results
+
+# The page `dsj ui` serves, built from ui/ into dsj/ui/static/. The output is
+# committed, so `uv tool install` ships it and needs no Node (#57 section 8).
+# `npm ci`, not `npm install`: the lockfile decides what is built, and a build
+# that quietly re-resolved a dependency would commit code nobody chose.
+# Whether the committed copy is stale is #114's check, not this recipe's.
+ui-build:
+    cd ui && npm ci && npm run build
+
+# The API with --reload on 127.0.0.1:8721, and Vite's dev server on 5173
+# passing /api and /media through to it (ui/vite.config.ts). Open the Vite URL.
+# Ctrl-C stops both: the trap takes the API down with the page.
+ui-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    uv run uvicorn dsj.ui.server:dev_app --factory --reload --reload-dir dsj --host 127.0.0.1 --port 8721 &
+    api=$!
+    trap 'kill "$api" 2>/dev/null' EXIT
+    cd ui && npm run dev

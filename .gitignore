@@ -19,6 +19,8 @@ scratch/*/*
 __pycache__/
 # Build output, produced by `uv build`. Source is tracked; artifacts are not.
 dist/
+# The frontend's installed packages; ui/package-lock.json is what is tracked.
+ui/node_modules/
 *.wav
 *.mov
 

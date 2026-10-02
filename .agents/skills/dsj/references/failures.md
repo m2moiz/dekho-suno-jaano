@@ -96,6 +96,9 @@ installed. The message names the import that failed and the remedy:
 dsj ui needs the `ui` extra, which is not installed here (No module named 'fastapi'). Install it with `uv tool install "dsj[mac,ui] @ git+https://github.com/m2moiz/dekho-suno-jaano"`, or from a clone add `--extra ui` to the `uv sync` line you already use (`uv sync` uninstalls every extra it is not given).
 ```
 
+From a clone, `UIUnavailable` can also say `the built page is missing`: `dsj/ui/static/`
+has no `index.html`. `just ui-build` writes it, and needs Node; an install never does.
+
 ## Media and ffmpeg failures
 
 | Class | Message and remedy |

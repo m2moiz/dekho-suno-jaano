@@ -101,6 +101,9 @@ ui = [
 
 [dependency-groups]
 dev = [
+    # starlette's TestClient drives the dsj ui app through it. httpx2, not
+    # httpx: starlette 1.7 warns on httpx, and types TestClient against httpx2.
+    "httpx2>=2.13.1",
     "mutmut>=3.7.0",
     "pyright>=1.1.411",
     "pytest>=9.1.1",

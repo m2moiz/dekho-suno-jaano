@@ -481,7 +481,12 @@ def parho(
 
 
 @app.command("ui")
-def ui() -> int:
+def ui(
+    print_url: Annotated[
+        bool,
+        typer.Option("--print-url", help="print the URL and serve, without opening a browser"),
+    ] = False,
+) -> int:
     """Open the app: every recording dsj knows, in a browser window."""
     from dsj.ui import require_extra
 
@@ -489,7 +494,10 @@ def ui() -> int:
     # `dsj --help` and every `dsj suno` its import time otherwise, and most
     # installs never open the app.
     require_extra()
-    raise NotImplementedError("dsj ui has no server to start yet; that is #154")
+    from dsj.ui.server import serve
+
+    serve(open_browser=not print_url)
+    return 0
 
 
 def run(argv: list[str]) -> int:

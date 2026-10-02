@@ -92,3 +92,7 @@ whitelist.generate  # tests/conftest.py
 # comparison of one. Nothing reads it as an attribute, so a branch that changes
 # dsj/checkpoint.py sees it as unused.
 whitelist.schema  # dsj/checkpoint.py -- Fingerprint
+
+# uvicorn calls it by name, `dsj.ui.server:dev_app --factory`, from the
+# justfile's ui-dev recipe, which vulture does not read.
+whitelist.dev_app  # dsj/ui/server.py
