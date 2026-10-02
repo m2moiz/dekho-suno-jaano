@@ -40,7 +40,28 @@ export function durationLabel(seconds: number | null): string | null {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** "356 MB" in the Mac's own units, as Finder writes them (1 MB is 1,000,000 bytes). */
+export function sizeLabel(bytes: number | null): string | null {
+  if (bytes === null) return null;
+  if (bytes < 1000) return `${bytes} bytes`;
+  const [unit, scale] = bytes < 1e6 ? ["KB", 1e3] : bytes < 1e9 ? ["MB", 1e6] : ["GB", 1e9];
+  const value = bytes / scale;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${unit}`;
+}
+
 /** The file's own name: the last part of the path it was last seen at. */
 export function fileName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+// The picture codecs both browser engines drew, measured on 2026-10-02 in
+// Playwright's Chromium and WebKit on four-second files ffmpeg made (#110):
+// h264 and vp9. hevc and prores drew only in WebKit, and av1 only in Chromium;
+// WebKit refused an av1 file outright, sound and all. Not real Safari (#57 F6).
+const DRAWN_EVERYWHERE = new Set(["h264", "vp9"]);
+
+/** What to say about a recording whose picture some browsers cannot draw, or null. */
+export function pictureNote(videoCodec: string | null): string | null {
+  if (videoCodec === null || DRAWN_EVERYWHERE.has(videoCodec)) return null;
+  return `Its picture (${videoCodec}) does not show in every browser. Its sound always plays.`;
 }

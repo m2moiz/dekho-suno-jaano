@@ -22,6 +22,7 @@ from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe, status_of
 from dsj.ui.jobs import NotStarted
+from dsj.ui.pick import NoFilePicker, PickerBusy
 from dsj.ui.server import create_app
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
@@ -80,6 +81,7 @@ def build(cls: type[BaseException]) -> BaseException:
         (DiarizationUnavailable, 503),
         (FFmpegNotFound, 503),
         (UIUnavailable, 503),
+        (NoFilePicker, 503),
         (NoAudioStream, 422),
         (NoVideoStream, 422),
         (MarkError, 422),
@@ -87,6 +89,7 @@ def build(cls: type[BaseException]) -> BaseException:
         (NotTheSameRecording, 422),
         (NotStarted, 422),
         (AlreadyRunning, 409),
+        (PickerBusy, 409),
         (MediaError, 500),
     ],
 )
@@ -109,7 +112,7 @@ def test_the_table_above_is_the_whole_table() -> None:
     tested = {
         EngineUnavailable, WhisperUnavailable, DiarizationUnavailable, FFmpegNotFound,
         UIUnavailable, NoAudioStream, NoVideoStream, MarkError, NotATranscript,
-        NotTheSameRecording, NotStarted, AlreadyRunning, MediaError,
+        NotTheSameRecording, NotStarted, AlreadyRunning, MediaError, NoFilePicker, PickerBusy,
     }
     assert set(STATUS) == tested
 

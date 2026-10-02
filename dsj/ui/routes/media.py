@@ -17,10 +17,11 @@ before they do.
 
 from __future__ import annotations
 
-__all__ = ["MEDIA_TYPES", "router", "waveform_cache"]
+__all__ = ["MEDIA_TYPES", "router", "sound_cache", "waveform_cache"]
 
 import mimetypes
 import os
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -71,15 +72,52 @@ def _found(recording_id: str) -> Recording:
     return found
 
 
+def sound_cache(content_id: str) -> Path:
+    """Where a recording's sound copy is kept: beside the library, by content id (#110).
+
+    Keyed by contents for the waveform's reasons (waveform_cache): a moved or
+    renamed recording finds its copy, and another recording at the same path
+    never does.
+    """
+    return library_path().parent / "sound" / f"{content_id}.m4a"
+
+
+# One copy made at a time. A media element asks for the start, then for a
+# range, then again, and each would otherwise start its own ffmpeg on an
+# hour-long file.
+_copying = threading.Lock()
+
+
+def _sound_copy(found: Recording) -> Path:
+    """The recording's sound as AAC in an .m4a, made on the first request and kept."""
+    # _found refuses a recording with no size, and the library stores a size
+    # exactly when it stores a content id (its CHECK on the recordings table).
+    assert found.content_id is not None
+    cache = sound_cache(found.content_id)
+    with _copying:
+        if not cache.is_file():
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            media_mod.sound_copy(found.path, cache)
+    return cache
+
+
 @router.get(
     "/recording/{recording_id}/media",
     response_class=FileResponse,
     responses={200: {"content": {"audio/*": {}, "video/*": {}}}, 206: {"description": "a range"}},
 )
-def media(recording_id: str) -> FileResponse:
-    """The recording's file, whole or by the byte range the request asks for."""
-    path = _found(recording_id).path
-    return FileResponse(path, media_type=_media_type(path))
+def media(recording_id: str, sound: bool = False) -> FileResponse:
+    """The recording's file, whole or by the byte range the request asks for.
+
+    With `sound=true`, a copy of its sound in a form every browser plays, for
+    a file the browser refused (#110): AV1 video in WebKit, or a container no
+    browser opens. Made once, on the first such request, and kept beside the
+    library; the recording itself is never changed.
+    """
+    found = _found(recording_id)
+    if sound:
+        return FileResponse(_sound_copy(found), media_type="audio/mp4")
+    return FileResponse(found.path, media_type=_media_type(found.path))
 
 
 # HEAD too, which is how a player learns the size and that ranges are accepted

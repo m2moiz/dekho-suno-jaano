@@ -25,6 +25,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recordings/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Recording
+         * @description Ask for a recording in the Mac's file dialog and add it to the library, copying nothing.
+         *
+         *     The library keeps where the file is and reads it there (#110). The same
+         *     contents picked again, from anywhere, are the row the library already
+         *     has. A file ffprobe cannot read is added all the same, with what ffprobe
+         *     said, so the page can show it. None when the dialog was cancelled.
+         */
+        post: operations["import_recording_api_recordings_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recordings/{recording_id}/relink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Relink
+         * @description Ask where a moved recording is now, and point its row there if the contents match.
+         *
+         *     Every transcript stays on the row, so it opens and plays again (#105's
+         *     relink). A file with other contents is refused and nothing changes. None
+         *     when the dialog was cancelled.
+         */
+        post: operations["relink_api_recordings__recording_id__relink_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/transcripts/{transcript_id}": {
         parameters: {
             query?: never;
@@ -59,6 +108,11 @@ export interface paths {
         /**
          * Media
          * @description The recording's file, whole or by the byte range the request asks for.
+         *
+         *     With `sound=true`, a copy of its sound in a form every browser plays, for
+         *     a file the browser refused (#110): AV1 video in WebKit, or a container no
+         *     browser opens. Made once, on the first such request, and kept beside the
+         *     library; the recording itself is never changed.
          */
         get: operations["media_api_recording__recording_id__media_get"];
         put?: never;
@@ -266,6 +320,8 @@ export interface components {
             first_seen: string;
             /** Missing */
             missing: boolean;
+            /** Unreadable */
+            unreadable: string | null;
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
         };
@@ -367,6 +423,57 @@ export interface operations {
             };
         };
     };
+    import_recording_api_recordings_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recording"] | null;
+                };
+            };
+        };
+    };
+    relink_api_recordings__recording_id__relink_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recording"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     transcript_api_transcripts__transcript_id__get: {
         parameters: {
             query?: never;
@@ -400,7 +507,9 @@ export interface operations {
     };
     media_api_recording__recording_id__media_get: {
         parameters: {
-            query?: never;
+            query?: {
+                sound?: boolean;
+            };
             header?: never;
             path: {
                 recording_id: string;

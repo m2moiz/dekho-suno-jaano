@@ -26,7 +26,7 @@ export function TranscribeControl({ recording }: { recording: RecordingRow }) {
           <Button
             variant="outline"
             size="sm"
-            disabled={recording.missing}
+            disabled={recording.missing || recording.unreadable !== null}
             onClick={() => setOpen(true)}
           >
             Transcribe

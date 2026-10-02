@@ -17,9 +17,14 @@ import { Waveform } from "./Waveform";
  * headers, so the token rides in the query, which the server accepts on this
  * one route only.
  */
-export function mediaSrc(recordingId: number): string {
-  return `/api/recording/${recordingId}/media?t=${encodeURIComponent(sessionToken() ?? "")}`;
+export function mediaSrc(recordingId: number, sound = false): string {
+  const token = `t=${encodeURIComponent(sessionToken() ?? "")}`;
+  return `/api/recording/${recordingId}/media?${token}${sound ? "&sound=true" : ""}`;
 }
+
+// MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED: the browser will not open the file at
+// all, as WebKit refused an AV1 one (#110). Not a decode error part-way in.
+const NOT_SUPPORTED = 4;
 
 /**
  * Play, and put any refusal in front of the reader, except the one that is no
@@ -64,7 +69,10 @@ type Props = {
  */
 export function Player({ recording, reading, article }: Props) {
   const media = useRef<HTMLMediaElement>(null);
-  const hasVideo = recording.video_codec !== null;
+  // A file this browser will not open plays from a copy of its sound instead,
+  // which the server makes once and keeps (#110).
+  const [soundOnly, setSoundOnly] = useState(false);
+  const hasVideo = recording.video_codec !== null && !soundOnly;
   const [videoShown, setVideoShown] = useState(() => readVideoShown());
   const [playing, setPlaying] = useState(false);
   const [noPicture, setNoPicture] = useState(false);
@@ -122,6 +130,10 @@ export function Player({ recording, reading, article }: Props) {
     };
     const failed = () => {
       const code = element.error?.code ?? 0;
+      if (code === NOT_SUPPORTED && !soundOnly) {
+        setSoundOnly(true);
+        return;
+      }
       const detail = element.error?.message ? ` ${element.error.message}` : "";
       showError({
         error: "MediaError",
@@ -170,7 +182,7 @@ export function Player({ recording, reading, article }: Props) {
       head.dispose();
       playhead.current = null;
     };
-  }, [reading, article, recording.id, frames]);
+  }, [reading, article, recording.id, frames, soundOnly]);
 
   // The time, written by the playhead's own frame, for when the picture and
   // its controls are folded away.
@@ -190,7 +202,7 @@ export function Player({ recording, reading, article }: Props) {
   const attach = (element: HTMLMediaElement | null) => {
     media.current = element;
   };
-  const src = mediaSrc(recording.id);
+  const src = mediaSrc(recording.id, soundOnly);
 
   return (
     <div className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur">
@@ -213,6 +225,11 @@ export function Player({ recording, reading, article }: Props) {
             </p>
           )}
         </div>
+      )}
+      {soundOnly && (
+        <p className="text-sm text-muted-foreground">
+          This browser cannot open this recording's file, so a copy of its sound is playing.
+        </p>
       )}
       <Waveform
         recordingId={recording.id}

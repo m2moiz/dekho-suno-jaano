@@ -23,6 +23,7 @@ const RECORDING: RecordingRow = {
   content_id: "c4",
   audio_codec: "aac",
   missing: false,
+  unreadable: null,
   duration_s: 315,
   video_codec: null,
   first_seen: "2026-10-02T08:30:00+00:00",

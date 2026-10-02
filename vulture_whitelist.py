@@ -104,6 +104,7 @@ whitelist.should_exit  # dsj/ui/server.py -- _watch
 # A FastAPI route: the @router.get decorator registers it, and FastAPI calls it
 # for each request. Its other routes' names happen to be used elsewhere too.
 whitelist.waveform  # dsj/ui/routes/media.py
+whitelist.import_recording  # dsj/ui/routes/recording.py, the same: @router.post registers it
 # Read by reflection: the engines route turns each EngineChoice into the
 # Engine model through dataclasses.asdict, and pydantic fills Engine's
 # fields from it; FastAPI then serializes them. Nothing reads either as an

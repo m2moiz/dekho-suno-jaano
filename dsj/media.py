@@ -28,10 +28,12 @@ __all__ = [
     "loudness",
     "needs_conversion",
     "probe",
+    "sound_copy",
     "video_codec",
 ]
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -441,6 +443,46 @@ def video_codec(media: Path) -> str | None:
     # A stream ffprobe cannot name is still a picture: has_video() said yes to
     # it before this function existed, and must not start saying no.
     return str(streams[0].get("codec_name") or "unknown")
+
+
+def sound_copy(media: Path, dest: Path) -> Path:
+    """Write `media`'s first audio stream to `dest` as 96 kbps AAC in an .m4a.
+
+    For a recording the browser will not play at all (#110): every browser the
+    page runs in plays AAC in MP4, so this copy carries the sound when the file
+    itself is refused. About 40 MB an hour. The index goes at the front
+    (`+faststart`), so a player can seek before it has read to the end.
+
+    Written beside `dest` and renamed into place, so a reader never meets half
+    a copy.
+
+    Raises:
+        NoAudioStream: `media` has no sound to copy.
+        MediaError: ffmpeg could not read it or write the copy.
+    """
+    probe(media)  # NoAudioStream, or ffprobe's own words, before anything is written
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    proc = subprocess.run(
+        [
+            _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(media),
+            "-map", "0:a:0", "-vn",
+            "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart",
+            "-f", "mp4", str(tmp),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise MediaError(
+            f"ffmpeg could not copy the sound of {media} (exit {proc.returncode}):\n"
+            f"{proc.stderr.strip()}"
+        )
+    os.replace(tmp, dest)  # noqa: PTH105
+    return dest
 
 
 # How far before the target the coarse seek lands, in seconds. Big enough to

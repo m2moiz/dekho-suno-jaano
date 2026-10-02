@@ -28,6 +28,7 @@ from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
 from dsj.ui.jobs import NotStarted
+from dsj.ui.pick import NoFilePicker, PickerBusy
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
 
@@ -41,6 +42,7 @@ STATUS: dict[type[Exception], int] = {
     DiarizationUnavailable: 503,
     FFmpegNotFound: 503,
     UIUnavailable: 503,
+    NoFilePicker: 503,
     # The file is wrong for what was asked.
     NoAudioStream: 422,
     NoVideoStream: 422,
@@ -51,6 +53,8 @@ STATUS: dict[type[Exception], int] = {
     NotStarted: 422,
     # Another transcription holds the machine; the request was fine, the moment was not.
     AlreadyRunning: 409,
+    # The Mac's file dialog is already open for an earlier click (#110).
+    PickerBusy: 409,
     # ffmpeg failed on the file in a way nobody named. Genuinely unexpected.
     MediaError: 500,
 }

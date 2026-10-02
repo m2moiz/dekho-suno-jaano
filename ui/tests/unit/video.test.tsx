@@ -8,6 +8,7 @@ vi.hoisted(() => {
   globalThis.fetch = (async () => new Response(new Int8Array([-1, 1]))) as unknown as typeof fetch;
 });
 
+import { currentError, dismissError } from "../../src/features/errors/appError";
 import type { RecordingRow } from "../../src/features/library/types";
 import { Player } from "../../src/features/player/Player";
 import { COOKIE, readVideoShown, saveVideoShown } from "../../src/features/player/video";
@@ -25,6 +26,7 @@ function recording(video_codec: string | null): RecordingRow {
     video_codec,
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
+    unreadable: null,
     transcripts: [],
   };
 }
@@ -94,5 +96,39 @@ describe("the picture", () => {
     cleanup();
     mount("h264");
     expect(screen.getByRole("button", { name: "Show picture" })).toBeTruthy();
+  });
+});
+
+describe("a file the browser will not open", () => {
+  function refuse(element: HTMLMediaElement, code: number) {
+    Object.defineProperty(element, "error", { configurable: true, value: { code, message: "" } });
+    act(() => fireEvent.error(element));
+  }
+
+  it("plays a copy of its sound instead, with no error and a word about it (#110)", () => {
+    const { container } = mount("av1");
+    const video = container.querySelector("video");
+    if (video === null) throw new Error("no <video> for a screen recording");
+    refuse(video, 4);
+    expect(container.querySelector("video")).toBeNull();
+    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(
+      /^\/api\/recording\/4\/media\?t=.*&sound=true$/,
+    );
+    expect(screen.getByText(/a copy of its sound is playing/)).toBeTruthy();
+    expect(currentError()).toBeNull();
+  });
+
+  it("names the failure when even the copy is refused, or the file fails another way", () => {
+    const { container } = mount("av1");
+    refuse(container.querySelector("video") as HTMLMediaElement, 4);
+    refuse(container.querySelector("audio") as HTMLMediaElement, 4);
+    expect(currentError()?.message).toContain("the browser cannot play this kind of file");
+    act(() => dismissError());
+    cleanup();
+    const other = mount("h264");
+    refuse(other.container.querySelector("video") as HTMLMediaElement, 3);
+    expect(currentError()?.message).toContain("the browser could not decode it");
+    expect(other.container.querySelector("video")).not.toBeNull();
+    act(() => dismissError());
   });
 });

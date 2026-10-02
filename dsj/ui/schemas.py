@@ -70,6 +70,8 @@ class Recording(BaseModel):
     video_codec: str | None
     first_seen: str
     missing: bool
+    # What ffprobe said when it could not read the file, else None (#110).
+    unreadable: str | None
     transcripts: list[Transcript]
 
 

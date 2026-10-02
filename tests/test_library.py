@@ -320,7 +320,9 @@ def test_a_run_started_from_the_app_fills_every_column(tmp_path: Path, library: 
     recording = library.recording(transcript.recording_id)
     assert recording is not None
     assert None not in vars(transcript).values()
-    assert None not in vars(recording).values()
+    # `unreadable` is the one column whose None is the good answer: ffprobe read it.
+    assert recording.unreadable is None
+    assert None not in (vars(recording) | {"unreadable": "read"}).values()
 
 
 def test_adopting_again_keeps_what_the_run_recorded_and_reads_new_marks(

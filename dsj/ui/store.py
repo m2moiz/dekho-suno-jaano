@@ -55,7 +55,9 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 
 # Kept in SQLite's own `user_version`. Bumped by whoever changes the tables, so
 # an older dsj refuses a library a newer one wrote instead of misreading it.
-SCHEMA_VERSION = 1
+# Version 2 added `recordings.unreadable` (#110); _MIGRATIONS brings a version 1
+# library up to it in place.
+SCHEMA_VERSION = 2
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -82,6 +84,7 @@ CREATE TABLE IF NOT EXISTS recordings (
   video_codec   TEXT,
   first_seen    TEXT NOT NULL,
   missing       INTEGER NOT NULL DEFAULT 0,
+  unreadable    TEXT,
   CHECK ((content_id IS NULL) = (size_bytes IS NULL))
 );
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -101,9 +104,18 @@ PRAGMA user_version = {SCHEMA_VERSION};
 COMMIT;
 """
 
+# What each older version needs to become the next, keyed by the older one
+# (_migrate runs one, with its version stamp, in one transaction).
+_MIGRATIONS = {
+    # What ffprobe said about a file it could not read, so the library page can
+    # show it (#110). NULL for every row written before, which is what a fresh
+    # read of those files would mostly say too: version 1 stored no reason.
+    1: "ALTER TABLE recordings ADD COLUMN unreadable TEXT",
+}
+
 _RECORDING_COLUMNS = (
     "r.id, r.path, r.size_bytes, r.duration_s, r.content_id, r.audio_codec, r.video_codec, "
-    "r.first_seen, r.missing"
+    "r.first_seen, r.missing, r.unreadable"
 )
 _TRANSCRIPT_COLUMNS = (
     "id, recording_id, json_path, finished_at, engine, model, diarized, speaker_count, "
@@ -136,6 +148,9 @@ class Recording:
     video_codec: str | None
     first_seen: str
     missing: bool
+    # ffprobe's own words when it could not read the file, else None (#110). A
+    # file with no sound at all is readable, and is not this.
+    unreadable: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,28 +241,42 @@ def _media_of(transcript: Path, audio: str) -> Path:
     return here if here.exists() else beside
 
 
-def _describe(media: Path) -> tuple[float | None, str | None, str | None]:
-    """Duration, audio codec and video codec, each None where ffprobe would not say.
+@dataclass(frozen=True)
+class _Described:
+    """What reading a recording's file says about it."""
+
+    duration_s: float | None
+    audio_codec: str | None
+    video_codec: str | None
+    unreadable: str | None
+
+
+def _describe(media: Path) -> _Described:
+    """Duration and codecs, each None where ffprobe would not say, and why it would not.
 
     FFmpegNotFound is not caught: without ffprobe every recording would be
     stored with nothing known about it, and its error already says how to
     install ffmpeg. A file ffprobe cannot read, a damaged one, is a fact about
-    that one file, so it is stored with what is known and nothing more.
+    that one file, so it is stored with what is known and ffprobe's own words
+    (#110). A file with no sound is readable, and is stored as having none.
     """
+    unreadable = None
     try:
         stream = media_mod.probe(media)
         duration, audio = stream.duration_s or None, stream.codec_name
     except media_mod.FFmpegNotFound:
         raise
-    except media_mod.MediaError:
+    except media_mod.NoAudioStream:
         duration, audio = None, None
+    except media_mod.MediaError as exc:
+        duration, audio, unreadable = None, None, str(exc)
     try:
         video = media_mod.video_codec(media)
     except media_mod.FFmpegNotFound:
         raise
     except media_mod.MediaError:
         video = None
-    return duration, audio, video
+    return _Described(duration, audio, video, unreadable)
 
 
 def _engine_of(payload: dict[str, Any]) -> str | None:
@@ -278,6 +307,26 @@ def _counts(payload: dict[str, Any]) -> tuple[int | None, int | None, int | None
     return diarized, speaker_count, mark_count
 
 
+def _migrate(db: sqlite3.Connection, version: int) -> int:
+    """Bring a version `version` library up one version, and return the version it is at.
+
+    The version is read again under the write lock, so of two processes opening
+    the same old library at once, the second finds the first's work done.
+    """
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        now = int(db.execute("PRAGMA user_version").fetchone()[0])
+        if now == version:
+            db.execute(_MIGRATIONS[version])
+            db.execute(f"PRAGMA user_version = {version + 1}")
+            now = version + 1
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    return now
+
+
 def _recording(row: tuple[Any, ...]) -> Recording:
     return Recording(
         id=row[0],
@@ -289,6 +338,7 @@ def _recording(row: tuple[Any, ...]) -> Recording:
         video_codec=row[6],
         first_seen=row[7],
         missing=bool(row[8]),
+        unreadable=row[9],
     )
 
 
@@ -331,7 +381,10 @@ class Library:
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
             if version == 0:
                 db.executescript(_SCHEMA)
-            elif version != SCHEMA_VERSION:
+                version = SCHEMA_VERSION
+            while version in _MIGRATIONS:
+                version = _migrate(db, version)
+            if version != SCHEMA_VERSION:
                 raise LibraryError(
                     f"{path} is a version {version} library and this dsj reads version "
                     f"{SCHEMA_VERSION}. Upgrade dsj, or point {LIBRARY_ENV} at another file."
@@ -621,9 +674,10 @@ class Library:
 
     def _fill(self, recording_id: int, media: Path, cid: str) -> None:
         """Write what reading `media` says into the row, and mark it found."""
-        duration, audio, video = _describe(media)
+        found = _describe(media)
         self._db.execute(
             "UPDATE recordings SET path = ?, size_bytes = ?, duration_s = ?, content_id = ?, "
-            "audio_codec = ?, video_codec = ?, missing = 0 WHERE id = ?",
-            (str(media), media.stat().st_size, duration, cid, audio, video, recording_id),
+            "audio_codec = ?, video_codec = ?, unreadable = ?, missing = 0 WHERE id = ?",
+            (str(media), media.stat().st_size, found.duration_s, cid, found.audio_codec,
+             found.video_codec, found.unreadable, recording_id),
         )
