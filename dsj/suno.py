@@ -31,6 +31,7 @@ __all__ = [
 
 import json
 import logging
+import os
 import re
 import sys
 import tempfile
@@ -904,6 +905,11 @@ def transcribe(
             return
         payload = asdict(p) | {
             "state": state,
+            # The writer, so a reader can ask the process table whether the job
+            # behind a `running` frame still exists, and stop that job alone
+            # rather than every `dsj suno` on the machine (#138). Without it, a
+            # killed run and a slow one read the same until someone ran `ps`.
+            "pid": os.getpid(),
             "fraction": round(p.fraction, 4),
             "speed": round(p.speed, 2),
             "eta_s": p.eta_s,

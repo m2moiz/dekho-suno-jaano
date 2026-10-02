@@ -44,6 +44,7 @@ __all__ = ["app", "main", "run"]
 
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -261,9 +262,12 @@ def suno(
             # Atomic for the same reason as the heartbeat, and more so: the
             # watcher polling for exactly this document is in a tight read loop,
             # which makes it the reader most likely to land inside a torn write.
-            atomic_write_text(
-                status, json.dumps({"state": "failed", "error": f"{type(exc).__name__}: {exc}"})
-            )
+            failed = {
+                "state": "failed",
+                "pid": os.getpid(),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            atomic_write_text(status, json.dumps(failed))
         raise
     except KeyboardInterrupt as exc:
         # Ctrl-C and `kill`. KeyboardInterrupt is not an Exception, so before
@@ -277,6 +281,7 @@ def suno(
         if status:
             stopped: dict[str, object] = {
                 "state": "interrupted",
+                "pid": os.getpid(),
                 "signal": "SIGTERM" if terminated else "SIGINT",
             }
             # Where it had got to, with the phase that number belongs to: an

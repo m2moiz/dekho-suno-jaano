@@ -255,13 +255,14 @@ sees half of one. It is not a log and not JSONL.
 
 ```json
 {"audio_done_s": 1872.0, "audio_total_s": 4447.0, "elapsed_s": 89.4,
- "resumed_from_s": 0.0, "state": "running", "fraction": 0.4209,
+ "resumed_from_s": 0.0, "state": "running", "pid": 48213, "fraction": 0.4209,
  "speed": 20.94, "eta_s": 122.9}
 ```
 
 | Field | Type | Notes |
 |---|---|---|
 | `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, `failed`, or `interrupted`. **This is the only reliable completion signal.** |
+| `pid` | int | The process that wrote the document. In every document, the failure and interrupted ones included. Below: how to tell a dead run from a slow one with it. |
 | `audio_done_s`, `audio_total_s` | float seconds | Of audio, not wall clock. |
 | `elapsed_s` | float seconds | Wall clock **for the current phase**, not for the run. Extraction and transcription each restart it, because one runs at about 1000x realtime and the other at about 13x, so a shared clock would make both speeds meaningless. |
 | `resumed_from_s` | float seconds | Audio a previous run already transcribed. `0.0` otherwise. |
@@ -276,10 +277,10 @@ as both `audio_done_s` and `audio_total_s`, the same total the `running` frames 
 it ends at `1.0` whether or not anyone spoke: a four-minute recording with no speech ends
 with `{"audio_done_s": 240.0, "audio_total_s": 240.0, "state": "done", "fraction": 1.0}`.
 
-**The failure document is a different shape.** Two keys, and none of the progress fields:
+**The failure document is a different shape.** Three keys, and none of the progress fields:
 
 ```json
-{"state": "failed", "error": "FileNotFoundError: /nope.mov"}
+{"state": "failed", "pid": 48213, "error": "FileNotFoundError: /nope.mov"}
 ```
 
 Anything reading `.fraction` unconditionally crashes on it, jq included: `.fraction * 100`
@@ -296,17 +297,40 @@ jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fracti
 shape before the process exits, 130 and 143 respectively:
 
 ```json
-{"state": "interrupted", "signal": "SIGTERM", "during": "running",
+{"state": "interrupted", "pid": 48213, "signal": "SIGTERM", "during": "running",
  "audio_done_s": 105.0, "audio_total_s": 300.0}
 ```
 
 `signal` is `SIGINT` or `SIGTERM`. `during` is the state of the last frame written before
 the signal, and `audio_done_s` and `audio_total_s` are that frame's, so they count
-extraction if `during` is `extracting`. All three are absent when the signal arrived
-before the first frame, while the model was loading. `interrupted` is terminal: nothing
+extraction if `during` is `extracting`. `during`, `audio_done_s` and `audio_total_s` are
+absent when the signal arrived before the first frame, while the model was loading. `interrupted` is terminal: nothing
 writes to the file again. Do not wait on it. A parakeet or sherpa run resumes from its
 checkpoint when the same command is run again; a whisper run starts over. `kill -9`
 cannot be caught, so it writes nothing and the file keeps its last frame.
+
+**Dead or slow: ask the process table, not the clock.** A run ended by `kill -9`, by the
+system under memory pressure, or by a crash of the machine writes nothing, so its file
+keeps saying `running` forever. Before trusting a frame whose `state` is not `done`,
+`failed` or `interrupted`, check its `pid`:
+
+```bash
+pid=$(jq -r .pid run.json)
+if kill -0 "$pid" 2>/dev/null; then echo alive; else echo "gone: the run died"; fi
+```
+
+Alive means alive, however long since the last frame: a plain whisper run writes one
+frame at 0% and nothing more until it ends. Gone, on a non-terminal frame, means the run
+died without a word; the same command resumes it on parakeet and sherpa. Three limits.
+The check only works on the machine that ran the job, not on a status file read from
+another. A pid is reused eventually, so on a frame hours old confirm it is still dsj with
+`ps -p "$pid" -o command=`. And a status file written before `pid` existed has none, so
+the only signal there is the file's mtime against the cadence table below.
+
+**Stop the job you started, and only that one:** `kill "$(jq -r .pid run.json)"`. Never
+`pkill -f 'dsj suno'`, which stops every run on the machine, another session's included.
+The pid is the Python process doing the work, so this holds under `uv run` too, where `$!`
+is uv's wrapper.
 
 How often each state is written:
 

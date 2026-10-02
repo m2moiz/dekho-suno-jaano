@@ -117,6 +117,7 @@ def test_a_stopped_run_says_interrupted(sig: signal.Signals, code: int, tmp_path
     doc = read_status(status)
     assert doc == {
         "state": "interrupted",
+        "pid": run.pid,
         "signal": sig.name,
         "during": "running",
         "audio_done_s": 105.0,
@@ -143,6 +144,56 @@ def test_a_finished_run_puts_the_default_sigterm_back(tmp_path: Path) -> None:
     )
     assert isinstance(result.exception, ValueError), result.output
     assert signal.getsignal(signal.SIGTERM) == before
+
+
+# --------------------------------------------------------------------------
+# #138: the writer's pid, so dead and slow stop looking alike
+# --------------------------------------------------------------------------
+
+
+def alive(pid: int) -> bool:
+    """`kill -0`: does a process with this pid exist?"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_a_killed_run_is_told_apart_from_a_slow_one(tmp_path: Path) -> None:
+    """SIGKILL cannot be caught, so the frame stays `running`; its pid gives it away."""
+    status = tmp_path / "run.json"
+    run = stub_run(tmp_path)
+    frame = wait_for_state(status, "running", run)
+    assert frame["pid"] == run.pid
+    assert alive(frame["pid"]), "a live run's pid must answer kill -0"
+
+    os.kill(run.pid, signal.SIGKILL)
+    assert run.wait(timeout=60) == -signal.SIGKILL
+
+    assert read_status(status) == frame, "nothing can write after SIGKILL; the last frame stays"
+    assert not alive(frame["pid"]), "and the pid it names is gone, at once"
+
+
+def test_every_document_names_its_writer(tmp_path: Path) -> None:
+    """A done frame and a failure document carry the pid too, not only running frames."""
+    finished = stub_run(tmp_path, hold=False)
+    assert finished.wait(timeout=60) == 0
+    done = read_status(tmp_path / "run.json")
+    assert done is not None
+    assert (done["state"], done["pid"]) == ("done", finished.pid)
+
+    (tmp_path / "rec.wav").unlink()
+    broken = launch(
+        [sys.executable, str(STUB), str(tmp_path / "rec.wav"), "-o", str(tmp_path / "out.json"),
+         "--status", str(tmp_path / "run.json"), "--no-diarize"],
+        tmp_path / "stderr.log",
+    )
+    assert broken.wait(timeout=60) == 1
+    failed = read_status(tmp_path / "run.json")
+    assert failed is not None
+    assert (failed["state"], failed["pid"]) == ("failed", broken.pid)
+    assert failed["error"].startswith("FileNotFoundError")
 
 
 @pytest.mark.slow

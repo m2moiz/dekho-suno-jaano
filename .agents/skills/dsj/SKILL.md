@@ -265,8 +265,16 @@ Two things will break a poller that assumes otherwise:
   again on the final frame, whose totals are the length of the audio. Observed across
   three separate runs: a poller that stops at `fraction == 1` calls it done before the
   speaker labels exist.
-- **The failure document is a different shape**, two keys and no progress fields:
-  `{"state": "failed", "error": "FileNotFoundError: /nope.mov"}`. Read `state` first.
+- **The failure document is a different shape**, three keys and no progress fields:
+  `{"state": "failed", "pid": 48213, "error": "FileNotFoundError: /nope.mov"}`. Read
+  `state` first.
+
+**A `running` frame is not proof of a running job.** A run killed with `kill -9`, or by
+the system under memory pressure, cannot write anything, so its file says `running`
+forever. Every frame carries the writer's `pid`: `kill -0 "$(jq -r .pid run.json)"`
+failing means the run is dead, not slow. To stop a run, `kill` that pid, never
+`pkill -f 'dsj suno'`, which stops every run on the machine. Details in
+[references/payload.md](references/payload.md).
 
 `eta_s` is `null` whenever speed is 0, which includes the first frame of every run.
 
