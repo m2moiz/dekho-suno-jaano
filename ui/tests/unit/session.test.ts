@@ -1,16 +1,25 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { apiFetch, startHeartbeat, takeToken } from "../../src/features/session/session";
+// Installed before the imports below run: the generated client keeps the
+// fetch it finds when it is created, so a stub put in place later is never called.
+const fetchMock = vi.hoisted(() => {
+  const mock = vi.fn<(request: Request) => Promise<Response>>();
+  globalThis.fetch = mock as unknown as typeof fetch;
+  return mock;
+});
+
+import { api } from "../../src/api/client";
+import { startHeartbeat, takeToken } from "../../src/features/session/session";
 
 const TOKEN = "abcDEF123_-xyz";
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async () => Response.json([]));
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -37,34 +46,41 @@ describe("takeToken", () => {
   });
 });
 
-describe("apiFetch", () => {
+describe("the API client", () => {
   it("sends the token as a header, never in the address", async () => {
     window.history.replaceState(null, "", `/#t=${TOKEN}`);
     takeToken();
-    const seen = vi.fn<typeof fetch>().mockResolvedValue(new Response("[]"));
-    vi.stubGlobal("fetch", seen);
-    await apiFetch("/api/recordings");
-    const [path, init] = seen.mock.calls[0] ?? [];
-    expect(path).toBe("/api/recordings");
-    expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${TOKEN}`);
+    await api.GET("/api/recordings");
+    const request = fetchMock.mock.calls[0]?.[0];
+    expect(request?.headers.get("Authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(request?.url).not.toContain(TOKEN);
+  });
+
+  it("sends no Authorization header at all when there is no token", async () => {
+    window.history.replaceState(null, "", "/");
+    takeToken();
+    await api.GET("/api/recordings");
+    expect(fetchMock.mock.calls[0]?.[0].headers.has("Authorization")).toBe(false);
   });
 });
 
 describe("startHeartbeat", () => {
-  it("beats at once, then every 15 seconds, until stopped", () => {
+  it("beats at once, then every 15 seconds, until stopped", async () => {
     vi.useFakeTimers();
     window.history.replaceState(null, "", `/#t=${TOKEN}`);
     takeToken();
-    const seen = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
-    vi.stubGlobal("fetch", seen);
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
     const stop = startHeartbeat();
-    expect(seen).toHaveBeenCalledTimes(1);
-    expect(seen.mock.calls[0]?.[0]).toBe("/api/heartbeat");
-    expect(seen.mock.calls[0]?.[1]?.method).toBe("POST");
-    vi.advanceTimersByTime(45_000);
-    expect(seen).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const first = fetchMock.mock.calls[0]?.[0];
+    expect(new URL(first?.url ?? "").pathname).toBe("/api/heartbeat");
+    expect(first?.method).toBe("POST");
+    expect(first?.headers.get("Authorization")).toBe(`Bearer ${TOKEN}`);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     stop();
-    vi.advanceTimersByTime(60_000);
-    expect(seen).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });

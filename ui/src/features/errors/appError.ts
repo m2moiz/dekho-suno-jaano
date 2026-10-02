@@ -18,16 +18,8 @@ function isAppError(value: unknown): value is AppError {
   return typeof v.error === "string" && typeof v.message === "string";
 }
 
-/** The error a failed reply carries, or one made from its status when it carries none. */
-export async function fromResponse(response: Response, request: string): Promise<AppError> {
-  const text = await response.text();
-  let body: unknown = null;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    // Not JSON: a proxy's page or an empty body. The status and the text say what there is.
-    body = null;
-  }
+/** The error a failed reply's parsed body carries, or one made from its status when it carries none. */
+export function fromBody(body: unknown, response: Response, request: string): AppError {
   if (isAppError(body)) {
     return { error: body.error, message: body.message, request };
   }
@@ -35,8 +27,8 @@ export async function fromResponse(response: Response, request: string): Promise
   const raw: unknown =
     typeof body === "object" && body !== null && "detail" in body
       ? (body as { detail: unknown }).detail
-      : text;
-  const detail = typeof raw === "string" ? raw : JSON.stringify(raw);
+      : body;
+  const detail = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
   return {
     error: `HTTP ${response.status}`,
     message: detail || response.statusText || "The server answered with no explanation.",

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, fromResponse, fromThrown, showError } from "@/features/errors/appError";
-import { apiFetch } from "@/features/session/session";
+import { api } from "@/api/client";
+import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import {
   durationLabel,
   engineLabel,
@@ -17,9 +17,9 @@ const ROUTE = "/api/recordings";
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; rows: RecordingRow[] };
 
 async function loadRecordings(): Promise<RecordingRow[]> {
-  const response = await apiFetch(ROUTE);
-  if (!response.ok) throw new ApiError(await fromResponse(response, ROUTE));
-  return (await response.json()) as RecordingRow[];
+  const { data, error, response } = await api.GET(ROUTE);
+  if (data === undefined) throw new ApiError(fromBody(error, response, ROUTE));
+  return data;
 }
 
 /** Every recording dsj knows, newest first, each with its transcripts (#156). */

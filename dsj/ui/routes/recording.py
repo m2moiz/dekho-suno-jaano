@@ -16,27 +16,30 @@ __all__ = ["router"]
 
 from fastapi import APIRouter, HTTPException, Response
 
-from dsj.ui.schemas import RecordingRow, TranscriptRow
+from dsj.ui.schemas import Recording, Transcript
 from dsj.ui.store import Library
 
 router = APIRouter(prefix="/api")
 
 
 @router.get("/recordings")
-def recordings() -> list[RecordingRow]:
+def recordings() -> list[Recording]:
     """Every recording, the one with the newest transcript first, each with its transcripts."""
     with Library.open() as library:
         library.refresh_missing()
         return [
-            RecordingRow(
+            Recording(
                 id=rec.id,
                 path=str(rec.path),
-                missing=rec.missing,
+                size_bytes=rec.size_bytes,
                 duration_s=rec.duration_s,
+                content_id=rec.content_id,
+                audio_codec=rec.audio_codec,
                 video_codec=rec.video_codec,
                 first_seen=rec.first_seen,
+                missing=rec.missing,
                 transcripts=[
-                    TranscriptRow(
+                    Transcript(
                         id=t.id,
                         finished_at=t.finished_at,
                         engine=t.engine,

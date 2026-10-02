@@ -21,6 +21,9 @@ __pycache__/
 dist/
 # The frontend's installed packages; ui/package-lock.json is what is tracked.
 ui/node_modules/
+# Playwright's per-run output (traces, screenshots of a failure).
+ui/test-results/
+ui/playwright-report/
 *.wav
 *.mov
 

@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -6,7 +5,7 @@ import {
   ApiError,
   copyText,
   dismissError,
-  fromResponse,
+  fromBody,
   fromThrown,
   showError,
 } from "../../src/features/errors/appError";
@@ -53,9 +52,9 @@ describe("a view that crashes", () => {
 });
 
 describe("a failed request", () => {
-  it("shows dsj's own sentence, unchanged", async () => {
-    const reply = new Response(JSON.stringify(FFMPEG), { status: 503 });
-    const error = await fromResponse(reply, "/api/probe");
+  it("shows dsj's own sentence, unchanged", () => {
+    const reply = new Response(null, { status: 503 });
+    const error = fromBody(FFMPEG, reply, "/api/probe");
     expect(error).toEqual(FFMPEG);
     render(<ShownErrorDialog />);
     act(() => showError(error));
@@ -87,12 +86,21 @@ describe("a failed request", () => {
     expect(screen.getByText(/clipboard refused/)).toBeTruthy();
   });
 
-  it("still reaches the dialog when the reply is not dsj's shape", async () => {
-    const reply = new Response("upstream timed out", { status: 502, statusText: "Bad Gateway" });
-    expect(await fromResponse(reply, "/api/x")).toEqual({
+  it("still reaches the dialog when the reply is not dsj's shape", () => {
+    const reply = new Response(null, { status: 502, statusText: "Bad Gateway" });
+    expect(fromBody("upstream timed out", reply, "/api/x")).toEqual({
       error: "HTTP 502",
       message: "upstream timed out",
       request: "/api/x",
+    });
+  });
+
+  it("reads FastAPI's own detail sentence as the message", () => {
+    const reply = new Response(null, { status: 404 });
+    expect(fromBody({ detail: "There is no transcript 9 in the library." }, reply, "/api/t/9")).toEqual({
+      error: "HTTP 404",
+      message: "There is no transcript 9 in the library.",
+      request: "/api/t/9",
     });
   });
 

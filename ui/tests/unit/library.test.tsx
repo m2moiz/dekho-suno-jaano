@@ -1,6 +1,13 @@
-// @vitest-environment jsdom
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Installed before the imports below run: the generated client keeps the
+// fetch it finds when it is created, so a stub put in place later is never called.
+const fetchMock = vi.hoisted(() => {
+  const mock = vi.fn<(request: Request) => Promise<Response>>();
+  globalThis.fetch = mock as unknown as typeof fetch;
+  return mock;
+});
 
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import {
@@ -31,6 +38,9 @@ const ROWS: RecordingRow[] = [
   {
     id: 2,
     path: "/Users/me/Recordings/review.mov",
+    size_bytes: 1_048_576,
+    content_id: "c1",
+    audio_codec: "aac",
     missing: false,
     duration_s: 3725,
     video_codec: "h264",
@@ -40,6 +50,9 @@ const ROWS: RecordingRow[] = [
   {
     id: 1,
     path: "/Volumes/Old disk/standup.m4a",
+    size_bytes: 2_048,
+    content_id: "c2",
+    audio_codec: "aac",
     missing: true,
     duration_s: 249,
     video_codec: null,
@@ -51,11 +64,9 @@ const ROWS: RecordingRow[] = [
 ];
 
 function serve(rows: unknown, status = 200) {
-  const seen = vi.fn<typeof fetch>().mockResolvedValue(
-    new Response(JSON.stringify(rows), { status }),
-  );
-  vi.stubGlobal("fetch", seen);
-  return seen;
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async () => Response.json(rows, { status }));
+  return fetchMock;
 }
 
 beforeEach(() => {
@@ -66,7 +77,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   act(() => dismissError());
-  vi.unstubAllGlobals();
 });
 
 describe("the library page", () => {
@@ -75,9 +85,9 @@ describe("the library page", () => {
     render(<LibraryPage />);
     const items = await screen.findAllByRole("listitem", { name: /\.(mov|m4a)$/ });
     expect(items.map((li) => li.getAttribute("aria-label"))).toEqual(["review.mov", "standup.m4a"]);
-    expect(new Headers(seen.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer a-token",
-    );
+    const request = seen.mock.calls[0]?.[0];
+    expect(new URL(request?.url ?? "").pathname).toBe("/api/recordings");
+    expect(request?.headers.get("Authorization")).toBe("Bearer a-token");
   });
 
   it("shows date, engine and model for each transcript", async () => {

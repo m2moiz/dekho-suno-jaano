@@ -333,5 +333,11 @@ def dev_app() -> FastAPI:
     reload; the URL to open is printed either way. No watchdog runs here.
     """
     app, token = create_app(8721, token=os.environ.get("DSJ_UI_DEV_TOKEN"), extra_ports=(5173,))
-    print(f"dsj ui dev: open http://{HOST}:5173/#t={token}", file=sys.stderr, flush=True)
+
+    def say_where() -> None:
+        print(f"dsj ui dev: open http://{HOST}:5173/#t={token}", file=sys.stderr, flush=True)
+
+    # On startup, not here: `just api` builds this app only to read its OpenAPI
+    # description, and a URL for a server nobody started would mislead.
+    app.router.on_startup.append(say_where)
     return app
