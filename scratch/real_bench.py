@@ -390,6 +390,24 @@ def measure_fixture(transcript: Path, wall_s: float | None) -> FixtureRow:
     )
 
 
+LATIN = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+
+
+def english_recall(sentences: list[dict[str, Any]]) -> float:
+    """Share of the fixture reference's Latin words the transcript also has, in order.
+
+    #99's and #33's measure: the reference's Latin words, lowercased, from
+    ground_truth.json's clip segments, matched in order against the
+    transcript's with difflib (no autojunk), matching blocks summed over the
+    reference's length.
+    """
+    truth = json.loads((FIXTURE / "ground_truth.json").read_text())
+    ref = [w.lower() for g in truth["segments"] if g["kind"] == "clip" for w in LATIN.findall(g["ground_truth"])]
+    hyp = [w.lower() for s in sentences for w in LATIN.findall(s.get("text") or "")]
+    matcher = difflib.SequenceMatcher(None, ref, hyp, autojunk=False)
+    return 100 * sum(block.size for block in matcher.get_matching_blocks()) / len(ref)
+
+
 def share_in(span: dict[str, Any], a: float, b: float) -> float:
     """How much of `span` lies inside [a, b), as a fraction of its length.
 

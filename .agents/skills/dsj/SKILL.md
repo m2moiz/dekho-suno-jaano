@@ -9,7 +9,7 @@ description: >
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
   or text, or when an existing caption file has to stand in for a transcript.
 metadata:
-  version: 0.2.1
+  version: 0.2.2
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -216,8 +216,10 @@ jq -r '.sentences[] | select(.start >= 400 and .start <= 460) | "\(.start)  \(.t
 `.sentences` runs earliest to latest, and so do the `tokens` inside each one, so a reader
 may walk it from the top and stop at the first `start` past its window. The order is
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
-pieces, and a word at a seam can be mistimed by a few seconds — measured worst case
-5.72 s — which pulls its whole sentence that far earlier in the list.
+pieces, and a word at a seam can be mistimed by a few seconds, measured worst case
+5.72 s, which pulls its whole sentence that far earlier in the list. Under whisper no
+two sentences overlap; under parakeet and sherpa a seam can still leave one running into
+the next (#192).
 
 A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
 space, under every engine, and the top-level `text` is the sentences joined. So at a seam
@@ -250,6 +252,8 @@ jq -r 'if .state == "failed" then "failed: \(.error)" else "\(.state) \((.fracti
 ```
 
 `state` moves `extracting` to `running` to `diarizing` to `done`, or becomes `failed`.
+A whisper run that wrote a repetition loop passes through `retrying` after `running`,
+while each loop span is decoded again.
 The file is one JSON object rewritten in full and replaced atomically, so a reader never
 sees half of one.
 
@@ -334,9 +338,9 @@ twenty lines down:
 99999.0s is past the end of this 230.7s recording.
 ```
 
-Diarization is the one pass that fails soft: if it cannot run, the transcript is still
-written and still correct, a `diarization skipped:` warning goes to stderr, and the exit
-code is 0. Detect it in the payload rather than the log, because `speakers` and
+Diarization is the one pass that fails soft: if it cannot run or crashes, the transcript
+is still written and still correct, a `diarization skipped:` or `speaker labelling
+failed` warning goes to stderr, and the exit code is 0. Detect it in the payload rather than the log, because `speakers` and
 `diarization` are absent when the pass did not run. `--require-diarize` turns that into
 a failure instead.
 

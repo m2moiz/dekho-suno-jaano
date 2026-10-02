@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import builtins
 import itertools
+import os
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -284,6 +285,47 @@ def test_the_diarizer_is_asked_to_stay_quiet(fake_senko: SenkoInstaller) -> None
     speaker_turns(Path("clip.wav"))
 
     assert module.constructed_with == {"quiet": True}
+
+
+def test_numba_compiles_into_a_directory_only_this_process_wrote(
+    fake_senko: SenkoInstaller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#186: a numba cache shared with earlier processes crashed labelling.
+
+    Importing the real senko points NUMBA_CACHE_DIR at ~/.cache/senko itself,
+    so the stand-in reproduces that before the call, and the test reads the
+    directory numba would compile into from inside the diarizer: that is where
+    umap and pynndescent compile.
+    """
+    from numba.core import config
+
+    def numba_cache_dir() -> str:
+        # Assigned into the module's globals at runtime, so no checker sees it.
+        return str(vars(config)["CACHE_DIR"])
+
+    shared = "/nonexistent/senko/numba_cache"
+    # setattr first so teardown restores numba's live value as well as the env.
+    monkeypatch.setattr(config, "CACHE_DIR", numba_cache_dir())
+    monkeypatch.setenv("NUMBA_CACHE_DIR", shared)
+    config.reload_config()
+    assert numba_cache_dir() == shared
+    seen: list[str] = []
+
+    def diarize(wav_path: str) -> SenkoResult:
+        seen.append(numba_cache_dir())
+        return {"merged_segments": [{"speaker": "S", "start": 0.0, "end": 1.0}]}
+
+    fake_senko(diarize)
+
+    speaker_turns(Path("clip.wav"))
+
+    [private] = seen
+    assert private != shared
+    assert Path(private).is_dir()
+    assert Path(private).name.startswith("dsj-numba-")
+    # The environment too: numba re-reads it at every compile, and a stale
+    # value there would move the cache back on the first one.
+    assert os.environ["NUMBA_CACHE_DIR"] == private
 
 
 # --- The real diarizer, on a real clip -----------------------------------

@@ -75,3 +75,10 @@ whitelist.min_chunk_samples  # dsj/asr.py, dsj/parakeet.py, dsj/sherpa.py
 whitelist.create_stream  # tests/test_suno.py
 whitelist.accept_waveform  # tests/test_suno.py
 whitelist.decode_stream  # tests/test_suno.py
+
+# The same blind spot, for conftest's FakeModel. dsj/parakeet.py:132-166 reads
+# `model.preprocessor_config` and calls `model.generate(mel, ...)`, so a branch
+# that changes tests/conftest.py and not dsj/parakeet.py scans the fake without
+# its caller and reports both unused.
+whitelist.preprocessor_config  # tests/conftest.py
+whitelist.generate  # tests/conftest.py

@@ -16,7 +16,9 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import sys
+import wave
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -25,16 +27,29 @@ import numpy as np
 import pytest
 from conftest import FakeToken
 
+from dsj import media as media_mod
 from dsj.alignment import AlignedResult, AlignedSentence, AlignedToken
+from dsj.asr import Transcription, with_char_offsets
 from dsj.checkpoint import checkpoint_path_for
 from dsj.diarize import DiarizationUnavailable
 from dsj.merge import Turn
-from dsj.suno import CHUNK_S, LOOP_REASON, OVERLAP_S, Progress, is_loop, transcribe
+from dsj.suno import (
+    CHUNK_S,
+    LOOP_REASON,
+    NO_SPEECH_REASON,
+    OVERLAP_S,
+    Progress,
+    _without_overlaps,  # pyright: ignore[reportPrivateUsage]
+    is_loop,
+    silences,
+    transcribe,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from conftest import FakeModel
+    from numpy.typing import NDArray
 
     from dsj.media import AudioStream
 
@@ -43,6 +58,12 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.usefixtures("already_extracted_media", "no_real_diarizer")
 
 RATE = 16_000
+
+# The real one, taken before already_extracted_media swaps in its stub, for the
+# tests that run the silence rule on a real wav (#181).
+REAL_LOUDNESS = media_mod.loudness
+REAL_PROBE = media_mod.probe
+REAL_NEEDS_CONVERSION = media_mod.needs_conversion
 
 
 def _tokens() -> list[FakeToken]:
@@ -748,19 +769,86 @@ def test_require_diarize_makes_the_failure_fatal(
     assert "speakers" not in json.loads(out.read_text())
 
 
-def test_a_bug_in_diarization_is_not_swallowed(
+# The two shapes of crash #186 is about: the one numba's cache save raised on a
+# real run, and a generic one standing for whatever else senko may throw.
+DIARIZER_CRASHES = [
+    ReferenceError("underlying object has vanished"),
+    RuntimeError("senko fell over"),
+]
+
+
+@pytest.mark.parametrize("crash", DIARIZER_CRASHES, ids=lambda e: type(e).__name__)
+def test_a_diarizer_crash_leaves_the_unlabelled_transcript_and_exits_0(
     fake_parakeet: Callable[..., FakeModel],
     fake_media: Path,
     tmp_path: Path,
     fake_turns: Callable[..., list[Path]],
+    capsys: pytest.CaptureFixture[str],
+    crash: Exception,
 ) -> None:
-    """An unexpected exception from the diarizer propagates.
+    """A crash the boundary did not foresee still may not cost the ASR run (#186).
 
-    Same narrowness as the boundary itself: only DiarizationUnavailable
-    degrades. A TypeError here is a bug in dsj and must be loud.
+    Through main(), because the promise is about the exit code a script sees,
+    and stderr rather than caplog because the CLI's logger does not propagate.
+    """
+    import dsj.suno as transcribe_mod
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(raises=crash)
+    out = tmp_path / "out.json"
+
+    code = transcribe_mod.main([str(fake_media), "-o", str(out)])
+
+    assert code == 0
+    on_disk = json.loads(out.read_text())
+    assert on_disk["sentences"][0]["text"] == "see this column here."
+    assert "speaker" not in on_disk["sentences"][0]
+    assert "speakers" not in on_disk
+    assert "diarization" not in on_disk
+    # Named: which pass failed, and the exception's own type and message.
+    assert (
+        f"speaker labelling failed, transcript left unlabelled: {type(crash).__name__}: {crash}"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("crash", DIARIZER_CRASHES, ids=lambda e: type(e).__name__)
+def test_require_diarize_makes_a_diarizer_crash_fatal(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    crash: Exception,
+) -> None:
+    import dsj.suno as transcribe_mod
+
+    fake_parakeet(tokens=_tokens())
+    fake_turns(raises=crash)
+    out = tmp_path / "out.json"
+
+    with pytest.raises(type(crash)):
+        transcribe_mod.main([str(fake_media), "-o", str(out), "--require-diarize"])
+
+    assert "speakers" not in json.loads(out.read_text())
+
+
+def test_a_bug_in_the_merge_is_not_swallowed(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the diarizer's own call degrades; a bug in dsj's merge stays loud.
+
+    A TypeError there is dsj's, raised after senko has answered.
     """
     fake_parakeet(tokens=_tokens())
-    fake_turns(raises=TypeError("unsupported operand"))
+    fake_turns(**_one_speaker())
+
+    def broken(*_args: Any, **_kwargs: Any) -> list[int]:
+        raise TypeError("unsupported operand")
+
+    monkeypatch.setattr("dsj.merge.label_sentences", broken)
 
     with pytest.raises(TypeError):
         transcribe(fake_media, tmp_path / "out.json")
@@ -965,6 +1053,7 @@ def test_the_diarizer_is_handed_the_extracted_wav_not_the_source(
 
     fake_parakeet(tokens=_tokens())
     extracted: list[Path] = []
+
     # def, not lambda: an annotated lambda parameter is not expressible.
     def always_convert(stream: AudioStream, rate: int) -> bool:
         return True
@@ -1022,9 +1111,7 @@ def _seam_result() -> AlignedResult:
         tokens=[_seam_token(2540.88, " First name"), _seam_token(2534.84, ".")],
     )
     sentences = [said, agreed, mistimed]
-    return AlignedResult(
-        text="".join(s.text for s in sentences), sentences=sentences
-    )
+    return AlignedResult(text="".join(s.text for s in sentences), sentences=sentences)
 
 
 def _merge_that_went_backwards(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1208,9 +1295,7 @@ def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
     assert list(payload) == ["audio", "model", "text", "unclear", "sentences"]
     assert [s["text"] for s in payload["sentences"]] == [" We looked at it.", " Then we left."]
     assert payload["text"] == "We looked at it. Then we left."
-    assert payload["unclear"] == [
-        {"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}
-    ]
+    assert payload["unclear"] == [{"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}]
     assert LOOP_REASON == "repetition loop"
 
 
@@ -1541,3 +1626,326 @@ def test_a_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
         assert (round(s["start"], 3), round(s["end"], 3)) == (s["start"], s["end"])
         assert s["start"] <= s["tokens"][0]["t"]
         assert s["end"] >= max(t["e"] for t in s["tokens"])
+
+
+def _write_wav(path: Path, pieces: list[tuple[float, float, str]]) -> Path:
+    """A 16 kHz mono wav of `pieces`: (seconds, RMS dBFS, "tone" or "noise").
+
+    A 220 Hz tone stands in for speech and seeded white noise for a quiet room,
+    each scaled to the RMS asked for, so the loudness the rule reads is the
+    loudness the test wrote.
+    """
+    rng = np.random.default_rng(181)
+    parts: list[NDArray[np.float64]] = []
+    for seconds, rms_db, kind in pieces:
+        n = round(seconds * RATE)
+        if kind == "tone":
+            wave_ = np.sin(2 * np.pi * 220 * np.arange(n) / RATE)
+        else:
+            wave_ = rng.standard_normal(n)
+        parts.append(wave_ / np.sqrt(np.mean(wave_**2)) * 10 ** (rms_db / 20))
+    samples = np.round(np.concatenate(parts) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(samples.tobytes())
+    return path
+
+
+def _merge_over_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, with words over loud, quiet and silent audio.
+
+    Laid out against _silence_wav: words over the first silence, one sentence
+    half over it, a word just inside its far edge, quiet real speech, a loop
+    over loud audio and a loop over the second silence.
+    """
+
+    def sentence(words: list[tuple[float, str]]) -> AlignedSentence:
+        tokens = [
+            AlignedToken(id=i, text=w, start=t, duration=0.2) for i, (t, w) in enumerate(words)
+        ]
+        return AlignedSentence(text="".join(w for _, w in words), tokens=tokens)
+
+    sentences = [
+        sentence([(1.0, " We"), (1.3, " looked"), (1.6, " at"), (1.9, " it.")]),
+        # Two words over loud audio, then three over the silence from 5 to 15 s.
+        sentence(
+            [(4.0, " Bye"), (4.3, " now."), (8.0, " Thanks"), (8.3, " for"), (8.6, " watching.")]
+        ),
+        # 14.4 s is inside the silence, but within SILENCE_EDGE_S of its end:
+        # where whisper puts the start of a real word that opens the speech.
+        sentence(
+            [(14.4, " Right,"), (16.0, " she"), (16.3, " said"), (16.6, " it"), (16.9, " quietly.")]
+        ),
+        sentence([(26.0 + i * 0.3, " na") for i in range(9)]),
+        sentence([(37.0 + i * 0.3, " na") for i in range(9)]),
+    ]
+
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text="".join(s.text for s in sentences), sentences=sentences)
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def _silence_wav(path: Path) -> Path:
+    """Loud speech, 10 s of -60 dB noise, 10 s of quiet speech at -45 dB, and so on.
+
+    The -60 dB noise is #148's fixture's gaps; -45 dB is quieter than 99% of the
+    owner's words and still 10 dB over SILENCE_DB.
+    """
+    return _write_wav(
+        path,
+        [
+            (5, -20, "tone"),
+            (10, -60, "noise"),
+            (10, -45, "tone"),
+            (10, -20, "tone"),
+            (10, -60, "noise"),
+            (5, -20, "tone"),
+        ],
+    )
+
+
+def test_silences_are_runs_below_the_threshold_of_at_least_the_minimum(tmp_path: Path) -> None:
+    """5 s of -60 dB noise is silence; 4.9 s of it is not, nor is 10 s at -45 dB."""
+    wav = _write_wav(
+        tmp_path / "in.wav",
+        [
+            (1, -20, "tone"),
+            (4.9, -60, "noise"),
+            (1, -20, "tone"),
+            (5, -60, "noise"),
+            (1, -20, "tone"),
+            (10, -45, "tone"),
+            (1, -20, "tone"),
+        ],
+    )
+
+    assert silences(REAL_LOUDNESS(wav, 0.1)) == [(6.9, 11.9)]
+
+
+def test_words_over_silence_leave_and_are_recorded_as_no_speech(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text written over silence is taken out and said to be silence (#181).
+
+    Quiet real speech, a word at the silence's edge and a loop over loud audio
+    stay what they were. A loop over silence is reported as no speech, the case
+    of #148's fixture, so a reader can tell a silent minute from a failed one.
+    """
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    fake_parakeet(tokens=[])
+    _merge_over_silence(monkeypatch)
+    media = _silence_wav(tmp_path / "in.wav")
+    out = tmp_path / "out.json"
+
+    payload = transcribe(media, out, diarize=False)
+
+    assert json.loads(out.read_text()) == payload
+    assert payload["unclear"] == [
+        {"start": 5.0, "end": 15.0, "reason": NO_SPEECH_REASON, "words": 3},
+        {"start": 26.0, "end": 28.6, "reason": LOOP_REASON, "words": 9},
+        {"start": 35.0, "end": 45.0, "reason": NO_SPEECH_REASON, "words": 9},
+    ]
+    assert NO_SPEECH_REASON == "no speech"
+    assert [s["text"] for s in payload["sentences"]] == [
+        " We looked at it.",
+        " Bye now.",
+        " Right, she said it quietly.",
+    ]
+    assert payload["text"] == "We looked at it. Bye now. Right, she said it quietly."
+    trimmed = payload["sentences"][1]
+    assert (trimmed["start"], trimmed["end"]) == (4.0, 4.5)
+    assert [(t["w"], t["charOffset"]) for t in trimmed["tokens"]] == [(" Bye", 0), (" now.", 4)]
+
+
+def test_without_silence_nothing_is_taken_out(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same words over audio with no silent stretch: only the loops leave."""
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    fake_parakeet(tokens=[])
+    _merge_over_silence(monkeypatch)
+    media = _write_wav(tmp_path / "in.wav", [(50, -20, "tone")])
+
+    payload = transcribe(media, tmp_path / "out.json", diarize=False)
+
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON, LOOP_REASON]
+    assert len(payload["sentences"]) == 3
+    assert payload["sentences"][1]["text"] == " Bye now. Thanks for watching."
+
+
+def _tones(path: Path, rate: int, channels: int, pieces: list[tuple[float, float]]) -> Path:
+    """A 16-bit wav of 220 Hz tones, (seconds, RMS dBFS) each, the same in every channel."""
+    parts: list[NDArray[np.float64]] = []
+    for seconds, rms_db in pieces:
+        wave_ = np.sin(2 * np.pi * 220 * np.arange(round(seconds * rate)) / rate)
+        parts.append(wave_ / np.sqrt(np.mean(wave_**2)) * 10 ** (rms_db / 20))
+    mono = np.round(np.concatenate(parts) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.repeat(mono[:, None], channels, axis=1).tobytes())
+    return path
+
+
+# Loud, 8 s at -56.5 dB, loud, 8 s at -63 dB, loud. As a mono file both quiet
+# stretches are under SILENCE_DB. As stereo, with each channel at those levels,
+# the float mix SILENCE_DB was measured on reads them 3.01 dB louder: -53.5 dB
+# is not silence, -60 dB still is (#193).
+_SCALE_PIECES: list[tuple[float, float]] = [(3, -20), (8, -56.5), (3, -20), (8, -63), (3, -20)]
+
+
+def _silences_transcribe_finds(
+    media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[float, float]]:
+    """The silences transcribe() itself reads from `media`, through the real ffmpeg path."""
+    monkeypatch.setattr(media_mod, "probe", REAL_PROBE)
+    monkeypatch.setattr(media_mod, "needs_conversion", REAL_NEEDS_CONVERSION)
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+
+    def empty(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text="", sentences=[])
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", empty)
+    found: list[list[tuple[float, float]]] = []
+
+    def recording(frame_db: NDArray[np.float64], frame_s: float = 0.1) -> list[tuple[float, float]]:
+        found.append(silences(frame_db, frame_s))
+        return found[-1]
+
+    monkeypatch.setattr("dsj.suno.silences", recording)
+    transcribe(media, tmp_path / f"{media.name}.json", diarize=False, resume=False)
+    [stretches] = found
+    return stretches
+
+
+@pytest.mark.parametrize("container", ["wav 16 kHz", "wav 44.1 kHz", "float wav", "m4a", "mp3"])
+def test_a_stereo_recording_reads_on_the_scale_the_threshold_was_measured_on(
+    container: str,
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same stereo signal gives the same silences whatever file it arrives in (#193).
+
+    Every one of these is converted before decoding, and the silences used to
+    be read from that 16-bit wav, where ffmpeg mixes stereo at 0.5 + 0.5 and
+    every frame reads 3.01 dB quieter than the float decode #181 measured
+    SILENCE_DB on. -56.5 dB a channel then passed for silence.
+    """
+    fake_parakeet(tokens=[])
+    rate = 16_000 if container == "wav 16 kHz" else 44_100
+    media = _tones(tmp_path / "stereo.wav", rate, 2, _SCALE_PIECES)
+    if container in ("float wav", "m4a", "mp3"):
+        encoded = tmp_path / {"float wav": "f.wav", "m4a": "a.m4a", "mp3": "a.mp3"}[container]
+        codec = {"float wav": "pcm_f32le", "m4a": "aac", "mp3": "libmp3lame"}[container]
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(media), "-c:a", codec, str(encoded)],
+            check=True,
+        )
+        media = encoded
+    assert REAL_PROBE(media).channels == 2
+
+    assert _silences_transcribe_finds(media, tmp_path, monkeypatch) == [(14.0, 22.0)]
+
+
+@pytest.mark.parametrize("rate", [16_000, 44_100])
+def test_a_mono_recording_reads_at_the_level_it_was_written(
+    rate: int,
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mono has no mix to differ: both quiet stretches are silence, converted or not."""
+    fake_parakeet(tokens=[])
+    media = _tones(tmp_path / "mono.wav", rate, 1, _SCALE_PIECES)
+    assert REAL_NEEDS_CONVERSION(REAL_PROBE(media), 16_000) is (rate != 16_000)
+
+    assert _silences_transcribe_finds(media, tmp_path, monkeypatch) == [(3.0, 11.0), (14.0, 22.0)]
+
+
+def test_parakeet_never_decodes_a_loop_again(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+) -> None:
+    """The retry is whisper's (#183): a parakeet loop goes straight to `unclear`."""
+
+    def refuse(*_: Any, **__: Any) -> Any:
+        raise AssertionError("parakeet asked for a retry")
+
+    monkeypatch.setattr("dsj.suno.redecoder", refuse)
+    fake_parakeet(tokens=[])
+    _merge_with_a_loop(monkeypatch)
+    states: list[str] = []
+
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False, on_progress=capture)
+
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON]
+    assert "retrying" not in states
+
+
+# --- no two whisper sentences overlap (#190); parakeet's still can (#192) ------
+
+
+def _sentence(*tokens: tuple[float, float, str]) -> dict[str, Any]:
+    toks = [{"t": t, "w": w, "e": e} for t, e, w in tokens]
+    return {
+        "start": toks[0]["t"],
+        "end": toks[-1]["e"],
+        "text": "".join(w for _, _, w in tokens),
+        "tokens": with_char_offsets(toks),
+    }
+
+
+def test_two_sentences_that_overlap_are_written_as_one() -> None:
+    """Every word and every time kept, in time order; sentences that only touch stay apart."""
+    first = _sentence((1.0, 1.5, " We"), (4.0, 4.5, " went."))
+    inside = _sentence((2.0, 2.5, " Then"), (2.5, 3.0, " stop."))
+    touching = _sentence((4.5, 5.0, " Next."))
+    got = _without_overlaps(Transcription(text="", sentences=[first, inside, touching]), merge=True)
+
+    assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
+        (1.0, 4.5, " We Then stop. went."),
+        (4.5, 5.0, " Next."),
+    ]
+    assert got.text == "We Then stop. went. Next."
+    merged = got.sentences[0]
+    assert [t["charOffset"] for t in merged["tokens"]] == [0, 3, 8, 14]
+    assert all(merged["text"][t["charOffset"] :].startswith(t["w"]) for t in merged["tokens"])
+
+
+def test_sentences_that_do_not_overlap_pass_through_unchanged() -> None:
+    sentences = [_sentence((1.0, 2.0, " One.")), _sentence((2.0, 3.0, " Two."))]
+    before = Transcription(text="One. Two.", sentences=sentences)
+
+    assert _without_overlaps(before, merge=True) == before
+
+
+def test_a_token_outside_its_sentence_is_refused() -> None:
+    """No step makes one, so one appearing is a broken step, not something to write."""
+    stray = _sentence((1.0, 2.0, " One.")) | {"end": 1.5}
+
+    for merge in (True, False):
+        with pytest.raises(RuntimeError, match="outside its sentence"):
+            _without_overlaps(Transcription(text="One.", sentences=[stray]), merge=merge)
+
+
+def test_parakeet_and_sherpa_sentences_are_never_merged() -> None:
+    """Merging at a chunk seam would put two speakers under one label (#192)."""
+    first = _sentence((1.0, 1.5, " We"), (4.0, 4.5, " went."))
+    inside = _sentence((2.0, 2.5, " Then"), (2.5, 3.0, " stop."))
+    before = Transcription(text="We went. Then stop.", sentences=[first, inside])
+
+    assert _without_overlaps(before, merge=False) is before

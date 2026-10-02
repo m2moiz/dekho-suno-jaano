@@ -253,7 +253,8 @@ jq -r '"\(.state) \(.fraction * 100 | floor)% eta \(.eta_s)s"' run.json
 ```
 
 `state` moves `extracting → running → diarizing → done`, or `failed` with an
-`error`. The file is written atomically, so a reader never sees half of one.
+`error`. A whisper run that wrote a repetition loop passes through `retrying`
+while it decodes each loop span again. The file is written atomically, so a reader never sees half of one.
 
 **Interruptions are cheap.** A checkpoint is written beside the output every
 chunk. Re-running the same command resumes from it, even if the recording was
@@ -366,7 +367,8 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
   "speakers": ["SPEAKER_00", "SPEAKER_01"],   // only when diarization ran
   "diarization": "senko 0.1.0",               // absent if it did not
   "text": "the whole transcript as one string",
-  // stretches taken out of `sentences`: whisper looping on one letter or phrase.
+  // stretches taken out of `sentences`: whisper looping on one letter or phrase
+  // ("repetition loop"), or writing words over silence ("no speech").
   // [] when there were none; absent from transcripts written before it existed
   "unclear": [{"start": 134.1, "end": 161.8, "reason": "repetition loop", "words": 223}],
   "sentences": [
@@ -400,6 +402,14 @@ that word belongs to sorts to where its earliest token claims it began. Measured
 on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
+
+**Under whisper no two sentences overlap**: each ends at or before the next
+one's `start`. Each of the 6 s two of whisper's two-minute windows share is
+written by one of them, its own half by default or all of it by the one that
+did not loop there, so the same speech is not written twice at a seam (#190).
+Under parakeet and sherpa a chunk seam can still leave a sentence starting
+inside the one before, 1 pair on a 6-minute parakeet run; they are left apart,
+because merging them would put two speakers under one label (#192).
 
 **A sentence's `text` is its `tokens` joined**: every `w` in that time order,
 leading space included, under every engine. The top-level `text` is the

@@ -115,8 +115,20 @@ and the exit code is 0:
 diarization skipped: senko is not installed, so sentences cannot be labelled with who spoke.
 ```
 
+A crash inside the diarizer itself is treated the same way: the transcript is kept
+unlabelled, the exit code is 0, and the warning names the exception. The one seen in
+practice is numba's compile cache failing to save while senko clusters (#186):
+
+```
+speaker labelling failed, transcript left unlabelled: ReferenceError: underlying object has vanished
+```
+
+To keep it from happening, dsj gives numba a cache directory of its own per run,
+removed when the run exits. That costs about 9 s of compiling per labelled run, and no
+run shares a cache another process wrote, which is where the crash was observed.
+
 If a labelled transcript is the requirement rather than a bonus, pass `--require-diarize`
-and the same condition becomes an exit 1. If labels are irrelevant, `--no-diarize` skips
+and either condition becomes an exit 1. If labels are irrelevant, `--no-diarize` skips
 the pass and saves the time.
 
 Detect the outcome in the payload, not in the log: `speakers` and `diarization` are

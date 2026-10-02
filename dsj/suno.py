@@ -16,12 +16,16 @@ __all__ = [
     "DEFAULT_WHISPER_MODEL",
     "ENGINES",
     "LOOP_REASON",
+    "LOUDNESS_FRAME_S",
+    "NO_SPEECH_REASON",
     "OVERLAP_S",
+    "RETRY_LOOPS",
     "Progress",
     "clock",
     "is_loop",
     "main",
     "render_bar",
+    "silences",
     "transcribe",
 ]
 
@@ -36,6 +40,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import numpy as np
+
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
 from dsj import media as media_mod
@@ -46,10 +52,12 @@ from dsj.atomic import atomic_write_text
 # these in costs nothing to a run that never asks for the engine, and it
 # keeps `--help` able to print the defaults.
 from dsj.parakeet import DEFAULT_MODEL
-from dsj.whisper import DEFAULT_WHISPER_MODEL
+from dsj.whisper import DEFAULT_WHISPER_MODEL, redecoder
 from dsj.whisper import SAMPLE_RATE as WHISPER_SAMPLE_RATE
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from dsj.alignment import AlignedToken
 
 # The transcript is JSON, so its two nested shapes are plain dicts rather than
@@ -293,8 +301,9 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
     whisper sometimes decodes a whole window as one letter or a short phrase
     repeated (#140), and the loop text says nothing about what was there. On
     the owner's recordings the audio under the loops is as loud as the speech
-    around them, so most mark speech whisper failed to read; on #148's public
-    fixture one sits over 60 s of near-silence, so not all do. Left in, a
+    around them, so most mark speech whisper failed to read. The one measured
+    over silence, on #148's public fixture, is taken out before this by
+    _without_silence and reported as no speech (#181). Left in, a
     reader gets 200 copies of a letter, and a search or a summary counts them
     as words. Simply dropped, the reader would see a gap and could not tell a
     failed stretch from a quiet one.
@@ -327,6 +336,342 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
         unclear,
     )
+
+
+# Text over silence (#181). whisper writes words where nobody speaks: about 220
+# over the 60 s of -60 dB noise in #148's fixture, at every anomaly-switch
+# setting. So after decoding, a run of LOUDNESS_FRAME_S frames all quieter than
+# SILENCE_DB that lasts SILENCE_MIN_S or more is silence, and a word that starts
+# more than SILENCE_EDGE_S inside one is taken out.
+#
+# Measured 2026-10-02 by scratch/speech_loudness.py over 41 transcripts and
+# 84,153 words of #148's fixture and the owner's five recordings, no model run
+# (numbers on #181):
+#
+# - The fixture's gaps are -60.0 dB RMS, loudest 0.1 s frame -59.7.
+#   SILENCE_DB is 4.7 dB above that.
+# - Inside the fixture's real speech no run of frames below -55 dB lasts longer
+#   than 0.5 s, so SILENCE_MIN_S is ten times the longest. The loudest frame
+#   within 1 s of a word's start is -21.1 dB or louder for 99.9% of its words.
+# - On the owner's files the rule finds runs on one file only, 094234, all in
+#   a passage from 19:51 to 25:34 whose frames have a median of -75 dB, where
+#   whisper's words repeat (1 to 16 distinct among 7 to 67 per transcript).
+#   -50 dB, or 3 s, would already take 12 or 13 words on 101117 from quiet runs
+#   of 3.5 to 5.9 s that nothing shows to be empty.
+# - Edges: whisper starts a real word up to 0.52 s before the speech it belongs
+#   to (17 words at the fixture's gap ends across 10 transcripts, 11 of them the
+#   next clip's first word), so a word that close to an edge stays.
+# - Every level above is the source media decoded to float, 16 kHz mono, and
+#   transcribe() reads it the same way (#193). The owner's files are stereo,
+#   and the 16-bit wav dsj extracts from them reads 3.01 dB quieter, enough to
+#   find silences on 101117 that are not there.
+LOUDNESS_FRAME_S = 0.1
+SILENCE_DB = -55.0
+SILENCE_MIN_S = 5.0
+SILENCE_EDGE_S = 1.0
+NO_SPEECH_REASON = "no speech"
+
+
+def silences(
+    frame_db: NDArray[np.float64], frame_s: float = LOUDNESS_FRAME_S
+) -> list[tuple[float, float]]:
+    """Every run of frames below SILENCE_DB lasting SILENCE_MIN_S or more, as (start, end) seconds.
+
+    `frame_db` is dsj.media.loudness's output, one dBFS value per `frame_s`.
+    """
+    quiet = np.concatenate([[False], frame_db < SILENCE_DB, [False]]).astype(np.int8)
+    edges = np.flatnonzero(np.diff(quiet))
+    min_frames = round(SILENCE_MIN_S / frame_s)
+    return [
+        (round(float(a * frame_s), 3), round(float(b * frame_s), 3))
+        for a, b in zip(edges[::2].tolist(), edges[1::2].tolist(), strict=True)
+        if b - a >= min_frames
+    ]
+
+
+def _without_silence(
+    transcription: Transcription, stretches: list[tuple[float, float]]
+) -> tuple[Transcription, list[dict[str, Any]]]:
+    """`transcription` without the words whisper wrote over silence, and where they were.
+
+    A token whose `t` lies more than SILENCE_EDGE_S inside one of `stretches`
+    leaves its sentence; a sentence left with no tokens leaves `sentences`, and
+    one left with some is rebuilt from them, its `text`, bounds and
+    `charOffset`s included. Each stretch that lost a token becomes one entry of
+    the payload's `unclear` list: its `start` and `end`, `reason` "no speech",
+    and how many words were taken from it. That is what tells it apart from a
+    repetition loop, which marks loud audio whisper failed to read (#140).
+
+    Done before _without_loops: a loop over silence (the fixture's 60 s gap) is
+    a stretch with no speech, not a stretch whisper could not read, so it is
+    reported as the first. A loop over loud audio is still a loop.
+    """
+    inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
+    words = [0] * len(stretches)
+    hit = [False] * len(stretches)
+    kept: list[Sentence] = []
+    changed = False
+    for s in transcription.sentences:
+        tokens: list[dict[str, Any]] = s["tokens"]
+        keep: list[dict[str, Any]] = []
+        for t in tokens:
+            where = next((i for i, (a, b) in enumerate(inner) if a <= t["t"] < b), None)
+            if where is None:
+                keep.append(t)
+            else:
+                hit[where] = True
+                words[where] += len(_WORD.findall(str(t["w"])))
+        if len(keep) == len(tokens):
+            kept.append(s)
+            continue
+        changed = True
+        if keep:
+            kept.append(
+                s
+                | {
+                    "start": min(t["t"] for t in keep),
+                    "end": max(t.get("e", t["t"]) for t in keep),
+                    "text": "".join(str(t["w"]) for t in keep),
+                    "tokens": with_char_offsets(keep),
+                }
+            )
+    unclear = [
+        {"start": a, "end": b, "reason": NO_SPEECH_REASON, "words": n}
+        for (a, b), n, h in zip(stretches, words, hit, strict=True)
+        if h
+    ]
+    if not changed:
+        return transcription, unclear
+    return (
+        Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
+        unclear,
+    )
+
+
+# Decoding a loop span again (#183). A loop is not a fixed property of the
+# audio: two identical runs on 094234 gave 86 and 343 loop seconds (#100). So
+# after a whisper run, the part of each loop's span that is not silence and
+# that no other sentence covers is cut out with RETRY_PAD_S either side and
+# decoded alone, first with RETRY_PLAIN, then, only if that loops or returns
+# RETRY_MIN_WORDS words or fewer, with RETRY_WARM. The first result with no
+# loop sentence and more than RETRY_MIN_WORDS words inside that part replaces
+# the loop; a span both fail stays a loop and goes to `unclear` as before.
+# Under --roman-urdu the two are language ur with no prompt at temperature 0,
+# and the Roman prompt at temperature 0.4.
+#
+# Measured 2026-10-02 by scratch/redecode_probe.py (#183): 38 loop spans, 818
+# loop seconds, of four 120 s anchored turbo transcripts of the owner's
+# recordings 101117, 094234 (two runs) and 171500. Each option alone recovered
+# 18 to 24 spans; plain then warm recovered 29 spans and 665 s (81%). Plain
+# first because it recovered the most on its own (24 spans, 531 s); warm
+# second because on 171500, mostly English, plain looped on 4 of 9 spans where
+# the prompted settings did not. Each retry took 1 to 10 s on a 30 s clip.
+# The same four transcripts through this code (scratch/retry_loops_run.py):
+# 26 of the 37 spans it retried recovered, 551 of their 787 loop seconds,
+# 1,494 words added, 42 to 129 s of wall time a file, and no sentence overlap
+# added. Fewer than the probe, for two measured reasons: two spans the probe
+# counted were almost wholly inside a neighbour (0.4 and 3.8 s left unread),
+# so its words there were duplicates; and warm samples at temperature 0.4, so
+# a span it reads on one run it can miss on the next (two did on 171500, one
+# went the other way). Not yet measured: whether the recovered text is right
+# (#182 is the check).
+#
+# parakeet and sherpa never retry: is_loop catches nothing they write, and
+# neither has a second set of settings to try. RETRY_LOOPS = False turns it
+# off.
+RETRY_LOOPS = True
+RETRY_PAD_S = 2.0
+RETRY_MIN_WORDS = 5
+RETRY_PLAIN: dict[str, Any] = {"initial_prompt": None, "temperature": 0.0}
+RETRY_WARM: dict[str, Any] = {"temperature": 0.4}
+
+type Decode = Callable[[float, float, dict[str, Any]], list[Sentence]]
+
+
+def _within(sentences: list[Sentence], start: float, end: float) -> list[Sentence]:
+    """`sentences` cut to the words that start in [start, end), each ending by `end`.
+
+    A retry decodes RETRY_PAD_S either side of the span so whisper hears the
+    words around it whole, and those words are already in the sentences on
+    either side. Kept, they would be written twice.
+    """
+    out: list[Sentence] = []
+    for s in sentences:
+        tokens = [
+            t | {"e": min(cast("float", t.get("e", t["t"])), end)}
+            for t in cast("list[dict[str, Any]]", s["tokens"])
+            if start <= t["t"] < end
+        ]
+        if tokens:
+            out.append(
+                {
+                    "start": min(t["t"] for t in tokens),
+                    "end": max(t["e"] for t in tokens),
+                    "text": "".join(str(t["w"]) for t in tokens),
+                    "tokens": with_char_offsets(tokens),
+                }
+            )
+    return out
+
+
+def _unread(start: float, end: float, others: list[Sentence]) -> tuple[float, float]:
+    """The part of [start, end) that no sentence in `others` covers, as (lo, hi).
+
+    A loop's span can share seconds with a neighbour. Before #190 every
+    anchored seam made one: a loop at the end of one window lay inside the
+    next window's first sentence (#183: on #148's fixture, 221 words timed
+    into 803.94 to 803.98 s, inside a sentence from 798.0 to 825.3 s), and
+    whisper's sentences can still run into a loop's span from either side.
+    Those seconds were read already. A
+    neighbour that runs into the span from before moves `lo` to its end; one
+    that starts inside the span moves `hi` to its start. `lo >= hi` means
+    nothing is left to read. `others` must be sorted by start.
+    """
+    lo, hi = start, end
+    for o in others:
+        if o["start"] <= lo < o["end"]:
+            lo = cast("float", o["end"])
+    for o in others:
+        if lo < o["start"] < hi:
+            hi = cast("float", o["start"])
+    return lo, hi
+
+
+def _retried(
+    transcription: Transcription,
+    stretches: list[tuple[float, float]],
+    decoder: Callable[[], Decode],
+    report: Callable[[Progress, str], None],
+) -> Transcription:
+    """`transcription` with each loop decoded again, and replaced where the retry reads.
+
+    Done after _without_silence and before _without_loops: a loop over silence
+    has already left as no speech, and a loop sentence whose span still crosses
+    a silent stretch is not retried either, so no retry can write over silence.
+    `decoder` is called once, and only when there is a loop to retry, because
+    it loads the audio.
+
+    Only the part of a loop's span that no other sentence covers is read again
+    (_unread), and the replacement is cut to it (_within), so a retried word
+    never lands inside a neighbour and nothing is written twice. A loop with no
+    such part is not retried and stays a loop. The result is put back in time
+    order all the same.
+
+    Reports state "retrying" once before the first span and once after each,
+    counting the seconds to be read again, so a long run does not look stuck.
+    """
+    inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
+    sentences = transcription.sentences
+    loops = [is_loop(str(s["text"])) for s in sentences]
+    read = [s for s, looped in zip(sentences, loops, strict=True) if not looped]
+    todo: list[tuple[int, float]] = []
+    for i, s in enumerate(sentences):
+        if not loops[i] or any(s["start"] < b and a < s["end"] for a, b in inner):
+            continue
+        lo, hi = _unread(s["start"], s["end"], read)
+        if lo < hi:
+            todo.append((i, hi - lo))
+    if not todo:
+        return transcription
+    total = sum(length for _, length in todo)
+    started = time.monotonic()
+    report(Progress(0.0, total, 0.0), "retrying")
+    decode = decoder()
+    done = 0.0
+    replaced: dict[int, list[Sentence]] = {}
+    for i, length in todo:
+        # Against the replacements made so far too: two loops can share seconds.
+        others = sorted(read + [r for got in replaced.values() for r in got],
+                        key=lambda o: cast("float", o["start"]))
+        lo, hi = _unread(sentences[i]["start"], sentences[i]["end"], others)
+        for options in (RETRY_PLAIN, RETRY_WARM) if lo < hi else ():
+            decoded = decode(lo - RETRY_PAD_S, hi + RETRY_PAD_S, options)
+            got = _within(decoded, lo, hi)
+            looped = any(is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded)
+            words = sum(len(_WORD.findall(str(s["text"]))) for s in got)
+            if not looped and words > RETRY_MIN_WORDS:
+                replaced[i] = got
+                break
+        done += length
+        report(Progress(done, total, time.monotonic() - started), "retrying")
+    if not replaced:
+        return transcription
+    kept = [r for i, s in enumerate(sentences) for r in replaced.get(i, [s])]
+    return _in_time_order(
+        Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept)
+    )
+
+
+def _without_overlaps(transcription: Transcription, *, merge: bool) -> Transcription:
+    """`transcription` with every token inside its sentence, and under whisper no two overlapping.
+
+    The last step before the payload is written. Under every engine it checks
+    that each token's `t` and `e` lie within its own sentence's bounds. With
+    `merge`, which transcribe() sets for whisper only, it also makes sure a
+    sentence ends by the time the next one starts.
+
+    Two overlapping whisper sentences are written as one, their tokens in time
+    order: every word and every time kept as decoded, where moving or clipping
+    times would write times no decoder gave. whisper's anchored windows wrote
+    the same speech twice at their seams (#190); _owned in dsj/whisper.py now
+    gives each second to one window, and on #148's fixture and the owner's
+    101117 whisper reached here with nothing to merge. A merge is logged.
+
+    parakeet and sherpa are left as they are, overlaps included (#192). Their
+    vendored chunk merge can time a word seconds early at a seam
+    (_in_time_order), so the sentence holding it starts inside the one before:
+    measured 2026-10-02, 1 pair on a 6 minute parakeet run of
+    scratch/clip360.wav, 17 to 33 on three older long parakeet transcripts.
+    Merging those puts two speakers' words in one sentence under one label
+    (tests/test_suno.py's seam case went from labels [0, 1, 1] to [1]), so
+    their fix is a split at the seam, not a merge.
+
+    A token outside its sentence raises, under every engine, because no path
+    here makes one: the engines' bounds are widened to their tokens
+    (_in_whole_milliseconds), and every later step that drops tokens rebuilds
+    the bounds from the ones left. None was found on that parakeet run or the
+    three older transcripts. One appearing means a step was broken, and a test
+    should stop there rather than write a file whose words point outside their
+    sentence.
+
+    Raises:
+        RuntimeError: if a token lies outside its sentence.
+    """
+    if not merge:
+        _tokens_inside(transcription.sentences)
+        return transcription
+    ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
+    out: list[Sentence] = []
+    merged = 0
+    for s in ordered:
+        if out and s["start"] < out[-1]["end"]:
+            prev = out[-1]
+            tokens = sorted([*prev["tokens"], *s["tokens"]], key=lambda t: cast("float", t["t"]))
+            out[-1] = prev | {
+                "start": min(prev["start"], s["start"]),
+                "end": max(prev["end"], s["end"]),
+                "text": "".join(str(t["w"]) for t in tokens),
+                "tokens": with_char_offsets(tokens),
+            }
+            merged += 1
+        else:
+            out.append(s)
+    _tokens_inside(out)
+    if not merged:
+        return transcription._replace(sentences=out)
+    logger.info("%d overlapping sentence pairs written as one", merged)
+    return Transcription(text="".join(str(s["text"]) for s in out).strip(), sentences=out)
+
+
+def _tokens_inside(sentences: list[Sentence]) -> None:
+    """Raise if any token lies outside its own sentence (_without_overlaps says why)."""
+    for s in sentences:
+        for t in s["tokens"]:
+            if not s["start"] <= t["t"] <= t.get("e", t["t"]) <= s["end"]:
+                raise RuntimeError(
+                    f"token at {t['t']} s lies outside its sentence "
+                    f"({s['start']} to {s['end']} s); a step before the payload broke its bounds"
+                )
 
 
 def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
@@ -434,6 +779,22 @@ def _label_speakers(
         # a user who asked for speaker labels and silently got none would have
         # no way to tell that from a recording with one speaker.
         logger.warning("diarization skipped: %s", exc)
+        return payload
+    except Exception as exc:
+        # Not something the boundary foresaw, so it keeps its own type; but the
+        # transcript above it is complete, and exiting 1 over it would make a
+        # script or agent driving dsj throw a finished transcript away. senko's
+        # clustering dying inside numba's cache save (#186) was the case that
+        # did. Only the diarizer's call is covered: a bug in the merge below
+        # still takes the run down. Exception, not BaseException, so Ctrl-C
+        # still stops the run.
+        if require:
+            raise
+        logger.warning(
+            "speaker labelling failed, transcript left unlabelled: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         return payload
 
     speakers = label_sentences(payload["sentences"], result.turns)
@@ -577,6 +938,18 @@ def transcribe(
         else:
             audio = media
 
+        # Read from `media`, never from the extracted wav: SILENCE_DB was placed
+        # on the float decode of the source, and ffmpeg mixes stereo to mono at
+        # 0.5 + 0.5 for the wav's 16 bits but 0.707 + 0.707 for float, so every
+        # frame of a stereo recording reads 3.01 dB quieter in the wav (#193).
+        # On the owner's stereo files that found two silences on 101117 that
+        # #181 measured are not there. A mono source decodes the same either
+        # way. Before the decode, not after it: one cheap pass (measured 0.13 s
+        # for the fixture's 14 minutes of wav, 0.6 s and 1.6 s for 13 and 28
+        # minutes of m4a, 0.5 s for a 1.5 GB, 10 minute .mov), and audio ffmpeg
+        # cannot read fails here rather than after an hour of whisper.
+        stretches = silences(media_mod.loudness(media, LOUDNESS_FRAME_S))
+
         ckpt_path: Path | None = None
         resumed_from_s = 0.0
         # The recording's length as this run's transcription frames report it,
@@ -711,10 +1084,31 @@ def transcribe(
         # reach it through the chunk loop above, whisper through its own window
         # loop, and both can emit a sentence that starts before the one printed
         # ahead of it. Text first, so the order is rebuilt from the final text.
-        # Loops last, so `unclear` comes out in the same order as `sentences`.
-        transcription, unclear = _without_loops(
-            _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
+        # Silence before loops, so a loop over silence is reported as no
+        # speech (#181), and before the retry, so no loop over silence is
+        # decoded again (#183); both last, so `unclear` comes out in the same order as
+        # `sentences`.
+        transcription, no_speech = _without_silence(
+            _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription))),
+            stretches,
         )
+        # whisper's loops get one more decode each before they are given up
+        # on (#183); the chunk engines write none to retry.
+        if spec.kind == "file" and RETRY_LOOPS:
+            whisper_model = model_id
+            transcription = _retried(
+                transcription,
+                stretches,
+                lambda: redecoder(
+                    audio, model_id=whisper_model, language=language, prompt=prompt
+                ),
+                report,
+            )
+        transcription, loops = _without_loops(transcription)
+        # After the loops leave, so a loop never merges into a real sentence
+        # and hides from is_loop. Merging is whisper's only (#192).
+        transcription = _without_overlaps(transcription, merge=spec.kind == "file")
+        unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
@@ -727,7 +1121,8 @@ def transcribe(
             "text": transcription.text,
             # Always written, `[]` when nothing was taken out, so that a
             # transcript without the key reads as one written before the loop
-            # check existed rather than one the check passed. Ahead of
+            # check existed rather than one the check passed. Two reasons:
+            # "repetition loop" (#140) and "no speech" (#181). Ahead of
             # `sentences`, which is most of the file's bytes.
             "unclear": unclear,
             "sentences": transcription.sentences,

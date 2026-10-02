@@ -49,20 +49,40 @@ Inside an `unclear` entry:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | The span of the sentence that was taken out, in whole milliseconds like a sentence's. |
-| `reason` | string | Why. Today always `repetition loop`. |
+| `start`, `end` | float seconds | For a loop, the span of the sentence that was taken out, in whole milliseconds like a sentence's. For no speech, the silent stretch, to the 0.1 s frame. |
+| `reason` | string | Why: `repetition loop` or `no speech`. |
 | `words` | int | How many words the engine wrote there. The words themselves are not kept. |
 
 **A repetition loop** is a sentence of more than six words, at most a third of them
 distinct: whisper writing one letter or a short phrase over and over, up to about 220
 times in one window. On four of the owner's recordings loops covered 133 to 752 seconds a
 file, over audio as loud as the speech around them, so most mark speech whisper failed to
-read, not silence; on the public fixture one sat over 60 s of near-silence instead. The text is no guide to what was said
-there, so it is left out of `sentences` and `text`, and the span stays here so the gap is
-not read as a pause. To know what was said, listen to the span or transcribe it again.
-On the five whisper transcripts the rule was measured on, every sentence it matched was a
-loop. It runs under every engine; on a parakeet transcript of a 17-minute English call it
-matched nothing.
+read, not silence. The text is no guide to what was said there, so it is left out of
+`sentences` and `text`, and the span stays here so the gap is not read as a pause. Under
+whisper each loop span is first decoded again on its own, with 2 s either side, once
+without the prompt at temperature 0 and, if that loops too, once with the run's prompt at
+temperature 0.4. Only the part of the span no other sentence covers is read again, and a
+loop with no such part is left as it is. The first attempt
+with no loop and more than five words in that part replaces the loop in `sentences`, cut
+to it, so no word is written twice; a loop that survives both is recorded here. On four of the owner's transcripts the two attempts recovered 26 of the 37 loop
+spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a file. The
+second attempt samples, so a rerun can recover a different set. A
+recovered span reads like any other sentence, and whether its words are right is not yet
+measured. To know what was said in a span listed here, listen to it. On the five whisper transcripts
+the rule was measured on, every sentence it matched was a loop. It runs under every
+engine; on a parakeet transcript of a 17-minute English call it matched nothing.
+
+**No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
+than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
+public fixture. The level is read from the input file decoded to mono float, where ffmpeg
+mixes a stereo recording at 0.707 of each channel, the scale the threshold was measured on. Every word that starts more than 1 s inside the stretch is taken out, and
+the stretch is recorded with how many there were. A word within 1 s of its edge stays,
+because whisper starts a real word up to half a second before its speech. Unlike a loop,
+there is nothing to listen to: the audio is silent. The check runs before the loop check,
+so a loop written over silence is reported as `no speech`. It runs under every engine. On
+the measured set it found silence only on the fixture's three gaps and in one near-silent
+passage of one of the owner's recordings, and nowhere in speech; the thresholds and their
+measurement sit beside `SILENCE_DB` in `dsj/suno.py`.
 
 **Test for the key.** Transcripts written before it existed have no `unclear`, and their
 loops are still in `sentences`. Imports from SRT and VTT have none either: nothing checked
@@ -72,7 +92,7 @@ Inside a sentence:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. |
+| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. Under whisper a sentence ends at or before the next one's `start`; under parakeet and sherpa one can overlap the next at a chunk seam (below). |
 | `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
@@ -148,9 +168,10 @@ key, not for the length of the list:
 jq 'has("diarization")' transcript.json
 ```
 
-Diarization is fail-soft. If senko cannot run, the transcript is still written, still
-correct, and simply carries no labels, and a `diarization skipped: ...` line goes to
-stderr. `--require-diarize` turns that into a failure instead.
+Diarization is fail-soft. If senko cannot run, or crashes while it runs, the transcript
+is still written, still correct, and simply carries no labels, and a `diarization
+skipped: ...` or `speaker labelling failed, ...` line goes to stderr. `--require-diarize`
+turns that into a failure instead.
 
 ## Marks, added by `dekho`
 
@@ -218,6 +239,15 @@ promised; the times are not exact. A recording over 120 s is transcribed in over
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case 5.72 s,
 which pulls its whole sentence that far earlier in the list.
 
+**Under whisper no two sentences overlap**: each ends at or before the next one's
+`start`. Each of the 6 s two of whisper's two-minute windows share is written by one of
+them, its own half by default or all of it by the one that did not loop there, so the same
+speech is not written twice at a seam (#190); two whisper sentences that still overlap are
+written as one, every word and time as decoded. **Under parakeet and sherpa they can
+overlap** at a chunk seam: a word timed seconds early starts its sentence inside the one
+before, 1 pair on a 6-minute parakeet run. They are left apart, because one merged
+sentence would put two speakers under one label (#192).
+
 ## The status heartbeat, written by `--status`
 
 One JSON object, rewritten in full on every update, replaced atomically so a reader never
@@ -231,7 +261,7 @@ sees half of one. It is not a log and not JSONL.
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string | `extracting`, `running`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
+| `state` | string | `extracting`, `running`, `retrying`, `diarizing`, `done`, or `failed`. **This is the only reliable completion signal.** |
 | `audio_done_s`, `audio_total_s` | float seconds | Of audio, not wall clock. |
 | `elapsed_s` | float seconds | Wall clock **for the current phase**, not for the run. Extraction and transcription each restart it, because one runs at about 1000x realtime and the other at about 13x, so a shared clock would make both speeds meaningless. |
 | `resumed_from_s` | float seconds | Audio a previous run already transcribed. `0.0` otherwise. |
@@ -269,6 +299,7 @@ How often each state is written:
 | `extracting` | About twice a second, and only when the input is not already a 16 kHz mono wav |
 | `running` (parakeet, sherpa) | Once per chunk, so once per 105 seconds of audio |
 | `running` (whisper) | With `--roman-urdu`, once per window of about two minutes: dsj cuts the windows itself. Any other whisper run, **once, at 0%**, then nothing until transcription ends: mlx-whisper takes no progress callback |
+| `retrying` | whisper only, and only when it wrote a repetition loop over audio that is not silent: once before the first loop span is decoded again, then once after each. `audio_done_s` and `audio_total_s` count the seconds of those loop spans, not the recording, so `fraction` and `eta_s` describe the retry |
 | `diarizing` | **Exactly twice**, at the start and the end. Senko has no per-chunk callback and inventing a bar would be a lie |
 | `done` | Once |
 
