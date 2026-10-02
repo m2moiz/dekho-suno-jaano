@@ -104,6 +104,10 @@ async function clickWord(page: Page, word: string) {
       const text = p.firstChild as Text;
       const i = text.data.indexOf(word);
       if (i < 0) continue;
+      // Into the middle of the window first, as a person would: a word under
+      // the sticky player is not there to click, and the click would land on
+      // the picture instead, which Chromium takes as play.
+      p.scrollIntoView({ block: "center" });
       const range = document.createRange();
       range.setStart(text, i);
       range.setEnd(text, i + word.length);

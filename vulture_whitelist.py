@@ -122,3 +122,30 @@ whitelist.import_recording  # dsj/ui/routes/recording.py, the same: @router.post
 # fields from it; FastAPI then serializes them. Nothing reads either as an
 # attribute (#113).
 whitelist.default_model  # dsj/ui/jobs.py EngineChoice, dsj/ui/schemas.py Engine
+whitelist.read_edits  # dsj/ui/routes/marks.py, the same: @router.get registers it
+
+# The page's half of the wire format (#155): pydantic reads every field of these
+# models when FastAPI serializes or parses a request, and `just api` generates
+# ui/src/api/schema.d.ts from them, where the page reads each one. Nothing in
+# Python reads them as attributes, so a branch that changes dsj/ui/schemas.py
+# sees them as unused. Each is read on the page or by dsj/ui/jobs.py.
+whitelist.finished_at  # dsj/ui/schemas.py Transcript
+whitelist.diarized  # dsj/ui/schemas.py Transcript
+whitelist.speaker_count  # dsj/ui/schemas.py Transcript
+whitelist.mark_count  # dsj/ui/schemas.py Transcript
+whitelist.size_bytes  # dsj/ui/schemas.py Recording
+whitelist.audio_codec  # dsj/ui/schemas.py Recording
+whitelist.first_seen  # dsj/ui/schemas.py Recording
+whitelist.unreadable  # dsj/ui/schemas.py Recording
+whitelist.reason  # dsj/ui/schemas.py Engine
+whitelist.diarize  # dsj/ui/schemas.py TranscribeRequest, read by dsj/ui/jobs.py
+whitelist.start_over  # dsj/ui/schemas.py TranscribeRequest, read by dsj/ui/jobs.py
+whitelist.reports_progress  # dsj/ui/schemas.py Job
+whitelist.started_at  # dsj/ui/schemas.py Job
+whitelist.fraction  # dsj/ui/schemas.py Job
+whitelist.audio_done_s  # dsj/ui/schemas.py Job
+whitelist.elapsed_s  # dsj/ui/schemas.py Job
+whitelist.eta_s  # dsj/ui/schemas.py Job
+whitelist.stalled_s  # dsj/ui/schemas.py Job
+whitelist.error  # dsj/ui/schemas.py Job
+whitelist.notes  # dsj/ui/schemas.py Job

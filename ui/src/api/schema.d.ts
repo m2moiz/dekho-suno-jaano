@@ -213,6 +213,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Edits
+         * @description The transcript's edit list: as last saved, or as the transcript made it.
+         *
+         *     A transcript without word end times (before v0.2.0, or a `dsj parho`
+         *     import) has none, and is answered 422 with the reason: it still reads,
+         *     but cannot be edited without guessing where each word stops.
+         */
+        get: operations["read_edits_api_transcripts__transcript_id__edits_get"];
+        /**
+         * Save Edits
+         * @description Save the page's edit list in place of the last one, or refuse it whole, naming the entry.
+         */
+        put: operations["save_edits_api_transcripts__transcript_id__edits_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -260,6 +288,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        EditEntry: components["schemas"]["ParagraphEntry"] | components["schemas"]["ItemEntry"];
+        /**
+         * Edits
+         * @description A transcript's edit list as the page edits it, and what it needs beside it.
+         */
+        Edits: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+            /** Pad S */
+            pad_s: number;
+            /** Edited At */
+            edited_at: string | null;
+        };
+        /**
+         * EditsUpdate
+         * @description The page's whole edit list, to save in place of the one before.
+         */
+        EditsUpdate: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+        };
         /**
          * Engine
          * @description One engine the picker offers, and whether it can run on this machine.
@@ -277,6 +326,32 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ItemEntry
+         * @description A stretch of one source's audio and the text said in it (dsj.hatao.Item).
+         *
+         *     The keys are the file's own, `sourceStart` included, so the page writes the
+         *     format `dsj hatao` reads.
+         */
+        ItemEntry: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "item";
+            /** Source */
+            source: string;
+            /** Sourcestart */
+            sourceStart: number;
+            /** Length */
+            length: number;
+            /** Text */
+            text: string;
+            /** Muted */
+            muted: boolean;
+            /** Confidence */
+            confidence: number | null;
         };
         /**
          * Job
@@ -320,6 +395,21 @@ export interface components {
         };
         /** @enum {string} */
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
+        /**
+         * ParagraphEntry
+         * @description Opens a run of words: who said them and in which language (dsj.hatao.Paragraph).
+         */
+        ParagraphEntry: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "paragraph";
+            /** Speaker */
+            speaker: string | null;
+            /** Language */
+            language: string | null;
+        };
         /**
          * Recording
          * @description One recording, wherever it was last seen, with every transcript of it.
@@ -662,6 +752,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_edits_api_transcripts__transcript_id__edits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_edits_api_transcripts__transcript_id__edits_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
                 };
             };
             /** @description Validation Error */

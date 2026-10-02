@@ -203,6 +203,13 @@ describe("TranscriptPage", () => {
         return Response.json(doc([sentence(0, [" Hello", " there."])]));
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3, -5, 5]));
+      // Its tokens have no `e`, so the server says it cannot be edited (#66).
+      if (path === "/api/transcripts/7/edits") {
+        return Response.json(
+          { error: "TranscriptUnusable", message: "sentence 0, token 0 has no end time `e`.", request: path },
+          { status: 422 },
+        );
+      }
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
@@ -211,11 +218,14 @@ describe("TranscriptPage", () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByText(" Hello there.", { normalizer: (s) => s })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "review.m4a" })).toBeTruthy();
-    // The library, the transcript and the waveform; the recording itself is the
-    // <audio> element's own request, with the token in its query (#59).
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    // The library, the transcript, its edit list and the waveform; the
+    // recording itself is the <audio> element's own request, with the token in
+    // its query (#59).
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     const sent = fetchMock.mock.calls.map(([request]) => request.headers.get("Authorization"));
-    expect(sent).toEqual(["Bearer a-token", "Bearer a-token", "Bearer a-token"]);
+    expect(sent).toEqual(["Bearer a-token", "Bearer a-token", "Bearer a-token", "Bearer a-token"]);
+    // A transcript without word ends reads, and says why it cannot be edited.
+    expect(screen.getByRole("note").textContent).toContain("cannot be edited");
     expect(document.querySelector("audio")?.getAttribute("src")).toBe("/api/recording/2/media?t=a-token");
     expect(currentError()).toBeNull();
   });

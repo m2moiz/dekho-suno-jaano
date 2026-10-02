@@ -573,6 +573,16 @@ running, and a transcription started from the page outlives the window. Run
 `dsj ui` again while it is open and you get the running one's address, not a
 second copy.
 
+A transcript with word end times (v0.2.0 on) can be edited in the app: select
+words and mute them. An edit changes the transcript's edit list, the same file
+`dsj hatao` walks, kept beside the library in `edits/`; the recording and the
+transcript JSON are never written to. Every edit is saved as you make it.
+Cmd+Z undoes and Cmd+Shift+Z redoes, up to 1,000 steps, stepping only through
+edits, never through clicks, scrolling or playback. **The undo history does not
+survive closing or reloading the page:** the edits do, their history does not.
+An older transcript, or a `parho` import, reads as before and says why it
+cannot be edited.
+
 It follows the Mac's light or dark Appearance, live, until you pick Light or
 Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
 the browser's per-port storage, survives the new port each launch gets.

@@ -1,24 +1,33 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { EditBar, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
+import { type Editable, loadEditable, useContent, useSave } from "@/features/edit/editing";
+import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { Player } from "@/features/player/Player";
-import { parseTranscript, read, type Reading } from "./document";
+import { parseTranscript, read, type Reading, type TranscriptDoc } from "./document";
 import { TranscriptView } from "./TranscriptView";
 import { UnsureToggle } from "./UnsureToggle";
 
-type Opened = { recording: RecordingRow; model: string; reading: Reading };
+type Opened = {
+  recording: RecordingRow;
+  doc: TranscriptDoc;
+  /** The edit list, or why this transcript has none (#66). */
+  editable: Editable | { reason: string };
+};
 type Loaded = { state: "loading" } | { state: "failed" } | ({ state: "ready" } & Opened);
 
 async function open(recordingId: number, transcriptId: number): Promise<Opened> {
   const transcriptRoute = `/api/transcripts/${transcriptId}`;
-  const [list, file] = await Promise.all([
+  const [list, file, editable] = await Promise.all([
     api.GET("/api/recordings"),
     api.GET("/api/transcripts/{transcript_id}", {
       params: { path: { transcript_id: String(transcriptId) } },
     }),
+    loadEditable(transcriptId),
   ]);
   if (list.data === undefined) {
     throw new ApiError(fromBody(list.error, list.response, "/api/recordings"));
@@ -34,14 +43,12 @@ async function open(recordingId: number, transcriptId: number): Promise<Opened> 
       request: transcriptRoute,
     });
   }
-  const doc = parseTranscript(file.data);
-  return { recording, model: doc.model, reading: read(doc) };
+  return { recording, doc: parseTranscript(file.data), editable };
 }
 
-/** One transcript, opened from the library, to read (#58). */
+/** One transcript, opened from the library, to read (#58) and to edit (#66). */
 export function TranscriptPage({ recording, transcript }: { recording: number; transcript: number }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
-  const article = useRef<HTMLElement>(null);
   useEffect(() => {
     let live = true;
     open(recording, transcript).then(
@@ -69,25 +76,76 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
       {loaded.state === "failed" && (
         <p className="text-muted-foreground">This transcript could not be opened.</p>
       )}
-      {loaded.state === "ready" && (
-        <>
-          <header className="mb-8 flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-balance">{fileName(loaded.recording.path)}</h2>
-              <p className="text-sm text-muted-foreground">{loaded.model}</p>
-            </div>
-            <UnsureToggle reading={loaded.reading} model={loaded.model} article={article} />
-          </header>
-          <TranscriptView reading={loaded.reading} articleRef={article} />
-          {loaded.recording.missing ? (
-            <p className="sticky bottom-0 mt-8 border-t bg-background/95 py-3 text-sm text-muted-foreground">
-              The recording is not where it was last seen, so this transcript cannot play. Last seen at{" "}
-              <span className="font-mono break-all">{loaded.recording.path}</span>
-            </p>
-          ) : (
-            <Player recording={loaded.recording} reading={loaded.reading} article={article} />
-          )}
-        </>
+      {loaded.state === "ready" &&
+        ("editor" in loaded.editable ? (
+          <EditablePage opened={loaded} editable={loaded.editable} transcriptId={transcript} />
+        ) : (
+          <ReadOnlyPage opened={loaded} reason={loaded.editable.reason} />
+        ))}
+    </>
+  );
+}
+
+function ReadOnlyPage({ opened, reason }: { opened: Opened; reason: string }) {
+  const reading = useMemo(() => read(opened.doc), [opened.doc]);
+  const article = useRef<HTMLElement>(null);
+  return (
+    <Page opened={opened} reading={reading} article={article}>
+      <p className="mb-6 text-sm text-muted-foreground" role="note">
+        This transcript cannot be edited: {reason}
+      </p>
+    </Page>
+  );
+}
+
+function EditablePage({ opened, editable, transcriptId }: { opened: Opened; editable: Editable; transcriptId: number }) {
+  const { editor } = editable;
+  const content = useContent(editor);
+  const previous = useRef<EditReading | null>(null);
+  const edit = useMemo(() => {
+    const next = keepReading(previous.current, readContent(content, opened.doc.speakers));
+    previous.current = next;
+    return next;
+  }, [content, opened.doc.speakers]);
+  const article = useRef<HTMLElement>(null);
+  const saving = useSave(transcriptId, editor);
+  const selected = useSelection(edit, article);
+  useUndoKeys(editor);
+  useMutedPaint(edit, content, article);
+  return (
+    <Page opened={opened} reading={edit.reading} article={article}>
+      <EditBar editor={editor} content={content} edit={edit} selected={selected} saving={saving} />
+    </Page>
+  );
+}
+
+type PageProps = {
+  opened: Opened;
+  reading: Reading;
+  article: RefObject<HTMLElement | null>;
+  children?: ReactNode;
+};
+
+function Page({ opened, reading, article, children }: PageProps) {
+  const { recording, doc } = opened;
+  return (
+    <>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-balance">{fileName(recording.path)}</h2>
+          <p className="text-sm text-muted-foreground">{doc.model}</p>
+        </div>
+        <UnsureToggle reading={reading} model={doc.model} article={article} />
+      </header>
+      {children}
+      <TranscriptView reading={reading} articleRef={article} />
+      {recording.missing ? (
+        <p className="sticky bottom-0 mt-8 border-t bg-background/95 py-3 text-sm text-muted-foreground">
+          The recording is not where it was last seen, so this transcript cannot play. Last seen at{" "}
+          <span className="font-mono break-all">{recording.path}</span>
+        </p>
+      ) : (
+        <Player recording={recording} reading={reading} article={article} />
       )}
     </>
   );

@@ -111,6 +111,9 @@ export function Player({ recording, reading, article }: Props) {
       },
     });
     playhead.current = head;
+    // Made again whenever the words change (an edit, #66), which can happen
+    // mid-play: the new loop starts at once rather than at the next `play`.
+    if (!element.paused) head.start();
 
     const started = () => {
       head.start();

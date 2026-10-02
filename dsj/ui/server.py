@@ -68,7 +68,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
 from dsj.ui.jobs import Jobs
-from dsj.ui.routes import jobs, media, recording
+from dsj.ui.routes import jobs, marks, media, recording
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -298,6 +298,7 @@ def create_app(
     app.include_router(recording.router)
     app.include_router(media.router)
     app.include_router(jobs.router)
+    app.include_router(marks.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     app.add_api_route("/api/bye", bye, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
