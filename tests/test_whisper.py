@@ -332,7 +332,7 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     payload = transcribe(fake_media, out, engine="whisper", diarize=False)
 
-    assert set(payload) == {"audio", "model", "text", "sentences"}
+    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
     assert payload["model"] == whisper_mod.DEFAULT_WHISPER_MODEL
     assert json.loads(out.read_text())["sentences"][0]["tokens"][0] == {
         "t": 0.0,

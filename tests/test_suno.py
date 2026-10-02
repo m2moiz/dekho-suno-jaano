@@ -29,7 +29,7 @@ from dsj.alignment import AlignedResult, AlignedSentence, AlignedToken
 from dsj.checkpoint import checkpoint_path_for
 from dsj.diarize import DiarizationUnavailable
 from dsj.merge import Turn
-from dsj.suno import CHUNK_S, OVERLAP_S, Progress, transcribe
+from dsj.suno import CHUNK_S, LOOP_REASON, OVERLAP_S, Progress, is_loop, transcribe
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -703,7 +703,7 @@ def test_no_diarize_output_is_the_old_schema_exactly(
     payload = transcribe(fake_media, out, diarize=False)
 
     assert calls == []
-    assert set(payload) == {"audio", "model", "text", "sentences"}
+    assert set(payload) == {"audio", "model", "text", "unclear", "sentences"}
     assert set(payload["sentences"][0]) == {"start", "end", "text", "tokens"}
 
 
@@ -1140,6 +1140,111 @@ def test_a_sentences_text_is_its_tokens_joined(
     assert [t["w"] for t in sentence["tokens"]] == [".", " hello"]
     assert sentence["text"] == ". hello"
     assert payload["text"] == ". hello"
+
+
+@pytest.mark.parametrize(
+    ("text", "loop"),
+    [
+        # More than six words, and never fewer than two distinct allowed.
+        (" na" * 6, False),
+        (" na" * 7, True),
+        (" na ba" * 4, True),
+        # 7 words, 3 distinct: over max(2, 7/3).
+        (" na ba ka na ba na na", False),
+        # 12 words: 4 distinct is a third, 5 is over it.
+        (" a b c d" * 3, True),
+        (" a b c d" * 2 + " a b c e", False),
+        # Case and punctuation are not words.
+        (" Na, na. NA! na? na; na: na...", True),
+        (" so we looked at the column and then the row", False),
+    ],
+)
+def test_a_loop_is_over_six_words_and_at_most_a_third_distinct(text: str, loop: bool) -> None:
+    """The rule scratch/real_bench.py measured, at each of its edges (#140)."""
+    assert is_loop(text) is loop
+
+
+def _merge_with_a_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, returning a loop between two real sentences."""
+
+    def sentence(start: float, words: list[str]) -> AlignedSentence:
+        tokens = [
+            AlignedToken(id=i, text=w, start=start + i * 0.3, duration=0.2)
+            for i, w in enumerate(words)
+        ]
+        return AlignedSentence(text="".join(words), tokens=tokens)
+
+    sentences = [
+        sentence(1.0, [" We", " looked", " at", " it."]),
+        sentence(4.0, [" na"] * 9),
+        sentence(10.0, [" Then", " we", " left."]),
+    ]
+
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text="".join(s.text for s in sentences), sentences=sentences)
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader sees where decoding failed, and never the 200 copies of a letter (#140).
+
+    Taken out of `sentences` and `text` both, so the file does not disagree
+    with itself, and kept as a span with its word count, so the gap it leaves
+    is not mistaken for silence.
+    """
+    fake_parakeet(tokens=[])
+    _merge_with_a_loop(monkeypatch)
+    out = tmp_path / "out.json"
+
+    payload = transcribe(fake_media, out, diarize=False)
+
+    assert json.loads(out.read_text()) == payload
+    assert list(payload) == ["audio", "model", "text", "unclear", "sentences"]
+    assert [s["text"] for s in payload["sentences"]] == [" We looked at it.", " Then we left."]
+    assert payload["text"] == "We looked at it. Then we left."
+    assert payload["unclear"] == [
+        {"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}
+    ]
+    assert LOOP_REASON == "repetition loop"
+
+
+def test_a_transcript_with_no_loop_says_so_with_an_empty_list(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """`[]`, never absent: absence is what a transcript from before the check reads as."""
+    fake_parakeet(tokens=_tokens())
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    assert payload["unclear"] == []
+    assert len(payload["sentences"]) == 1
+
+
+def test_speaker_labelling_keeps_the_unclear_spans(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """The labelled rewrite copies every key it does not change, `unclear` included."""
+    fake_parakeet(tokens=[])
+    _merge_with_a_loop(monkeypatch)
+    fake_turns(**_one_speaker())
+    out = tmp_path / "out.json"
+
+    labelled = transcribe(fake_media, out)
+
+    assert "diarization" in labelled
+    assert [u["words"] for u in json.loads(out.read_text())["unclear"]] == [9]
 
 
 def test_speaker_turns_run_forwards_too(

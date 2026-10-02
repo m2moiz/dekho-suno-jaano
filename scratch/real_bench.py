@@ -38,8 +38,10 @@ scratch/urdu_cs/podcast.wav (`just urdu-fixture` builds it), transcribed with
 under the same never-overwrite rule. `fixture --transcript PATH` measures a
 transcript that already exists instead. Its extra columns count the words
 whose start falls inside each of the fixture's three quiet gaps (10, 30 and
-60 s): audio with no speech in it, so every word there was invented. That
-recording is public, so unlike the five files its text may be read.
+60 s): audio with no speech in it, so every word there was invented. A loop
+dsj took out (#140) keeps a word count and a span but no word times, so its
+words are counted into a gap in proportion to how much of its span lies in it.
+That recording is public, so unlike the five files its text may be read.
 
 Every table is printed and appended to scratch/real_bench/results.md, which is
 gitignored along with the rest of scratch/'s data.
@@ -50,12 +52,16 @@ Columns:
   sentences. Uses scratch/urdu_script_share.py's is_urdu, so the two agree.
 - -loops: the same with repetition loops removed. This is the drift number.
   On recording-20260922-171500 the two differ by 48 points, because its loops
-  are one Urdu letter repeated (#100, #140).
-- words: words in the transcript, loops included.
-- loop s: seconds in loop sentences; see is_loop for the rule. It is wider
-  than the one the 22 Sep session used, which missed loops that cycle three
-  or more words, so its baseline numbers are higher than the ones first
-  published on #149 (#140).
+  are one Urdu letter repeated (#100, #140). Since #140 dsj takes loops out of
+  `sentences` itself and keeps no text for them, so on a transcript written
+  since then urdu% and -loops are the same number.
+- words: words in the transcript, loops included: on a transcript written
+  since #140, the words left in `sentences` plus each `unclear` loop's count.
+- loop s: seconds in loop sentences, and since #140 in the payload's
+  `unclear` loop spans; see dsj.suno.is_loop for the rule. It is wider than
+  the one the 22 Sep session used, which missed loops that cycle three or more
+  words, so its baseline numbers are higher than the ones first published on
+  #149 (#140).
 - loop dB, speech dB: median per-second loudness inside loop sentences and
   inside every other sentence. Close numbers mean the loops are not over
   silence (#99).
@@ -90,6 +96,7 @@ from typing import Any
 import numpy as np
 from urdu_script_share import is_urdu
 
+from dsj.suno import LOOP_REASON, is_loop
 from dsj.whisper import ROMAN_URDU_PROMPT
 
 REPO = Path(__file__).resolve().parent.parent
@@ -138,29 +145,6 @@ class Row:
     agree_pct: float | None
 
 
-def is_loop(text: str) -> bool:
-    """A repetition loop: more than six words, and at most a third of them distinct.
-
-    Words are compared lowercased with punctuation stripped, the WORD pattern
-    agreement() uses. Never fewer than two distinct are allowed, so up to nine
-    words this is the 22 Sep session's rule (more than six words, at most two
-    distinct), and every sentence that rule caught this one catches too.
-
-    That rule missed loops that open with a few words and then repeat one, or
-    cycle a short phrase. On #148's fixture whisper wrote 221 words over the
-    60 s quiet gap, cycling three of them after a short start, and the old
-    rule counted none of it. On the four 22 Sep whisper transcripts it missed
-    14 loops of 21 to 223 words with 3 to 6 distinct. Measured 2026-09-23 over
-    those four, the English control's parakeet transcript and the fixture's
-    whisper one: the loops are at most 29% distinct (6 of 21), and every
-    other sentence of more than six words is at least 43% distinct (3 of 7),
-    so any cutoff between the two counts the same sentences. A third sits
-    inside that range with room on both sides.
-    """
-    words = [w.lower() for w in WORD.findall(text)]
-    return len(words) > 6 and len(set(words)) <= max(2, len(words) / 3)
-
-
 def loudness(audio: Path) -> np.ndarray:
     """Loudness of every whole second of `audio`, in dB relative to full scale."""
     raw = subprocess.run(
@@ -202,6 +186,30 @@ def words(sentences: list[dict[str, Any]]) -> list[str]:
     return [w.lower() for s in sentences for w in WORD.findall(s.get("text") or "")]
 
 
+def loop_spans(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every repetition loop in a transcript, old or new, as dicts with `start` and `end`.
+
+    Before #140 the loops sat in `sentences` and are found there by is_loop.
+    Since #140 dsj takes them out itself and records each in the payload's
+    `unclear` list with its span and word count but not its text, so they are
+    read from there too. A transcript has one or the other, never both, so
+    nothing is counted twice.
+    """
+    sentences: list[dict[str, Any]] = payload["sentences"]
+    return [s for s in sentences if is_loop(s.get("text") or "")] + loops_taken(payload)
+
+
+def loops_taken(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The loops dsj took out of `sentences` itself (#140); none before it."""
+    unclear: list[dict[str, Any]] = payload.get("unclear") or []
+    return [u for u in unclear if u.get("reason") == LOOP_REASON]
+
+
+def loop_words(payload: dict[str, Any]) -> int:
+    """Words in the loops dsj took out of `sentences`, from `unclear`; 0 before #140."""
+    return sum(int(u["words"]) for u in loops_taken(payload))
+
+
 def agreement(reference: Path, sentences: list[dict[str, Any]]) -> float:
     ref = words(json.loads(reference.read_text())["sentences"])
     hyp = words(sentences)
@@ -215,7 +223,7 @@ def measure(
 ) -> Row:
     payload = json.loads(transcript.read_text())
     sentences: list[dict[str, Any]] = payload["sentences"]
-    loops = [s for s in sentences if is_loop(s.get("text") or "")]
+    loops = loop_spans(payload)
     rest = [s for s in sentences if not is_loop(s.get("text") or "")]
     db = loudness(audio)
     loop_db, quiet = median_db(db, loops)
@@ -226,7 +234,7 @@ def measure(
         model=str(payload.get("model", "?")).rsplit("/", 1)[-1],
         minutes=len(db) / 60,
         sentences=len(sentences),
-        words=len(words(sentences)),
+        words=len(words(sentences)) + loop_words(payload),
         urdu_pct=urdu_pct(sentences),
         urdu_pct_no_loops=urdu_pct(rest),
         loop_s=sum(s["end"] - s["start"] for s in loops),
@@ -363,18 +371,35 @@ class FixtureRow:
 def measure_fixture(transcript: Path, wall_s: float | None) -> FixtureRow:
     truth = json.loads((FIXTURE / "ground_truth.json").read_text())
     gaps = [(g["start"], g["end"]) for g in truth["segments"] if g["kind"] == "gap"]
-    sentences: list[dict[str, Any]] = json.loads(transcript.read_text())["sentences"]
+    payload = json.loads(transcript.read_text())
+    sentences: list[dict[str, Any]] = payload["sentences"]
     starts = [float(t["t"]) for s in sentences for t in s.get("tokens") or []]
     rest = [s for s in sentences if not is_loop(s.get("text") or "")]
+    taken = loops_taken(payload)
     return FixtureRow(
         name=str(transcript.relative_to(REPO)) if transcript.is_relative_to(REPO) else str(transcript),
-        words=len(words(sentences)),
+        words=len(words(sentences)) + loop_words(payload),
         urdu_pct=urdu_pct(sentences),
         urdu_pct_no_loops=urdu_pct(rest),
-        loop_s=sum(s["end"] - s["start"] for s in sentences if is_loop(s.get("text") or "")),
-        gap_words=tuple(sum(1 for t in starts if a <= t < b) for a, b in gaps),
+        loop_s=sum(s["end"] - s["start"] for s in loop_spans(payload)),
+        gap_words=tuple(
+            sum(1 for t in starts if a <= t < b) + round(sum(share_in(u, a, b) * u["words"] for u in taken))
+            for a, b in gaps
+        ),
         speed=float(truth["duration_s"]) / wall_s if wall_s else None,
     )
+
+
+def share_in(span: dict[str, Any], a: float, b: float) -> float:
+    """How much of `span` lies inside [a, b), as a fraction of its length.
+
+    A loop dsj took out keeps its word count but not its word times, so its
+    words are spread evenly over its span to count how many fell in a gap.
+    """
+    length = span["end"] - span["start"]
+    if length <= 0:
+        return 1.0 if a <= span["start"] < b else 0.0
+    return max(0.0, min(span["end"], b) - max(span["start"], a)) / length
 
 
 def fixture_table(title: str, row: FixtureRow) -> str:

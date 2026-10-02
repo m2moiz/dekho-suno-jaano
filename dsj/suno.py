@@ -15,9 +15,11 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_WHISPER_MODEL",
     "ENGINES",
+    "LOOP_REASON",
     "OVERLAP_S",
     "Progress",
     "clock",
+    "is_loop",
     "main",
     "render_bar",
     "transcribe",
@@ -25,6 +27,7 @@ __all__ = [
 
 import json
 import logging
+import re
 import sys
 import tempfile
 import time
@@ -252,6 +255,77 @@ def _in_time_order(transcription: Transcription) -> Transcription:
     ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
     return Transcription(
         text="".join(str(s["text"]) for s in ordered).strip(), sentences=ordered
+    )
+
+
+# A word for is_loop: letters and digits, with one inner apostrophe allowed, so
+# "don't" is one word and punctuation is never one. The pattern
+# scratch/real_bench.py measured the rule with.
+_WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)?")
+
+LOOP_REASON = "repetition loop"
+
+
+def is_loop(text: str) -> bool:
+    """A repetition loop: more than six words, and at most a third of them distinct.
+
+    Words are compared lowercased with punctuation stripped. Never fewer than two
+    distinct are allowed, so up to nine words the rule is "more than six words,
+    at most two distinct", which is what whisper's worst loops are: one Urdu
+    letter repeated 100 to 200 times across a whole window (#140).
+
+    A third is a measured cutoff, not a guess. Measured 2026-09-23 over four
+    whisper transcripts of the owner's recordings, a parakeet transcript of an
+    English call and whisper's transcript of #148's public fixture: every loop
+    is at most 29% distinct (6 of 21), and every other sentence of more than six
+    words is at least 43% distinct (3 of 7), so any cutoff between the two
+    catches the same sentences. A third sits inside that range with room on
+    both sides. scratch/real_bench.py imports this, so the benchmark and the
+    product count loops by one rule.
+    """
+    words = [w.lower() for w in _WORD.findall(text)]
+    return len(words) > 6 and len(set(words)) <= max(2, len(words) / 3)
+
+
+def _without_loops(transcription: Transcription) -> tuple[Transcription, list[dict[str, Any]]]:
+    """`transcription` with its repetition loops taken out, and where they were.
+
+    whisper sometimes decodes a whole window as one letter or a short phrase
+    repeated (#140), and the loop text says nothing about what was there. On
+    the owner's recordings the audio under the loops is as loud as the speech
+    around them, so most mark speech whisper failed to read; on #148's public
+    fixture one sits over 60 s of near-silence, so not all do. Left in, a
+    reader gets 200 copies of a letter, and a search or a summary counts them
+    as words. Simply dropped, the reader would see a gap and could not tell a
+    failed stretch from a quiet one.
+
+    So each loop sentence leaves `sentences` and becomes one entry of the
+    payload's `unclear` list: its `start` and `end`, `reason`, and how many
+    words the loop had. Its text is not kept. Done after _in_time_order, so
+    `unclear` runs earliest first too, and `text` is rebuilt from what is left.
+    Under parakeet and sherpa the rule catches nothing, measured on the English
+    call above, and the transcription passes through untouched.
+    """
+    kept: list[Sentence] = []
+    unclear: list[dict[str, Any]] = []
+    for s in transcription.sentences:
+        text = str(s["text"])
+        if is_loop(text):
+            unclear.append(
+                {
+                    "start": s["start"],
+                    "end": s["end"],
+                    "reason": LOOP_REASON,
+                    "words": len(_WORD.findall(text)),
+                }
+            )
+        else:
+            kept.append(s)
+    if not unclear:
+        return transcription, unclear
+    return (
+        Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
+        unclear,
     )
 
 
@@ -635,7 +709,10 @@ def transcribe(
         # reach it through the chunk loop above, whisper through its own window
         # loop, and both can emit a sentence that starts before the one printed
         # ahead of it. Text first, so the order is rebuilt from the final text.
-        transcription = _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
+        # Loops last, so `unclear` comes out in the same order as `sentences`.
+        transcription, unclear = _without_loops(
+            _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
+        )
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
@@ -646,6 +723,11 @@ def transcribe(
             # reader can rely on it.
             "model": model_id,
             "text": transcription.text,
+            # Always written, `[]` when nothing was taken out, so that a
+            # transcript without the key reads as one written before the loop
+            # check existed rather than one the check passed. Ahead of
+            # `sentences`, which is most of the file's bytes.
+            "unclear": unclear,
             "sentences": transcription.sentences,
         }
         # Atomic for the same reason as the heartbeat, and more: `out` is what
