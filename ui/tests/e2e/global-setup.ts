@@ -3,6 +3,8 @@
 // on the port the kernel picked. Not Vite's dev server, which is a different
 // thing to test.
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
@@ -21,8 +23,12 @@ function firstLine(child: ChildProcess): Promise<string> {
 }
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
+  // A library of its own: the default one, and the ui.lock beside it, are the
+  // owner's, and a test run must neither read nor lock them.
+  const scratch = mkdtempSync(path.join(tmpdir(), "dsj-e2e-"));
   const server = spawn("uv", ["run", "dsj", "ui", "--print-url"], {
     cwd: REPO,
+    env: { ...process.env, DSJ_LIBRARY: path.join(scratch, "library.db") },
     stdio: ["ignore", "pipe", "inherit"],
   });
   const url = await firstLine(server);
@@ -33,5 +39,6 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     const exited = new Promise((resolve) => server.once("exit", resolve));
     server.kill("SIGTERM");
     await exited;
+    rmSync(scratch, { recursive: true, force: true });
   };
 }
