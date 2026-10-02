@@ -379,6 +379,13 @@ a failure instead.
 Every error class, its message, and its remedy are in
 [references/failures.md](references/failures.md).
 
+## Changing dsj itself
+
+From a clone, the check that a change works is `uv run just check`, never `uv run
+pytest` alone. `just check` runs the type checker, ruff and the fast tests; pytest skips
+the type checker, so a green pytest is no evidence. Paste the line `just check` ends
+with before calling the change done.
+
 ## References
 
 - [references/payload.md](references/payload.md): the transcript, marks, heartbeat and

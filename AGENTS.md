@@ -17,6 +17,14 @@ filed by any route is picked up before you see the list.
 Priority is P0 to P2. Effort is S (one pass), M (one session), L (spans sessions).
 <!-- gh-work:end -->
 
+## The gate
+
+Before calling any change done, run `uv run just check` and paste the line it ends
+with. Not `uv run pytest` alone, and not ruff alone: `just check` runs pyright on both
+configs, ruff and the fast suite, and pytest skips the type checker, so a green pytest is
+no evidence that `just check` passes. On 2026-09-22 two agents reported green from pytest
+while type errors sat in the tree (#96).
+
 ## Citing code in issues and docs
 
 Cite code inside a file that is actively edited, `dsj/suno.py` above all, by an `rg`
