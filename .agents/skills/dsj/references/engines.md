@@ -102,9 +102,24 @@ English words left in English where they were spoken in English.
 `--prompt` takes your own text instead. `--language` and `--prompt` are whisper's alone;
 passing either with parakeet is an error rather than a silent no-op.
 
-The model matters more than it looks. The full `whisper-large-v3` ignores the prompt
-outright and takes about two and a half times as long, so `whisper-large-v3-turbo` is the
-default here and changing it means re-measuring.
+The model matters more than it looks. Measured on the public Urdu-English fixture
+(`just urdu-fixture`, 854 seconds, 1,293 English words in the hand-checked reference), one
+run each, one whisper at a time on a 16 GB M2 (issue #33, 2026-10-02):
+
+| model | flags | English words recovered | Urdu script | speed |
+|---|---|---:|---:|---:|
+| `whisper-large-v3-turbo` | `--roman-urdu` | 89.6% | 3% | 3.41x |
+| `whisper-large-v3-turbo` | `--engine whisper --language ur` | 12.3% | 78% | 1.99x |
+| `whisper-large-v3-mlx` (full) | `--roman-urdu` | 59.4% | 63% | 0.50x, 23% memory free |
+| `whisper-large-v3-mlx` (full) | `--engine whisper --language ur` | 54.9% | 61% | 0.96x, 26% memory free |
+
+```bash
+dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model mlx-community/whisper-large-v3-mlx
+```
+
+Every run passed `--no-diarize`. The full model writes most of its text in Urdu script
+whatever the prompt says, so `whisper-large-v3-turbo` is the default here and changing it
+means re-measuring.
 
 ## sherpa, Android, and the proot constraint
 

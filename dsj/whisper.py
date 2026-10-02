@@ -46,10 +46,21 @@ fourth file's transcript no longer exists (#137). `anchor_s` re-seeds the
 prompt per window and bounds how far this can drift; `--roman-urdu` sets it.
 See `_anchored`.
 
-That trick is model-specific, and the difference is not subtle. The full
-whisper-large-v3 ignores the prompt completely -- 280 of 280 words in Urdu
-script, in 218s rather than 85s. Hence the default here is turbo, and changing
-it means re-measuring rather than assuming.
+That trick is model-specific, and the difference is not subtle. Measured on
+#148's public fixture (854s, 1,293 English words in the hand-checked
+reference), one run each, one whisper at a time on a 16 GB M2 (#33,
+2026-10-02):
+
+- whisper-large-v3-turbo, `--roman-urdu`: 89.6% of the reference's English
+  words recovered, 3% of the text in Urdu script, 3.41x realtime.
+- whisper-large-v3-mlx, the full model, `--roman-urdu`: 59.4%, 63%, 0.50x, with 23% of
+  memory free and 12.1 GB of swap in use while it ran.
+
+`just urdu-fixture`, then
+`dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>`.
+The full model writes most of its text in Urdu script whatever the prompt
+says, at 4 and 8 bits too, so the default here is turbo (DEFAULT_WHISPER_MODEL);
+changing it means re-running that comparison rather than assuming.
 """
 
 from __future__ import annotations
@@ -73,6 +84,11 @@ from typing import Any, cast
 
 from dsj.asr import Transcription, with_char_offsets
 
+# turbo, on #33's measurement (module docstring): on #148's fixture with
+# `--roman-urdu` it recovered 89.6% of the English words with 3% of its text in
+# Urdu script, at 3.41x realtime; the full whisper-large-v3 recovered 59.4%
+# with 63% in Urdu script, at 0.50x. The full model's 4-bit and 8-bit builds
+# stayed at 61 to 67% Urdu script, so precision is not what separates them.
 DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
 # whisper's own front end resamples to 16 kHz mono whatever it is handed, so

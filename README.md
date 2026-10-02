@@ -191,10 +191,21 @@ Latin, English words left in English where they were spoken in English, which
 is the point, for speech that switches mid-sentence. `--roman-urdu` is that
 prompt plus `--language ur`; `--prompt` takes your own.
 
-The model matters more than it looks. The full `whisper-large-v3` ignores the
-prompt outright — 280 of 280 words in Urdu script, and 218s rather than 85s for
-the same clip. Turbo is the default here for that reason, and changing it means
-re-measuring.
+The model matters more than it looks. On the public Urdu-English fixture
+(`just urdu-fixture`, 854s), one run each with `--roman-urdu`
+(m2moiz/dekho-suno-jaano#33):
+
+| model | English words recovered | Urdu script | speed |
+|---|---:|---:|---:|
+| `whisper-large-v3-turbo` | 89.6% | 3% | 3.41x realtime |
+| `whisper-large-v3-mlx` (full) | 59.4% | 63% | 0.50x, with 23% of memory free |
+
+```bash
+dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>
+```
+
+The full model writes most of its text in Urdu script whatever the prompt says.
+Turbo is the default here for that reason, and changing it means re-measuring.
 
 The whisper engine writes **no checkpoint**, so an interrupted run starts over:
 it owns its own window loop and exposes no hook to bank one from. How much
