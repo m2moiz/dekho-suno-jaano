@@ -396,6 +396,36 @@ def test_a_zero_length_word_is_muted_by_its_pad(recording: Path) -> None:
     assert hatao.spans_to_mute(doc, duration_s=2.0) == [(0.9, 1.1)]
 
 
+def test_a_twenty_second_word_mutes_no_more_than_the_ceiling(recording: Path) -> None:
+    """Whisper can end a word 20 s late, swallowing the pause and the speech after it (#212)."""
+    payload = _spoken([" x", " y"])
+    tokens = payload["sentences"][0]["tokens"]
+    tokens[0]["e"] = 21.0  # " x" at 0.0, its end put 21 s on, through a long pause
+    tokens[1].update(t=25.0, e=25.5)  # " y" after the pause, so only the ceiling cuts " x"
+    doc = hatao.from_transcript(payload, recording, duration_s=30.0)
+    doc = hatao.mute(doc, *next(hatao._words(doc)))  # pyright: ignore[reportPrivateUsage]
+    spans, capped = hatao._mute_plan(  # pyright: ignore[reportPrivateUsage]
+        doc, duration_s=30.0, pad_s=0.1, max_word_s=hatao.MAX_WORD_S
+    )
+    assert spans == hatao.spans_to_mute(doc, duration_s=30.0)
+    assert spans == [(0.0, round(hatao.MAX_WORD_S + 0.1, 3))]
+    assert spans[0][1] - spans[0][0] <= hatao.MAX_WORD_S + 0.1
+    assert capped == [hatao.Capped(0.0, 21.0, hatao.MAX_WORD_S)]
+
+
+def test_a_muted_word_stops_where_the_next_word_starts(recording: Path) -> None:
+    payload = _spoken([" x", " y"])
+    payload["sentences"][0]["tokens"][0]["e"] = 1.3  # runs 0.3 s into " y" at 1.0
+    doc = hatao.from_transcript(payload, recording, duration_s=2.0)
+    doc = hatao.mute(doc, *next(hatao._words(doc)))  # pyright: ignore[reportPrivateUsage]
+    assert hatao.spans_to_mute(doc, duration_s=2.0, pad_s=0.0) == [(0.0, 1.0)]
+    assert hatao.spans_to_mute(doc, duration_s=2.0, pad_s=0.0, max_word_s=5.0) == [(0.0, 1.0)]
+    # A word that ends before both limits keeps its own end.
+    whole = hatao.from_transcript(_spoken([" x", " y"]), recording, duration_s=2.0)
+    whole = hatao.mute(whole, *next(hatao._words(whole)))  # pyright: ignore[reportPrivateUsage]
+    assert hatao.spans_to_mute(whole, duration_s=2.0, pad_s=0.0) == [(0.0, 0.5)]
+
+
 def test_a_render_refuses_a_delete_or_a_move(recording: Path) -> None:
     doc = hatao.from_transcript(_spoken([" a", " b", " c"]), recording)
     with pytest.raises(hatao.RenderRefused, match="deleted or moved"):

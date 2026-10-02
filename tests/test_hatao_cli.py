@@ -94,10 +94,28 @@ def test_hatao_mutes_the_listed_words_and_logs_each_one(
         {"word": "Weather.", "entry": "user:weather", "start": 2.6, "end": 3.0},
     ]
     assert log["spans"] == [[0.9, 1.5], [2.5, 3.1]]
+    assert log["capped"] == []
     assert log["lists"][-1] == str(word_list)
     assert (log["media"], log["output"]) == (str(recording.resolve()), str(out.resolve()))
     err = capsys.readouterr().err
     assert "muted 2 words in 2 spans" in err
+
+
+def test_a_word_whose_end_runs_on_is_muted_only_to_the_ceiling_and_logged(
+    recording: Path, word_list: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Whisper's end for the last word of a segment can absorb the pause after it (#212)."""
+    transcript = _transcript(tmp_path / "t.json", [(0.5, 0.9, " the"), (1.0, 3.9, " weather")])
+    out = tmp_path / "clean.wav"
+    assert main(["hatao", str(recording), "-t", str(transcript), "-o", str(out)]) == 0
+    cut = round(1.0 + hatao.MAX_WORD_S, 3)
+    assert _peak(out, 1.0, cut) == 0
+    assert _peak(out, cut + 0.2, 3.9) == _peak(recording, cut + 0.2, 3.9) > 0
+    log = json.loads((tmp_path / "clean.bleeps.json").read_text())
+    assert log["max_word_s"] == hatao.MAX_WORD_S
+    assert log["capped"] == [{"start": 1.0, "end": 3.9, "muted_to": cut}]
+    assert log["spans"] == [[0.9, round(cut + hatao.PAD_S, 3)]]
+    assert "capped 1 muted words" in capsys.readouterr().err
 
 
 def test_nothing_to_mute_warns_writes_nothing_and_exits_3(

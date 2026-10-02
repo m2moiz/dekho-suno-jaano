@@ -542,17 +542,29 @@ def hatao(
                 "engine": engine,
                 "lists": lists,
                 "pad_s": bleep.PAD_S,
+                "max_word_s": bleep.MAX_WORD_S,
                 "muted": [
                     {"word": m.word, "entry": m.entry, "start": round(m.source_start, 3),
                      "end": round(m.source_end, 3)}
                     for m in found.matches
                 ],
                 "spans": [[a, b] for a, b in rendered.spans],
+                "capped": [
+                    {"start": round(c.source_start, 3), "end": round(c.source_end, 3),
+                     "muted_to": c.muted_end}
+                    for c in rendered.capped
+                ],
             },
             ensure_ascii=False,
             indent=1,
         ),
     )
+    if rendered.capped:
+        print(
+            f"capped {len(rendered.capped)} muted words whose transcript end ran past "
+            f"{bleep.MAX_WORD_S:g} s or into the next word; `capped` in {log} lists them",
+            file=sys.stderr,
+        )
     if rendered.untagged:
         print(f"source not tagged onto {out}, so only {source} names it: {rendered.untagged}",
               file=sys.stderr)

@@ -48,10 +48,12 @@ from __future__ import annotations
 __all__ = [
     "FORMAT",
     "FORMAT_VERSION",
+    "MAX_WORD_S",
     "PAD_S",
     "RECALL",
     "SHIPPED_LISTS",
     "WORDS_ENV",
+    "Capped",
     "Document",
     "Entry",
     "Found",
@@ -652,6 +654,18 @@ def flag(doc: Document, found: Found) -> Document:
 # muted by its pad alone.
 PAD_S = 0.1
 
+# The longest a muted token is taken to last, in seconds (#212). Whisper infers a
+# word's end after decoding rather than measuring it (#77), so a word that closes
+# a segment can absorb the pause after it, and one flagged word would mute that
+# whole pause, speech after it included. Measured with scratch/token_lengths.py
+# on 3 Oct 2026 over 56 whisper transcripts in scratch/real_bench/runs/ (15 of
+# #148's public fixture, 41 of the owner's recordings), 127,942 tokens: median
+# 0.20 s, 99th percentile 1.38 s (fixture 1.06, owner's 1.40), longest 29.64 s,
+# 402 past 2 s and up to 26 of those in one file. 1.4 s is the 99th percentile
+# rounded up to the tenth; 1,105 tokens (0.9%) run past it. A token is also cut
+# where the next one starts, which on the same transcripts 85 tokens run past.
+MAX_WORD_S = 1.4
+
 # How often each engine leaves a swear word out of its transcript, once #152 has
 # measured it, as the sentence `dsj hatao` prints for that engine. Empty until
 # then, and every engine reads "unmeasured": a word the recogniser never wrote
@@ -680,8 +694,30 @@ class RenderRefused(ValueError):
     """The document holds a change the render does not make, or another recording."""
 
 
+@dataclass(frozen=True)
+class Capped:
+    """A muted token whose end was not believed (#212): its times, and where its mute stops.
+
+    `muted_end` is `max_word_s` after the start, or the next token's start when
+    that is earlier, before padding.
+    """
+
+    source_start: float
+    source_end: float
+    muted_end: float
+
+
+def _next_start(content: Sequence[Entry], index: int) -> float | None:
+    """Where the first token after entry `index` that starts later than it starts."""
+    here = cast("Item", content[index]).source_start
+    for entry in content[index + 1 :]:
+        if isinstance(entry, Item) and entry.text and entry.source_start > here:
+            return entry.source_start
+    return None
+
+
 def spans_to_mute(
-    doc: Document, *, duration_s: float, pad_s: float = PAD_S
+    doc: Document, *, duration_s: float, pad_s: float = PAD_S, max_word_s: float = MAX_WORD_S
 ) -> list[tuple[float, float]]:
     """The stretches of the recording to silence: muted items, padded, merged, in order.
 
@@ -690,9 +726,20 @@ def spans_to_mute(
     A deleted or moved entry would be rendered as though it were not, which is
     the silent wrong answer, so it is refused instead.
 
+    A muted token is silenced for at most `max_word_s`, and never past the start
+    of the token after it: its end may be whisper's guess (#212). An item with no
+    text keeps its length, since it already ends where the next token starts.
+
     Raises:
         RenderRefused: more than one source, or entries out of order or missing.
     """
+    return _mute_plan(doc, duration_s=duration_s, pad_s=pad_s, max_word_s=max_word_s)[0]
+
+
+def _mute_plan(
+    doc: Document, *, duration_s: float, pad_s: float, max_word_s: float
+) -> tuple[list[tuple[float, float]], list[Capped]]:
+    """`spans_to_mute`'s spans, and every muted token it cut short to get them."""
     sources = {entry.source for entry in doc.content if isinstance(entry, Item)}
     if len(sources) > 1:
         raise RenderRefused(
@@ -701,6 +748,7 @@ def spans_to_mute(
     reached = 0.0
     previous = 0.0
     spans: list[tuple[float, float]] = []
+    capped: list[Capped] = []
     for index, entry in enumerate(doc.content):
         if not isinstance(entry, Item):
             continue
@@ -713,21 +761,31 @@ def spans_to_mute(
         reached = max(reached, entry.source_end)
         if not entry.muted:
             continue
+        stop = entry.source_end
+        if entry.text:
+            limit = entry.source_start + max_word_s
+            ahead = _next_start(doc.content, index)
+            if ahead is not None:
+                limit = min(limit, ahead)
+            if stop > limit + _TOUCH_S:
+                stop = limit
+                capped.append(Capped(entry.source_start, entry.source_end, round(stop, 3)))
         start = max(entry.source_start - pad_s, 0.0)
-        end = min(entry.source_end + pad_s, duration_s)
+        end = min(stop + pad_s, duration_s)
         if spans and start <= spans[-1][1]:
             spans[-1] = (spans[-1][0], max(spans[-1][1], end))
         else:
             spans.append((start, end))
-    return [(round(a, 3), round(b, 3)) for a, b in spans if b > a]
+    return [(round(a, 3), round(b, 3)) for a, b in spans if b > a], capped
 
 
 @dataclass(frozen=True)
 class Rendered:
-    """What a render did: the spans it silenced, and why its source tag is missing, if it is."""
+    """What a render did: spans silenced, why the source tag is missing, tokens cut short."""
 
     spans: list[tuple[float, float]]
     untagged: str | None
+    capped: tuple[Capped, ...] = ()
 
 
 def render(
@@ -760,7 +818,7 @@ def render(
             f"the document plays {sorted(map(str, recordings))}, not {media.resolve()}"
         )
     total = media_mod.probe(media).duration_s
-    spans = spans_to_mute(doc, duration_s=total)
+    spans, capped = _mute_plan(doc, duration_s=total, pad_s=PAD_S, max_word_s=MAX_WORD_S)
     media_mod.mute(
         media,
         spans,
@@ -768,4 +826,4 @@ def render(
         replace=replace,
         on_progress=(lambda done: on_progress(done, total)) if on_progress else None,
     )
-    return Rendered(spans, filetag.stamp_source(media, out))
+    return Rendered(spans, filetag.stamp_source(media, out), tuple(capped))

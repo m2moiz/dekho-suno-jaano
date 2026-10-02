@@ -467,15 +467,18 @@ the file as it deletes a chunk checkpoint.
 ```json
 {"media": "/tmp/src.mov", "transcript": "/tmp/src.json", "output": "/tmp/clean.mov",
  "engine": "parakeet", "lists": ["/path/to/dsj/words/en.toml", "/path/to/words.toml"],
- "pad_s": 0.1,
- "muted": [{"word": "Weather.", "entry": "user:weather", "start": 10.32, "end": 10.96}],
- "spans": [[10.22, 11.06]]}
+ "pad_s": 0.1, "max_word_s": 1.4,
+ "muted": [{"word": "Weather.", "entry": "user:weather", "start": 10.32, "end": 10.96},
+           {"word": "weather", "entry": "user:weather", "start": 20.0, "end": 31.5}],
+ "spans": [[10.22, 11.06], [19.9, 21.5]],
+ "capped": [{"start": 20.0, "end": 31.5, "muted_to": 21.4}]}
 ```
 
 | Field | Notes |
 |---|---|
 | `muted` | One entry per word muted, in time order. `word` as the transcript wrote it, punctuation included; `entry` is `<list>:<name>`, the list being `en`, `ur`, `hi`, `pa` or `user`; `start` and `end` are the word's own, before padding |
 | `spans` | What was silenced: each word widened by `pad_s` on both sides, clamped to the recording, and overlapping ones merged. Listen here |
+| `capped` | Muted words whose transcript `end` was not believed: a word is muted for at most `max_word_s`, and never past the start of the word after it, because whisper guesses a word's end and can run it on through the pause that follows (#212). `muted_to` is where its mute stopped, before padding. Empty when none was cut |
 | `lists` | Every word list searched, the user's last when it exists |
 | `engine` | The transcript's `engine`, else its `model` |
 

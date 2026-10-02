@@ -204,7 +204,9 @@ roman = ["yaar", "yar"]
 script = ["یار"]
 ```
 
-Each muted word is silenced from 0.1 s before its start to 0.1 s after its end. The
+Each muted word is silenced from 0.1 s before its start to 0.1 s after its end, for at
+most 1.4 s and never past the start of the next word, since whisper can run a word's end
+on through the pause after it; stderr says when it cut one, and the log lists each. The
 picture is copied untouched, the sound re-encoded in its own codec. Beside `--out` goes
 `<stem>.bleeps.json`, listing every muted word with its `start`, `end` and the list
 `entry` that matched it, and the merged `spans` that were silenced. Read it to check
