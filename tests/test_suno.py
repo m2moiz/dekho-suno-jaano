@@ -983,6 +983,7 @@ def test_the_diarizer_is_handed_the_extracted_wav_not_the_source(
 
     fake_parakeet(tokens=_tokens())
     extracted: list[Path] = []
+
     # def, not lambda: an annotated lambda parameter is not expressible.
     def always_convert(stream: AudioStream, rate: int) -> bool:
         return True
@@ -1040,9 +1041,7 @@ def _seam_result() -> AlignedResult:
         tokens=[_seam_token(2540.88, " First name"), _seam_token(2534.84, ".")],
     )
     sentences = [said, agreed, mistimed]
-    return AlignedResult(
-        text="".join(s.text for s in sentences), sentences=sentences
-    )
+    return AlignedResult(text="".join(s.text for s in sentences), sentences=sentences)
 
 
 def _merge_that_went_backwards(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1083,10 +1082,7 @@ def test_sentences_are_written_earliest_first(
     assert on_disk == payload
     starts = [s["start"] for s in on_disk["sentences"]]
     assert starts == sorted(starts)
-    # The mistimed sentence runs from 2534.84 to 2540.96 s, over the two
-    # sentences between, so the three are written as one (#190): sentences
-    # never overlap, and no word or time is changed to make them not.
-    assert starts == [2534.84]
+    assert starts == [2534.84, 2538.4, 2540.56]
     # The order promise reaches the tokens too, and for a different reason:
     # merge.py bisects a sentence's token list to vote on who spoke it.
     for sentence in on_disk["sentences"]:
@@ -1113,9 +1109,8 @@ def test_the_text_reads_in_the_order_the_sentences_are_written_in(
     assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
     # The mistimed full stop reads where its time puts it, ahead of the words it
     # closed: a sentence's text is its tokens joined (#106), and at this seam
-    # the time is wrong by 5.72s. The three sentences overlap, so they are
-    # written as one (#190), and every word in it reads in time order.
-    assert payload["text"] == ". Structured SAP. Yeah. First name"
+    # the time is wrong by 5.72s. The text shows what the timing says.
+    assert payload["text"] == ". First name Structured SAP. Yeah."
 
 
 def _merge_that_reordered_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1230,9 +1225,7 @@ def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
     assert list(payload) == ["audio", "model", "text", "unclear", "sentences"]
     assert [s["text"] for s in payload["sentences"]] == [" We looked at it.", " Then we left."]
     assert payload["text"] == "We looked at it. Then we left."
-    assert payload["unclear"] == [
-        {"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}
-    ]
+    assert payload["unclear"] == [{"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}]
     assert LOOP_REASON == "repetition loop"
 
 
@@ -1280,8 +1273,7 @@ def test_speaker_turns_run_forwards_too(
 
     Two speakers, split so that the out-of-order sentence belongs to the first
     of them: left unordered the labels read 1, 1, 0 down the file, which is a
-    speaker taking the floor back before he gave it up. The three sentences
-    overlap, so they are written as one (#190), labelled by its words' vote.
+    speaker taking the floor back before he gave it up.
     """
     fake_parakeet(tokens=[])
     _merge_that_went_backwards(monkeypatch)
@@ -1292,7 +1284,7 @@ def test_speaker_turns_run_forwards_too(
 
     payload = transcribe(fake_media, tmp_path / "out.json")
 
-    assert [s["speaker"] for s in payload["sentences"]] == [1]
+    assert [s["speaker"] for s in payload["sentences"]] == [0, 1, 1]
     turns = [(s["speaker"], s["start"]) for s in payload["sentences"]]
     firsts = [start for i, (spk, start) in enumerate(turns) if i == 0 or turns[i - 1][0] != spk]
     assert firsts == sorted(firsts)
@@ -1634,8 +1626,14 @@ def _silence_wav(path: Path) -> Path:
     """
     return _write_wav(
         path,
-        [(5, -20, "tone"), (10, -60, "noise"), (10, -45, "tone"),
-         (10, -20, "tone"), (10, -60, "noise"), (5, -20, "tone")],
+        [
+            (5, -20, "tone"),
+            (10, -60, "noise"),
+            (10, -45, "tone"),
+            (10, -20, "tone"),
+            (10, -60, "noise"),
+            (5, -20, "tone"),
+        ],
     )
 
 
@@ -1643,8 +1641,15 @@ def test_silences_are_runs_below_the_threshold_of_at_least_the_minimum(tmp_path:
     """5 s of -60 dB noise is silence; 4.9 s of it is not, nor is 10 s at -45 dB."""
     wav = _write_wav(
         tmp_path / "in.wav",
-        [(1, -20, "tone"), (4.9, -60, "noise"), (1, -20, "tone"), (5, -60, "noise"),
-         (1, -20, "tone"), (10, -45, "tone"), (1, -20, "tone")],
+        [
+            (1, -20, "tone"),
+            (4.9, -60, "noise"),
+            (1, -20, "tone"),
+            (5, -60, "noise"),
+            (1, -20, "tone"),
+            (10, -45, "tone"),
+            (1, -20, "tone"),
+        ],
     )
 
     assert silences(REAL_LOUDNESS(wav, 0.1)) == [(6.9, 11.9)]
@@ -1730,7 +1735,7 @@ def test_parakeet_never_decodes_a_loop_again(
     assert "retrying" not in states
 
 
-# --- no two sentences overlap (#190) -----------------------------------------
+# --- no two whisper sentences overlap (#190); parakeet's still can (#192) ------
 
 
 def _sentence(*tokens: tuple[float, float, str]) -> dict[str, Any]:
@@ -1748,7 +1753,7 @@ def test_two_sentences_that_overlap_are_written_as_one() -> None:
     first = _sentence((1.0, 1.5, " We"), (4.0, 4.5, " went."))
     inside = _sentence((2.0, 2.5, " Then"), (2.5, 3.0, " stop."))
     touching = _sentence((4.5, 5.0, " Next."))
-    got = _without_overlaps(Transcription(text="", sentences=[first, inside, touching]))
+    got = _without_overlaps(Transcription(text="", sentences=[first, inside, touching]), merge=True)
 
     assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
         (1.0, 4.5, " We Then stop. went."),
@@ -1764,12 +1769,22 @@ def test_sentences_that_do_not_overlap_pass_through_unchanged() -> None:
     sentences = [_sentence((1.0, 2.0, " One.")), _sentence((2.0, 3.0, " Two."))]
     before = Transcription(text="One. Two.", sentences=sentences)
 
-    assert _without_overlaps(before) == before
+    assert _without_overlaps(before, merge=True) == before
 
 
 def test_a_token_outside_its_sentence_is_refused() -> None:
     """No step makes one, so one appearing is a broken step, not something to write."""
     stray = _sentence((1.0, 2.0, " One.")) | {"end": 1.5}
 
-    with pytest.raises(RuntimeError, match="outside its sentence"):
-        _without_overlaps(Transcription(text="One.", sentences=[stray]))
+    for merge in (True, False):
+        with pytest.raises(RuntimeError, match="outside its sentence"):
+            _without_overlaps(Transcription(text="One.", sentences=[stray]), merge=merge)
+
+
+def test_parakeet_and_sherpa_sentences_are_never_merged() -> None:
+    """Merging at a chunk seam would put two speakers under one label (#192)."""
+    first = _sentence((1.0, 1.5, " We"), (4.0, 4.5, " went."))
+    inside = _sentence((2.0, 2.5, " Then"), (2.5, 3.0, " stop."))
+    before = Transcription(text="We went. Then stop.", sentences=[first, inside])
+
+    assert _without_overlaps(before, merge=False) is before

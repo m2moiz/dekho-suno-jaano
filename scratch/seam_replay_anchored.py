@@ -15,7 +15,7 @@ as the CLI sets it up, with mlx_whisper.transcribe wrapped to save every
 call's result to OUTDIR/calls.json; the transcript is OUTDIR/after-retry.json,
 the real product output. `replay` hands the main-pass windows (the calls that
 are not a retry) back to `transcribe()` three times: with the seam rule of
-9285883 (`_anchored` from git, and no `_without_overlaps`) and the loop retry
+9285883 (`_anchored` from git, and no `_without_overlaps` merge) and the loop retry
 off as OUTDIR/old.json; with the working tree's and the retry off as
 OUTDIR/new.json; and with the working tree's and the retry on, as the product
 runs, as OUTDIR/new-retry.json. Only that last one runs whisper, for the
@@ -103,7 +103,7 @@ def replay(media: Path, outdir: Path) -> None:
     new_overlaps = suno._without_overlaps  # pyright: ignore[reportPrivateUsage]
 
     for name, anchored, overlaps, retry in (
-        ("old", old.__dict__["_anchored"], lambda t: t, False),
+        ("old", old.__dict__["_anchored"], lambda t, **_: t, False),
         ("new", new_anchored, new_overlaps, False),
         ("new-retry", new_anchored, new_overlaps, True),
     ):

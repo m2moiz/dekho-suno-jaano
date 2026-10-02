@@ -91,7 +91,7 @@ Inside a sentence:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. A sentence ends at or before the next one's `start`: no two overlap. |
+| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. Under whisper a sentence ends at or before the next one's `start`; under parakeet and sherpa one can overlap the next at a chunk seam (below). |
 | `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
@@ -237,12 +237,14 @@ promised; the times are not exact. A recording over 120 s is transcribed in over
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case 5.72 s,
 which pulls its whole sentence that far earlier in the list.
 
-**No two sentences overlap**: each ends at or before the next one's `start`, under every
-engine. Where a seam leaves one sentence's time running into another's, the two are
-written as one sentence, every word and every time as decoded: on a 6-minute parakeet run
-one pair, from a full stop timed 3 s early. Each of the 6 s two of whisper's two-minute
-windows share is written by one of them: its own half by default, or all of it by the one
-that did not loop there, so the same speech is not written twice at a seam.
+**Under whisper no two sentences overlap**: each ends at or before the next one's
+`start`. Each of the 6 s two of whisper's two-minute windows share is written by one of
+them, its own half by default or all of it by the one that did not loop there, so the same
+speech is not written twice at a seam (#190); two whisper sentences that still overlap are
+written as one, every word and time as decoded. **Under parakeet and sherpa they can
+overlap** at a chunk seam: a word timed seconds early starts its sentence inside the one
+before, 1 pair on a 6-minute parakeet run. They are left apart, because one merged
+sentence would put two speakers under one label (#192).
 
 ## The status heartbeat, written by `--status`
 
