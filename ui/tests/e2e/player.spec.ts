@@ -197,3 +197,30 @@ test("the view follows the playhead until the reader scrolls away", async ({ pag
   await expect.poll(async () => near(50, true)(await shown())).toBe(true);
   await expect(page.getByRole("button", { name: "Follow playback" })).toHaveCount(0);
 });
+
+test("at half speed and at double speed the highlight keeps time with the recording", async ({ page }) => {
+  const dir = scratchDir();
+  const sentences = Array.from({ length: 6 }, (_, k) =>
+    sentence(k * 4, k % 2, Array.from({ length: 8 }, (_, i) => ` s${k}w${i}`)),
+  );
+  const seeded = seed(transcript(silence(dir, 26, "speed.wav"), sentences), dir);
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p")).toHaveCount(6);
+  await expect.poll(() => page.evaluate(() => document.querySelector("audio")?.readyState ?? 0)).toBeGreaterThan(0);
+
+  for (const [speed, label] of [[0.5, "0.5×"], [2, "2×"]] as const) {
+    await page.getByRole("combobox", { name: "Playback speed" }).click();
+    await page.getByRole("option", { name: label }).click();
+    expect(await page.evaluate(() => (document.querySelector("audio") as HTMLAudioElement).playbackRate)).toBe(speed);
+    await clickWord(page, "s1w0");
+    await page.waitForTimeout(1500);
+    const { time, painted } = await pausedAt(page);
+    // It played, at the rate picked. How far it got is not asserted: headless
+    // Playwright WebKit plays 2x at about 1.6x of wall time (measured
+    // 2026-10-02, with and without preservesPitch; chromium plays 2.0x), and
+    // what matters here is that the highlight follows wherever the clock is.
+    expect(time).toBeGreaterThan(4.2);
+    expect(await page.evaluate(() => (document.querySelector("audio") as HTMLAudioElement).playbackRate)).toBe(speed);
+    expect(painted).toEqual([wordAt(sentences, time)]);
+  }
+});

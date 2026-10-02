@@ -7,6 +7,7 @@ import { sessionToken } from "@/features/session/session";
 import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
 import { Playhead } from "./playhead";
+import { SpeedControl } from "./SpeedControl";
 
 /**
  * The recording's address, by its library id (#59). A media element sends no
@@ -124,6 +125,7 @@ export function Player({ recording, reading, article }: Props) {
         className="h-10 flex-1"
         aria-label="Recording"
       />
+      <SpeedControl media={media} />
       {!following && (
         <Button variant="outline" size="sm" onClick={() => playhead.current?.follow()}>
           Follow playback
