@@ -464,6 +464,24 @@ pytest` alone. `just check` runs the type checker, ruff and the fast tests; pyte
 the type checker, so a green pytest is no evidence. Paste the line `just check` ends
 with before calling the change done.
 
+**Working on the UI** (`ui/` and `dsj/ui/`, the code behind `dsj ui`). The same five rules
+as the repo's `AGENTS.md`:
+
+1. Commands: `just ui-dev` to develop; `just ui-build` before any commit that touches
+   `ui/`, committing what it writes to `dsj/ui/static/`; `just api` after changing
+   `dsj/ui/schemas.py` or a route; `just check` before calling anything done. A fresh
+   clone needs `(cd ui && npm ci)` first, because `just check` fails rather than skips
+   without `ui/node_modules`.
+2. Where files go: frontend source in `ui/src/`, its tests in `ui/tests/`, the server in
+   `dsj/ui/`. The built page `dsj/ui/static/` and the generated types
+   `ui/src/api/schema.d.ts` are never hand-edited.
+3. TypeScript is pinned to 6.0.3; do not install 7.x. `typescript-eslint@8.70.1` declares
+   `"typescript": ">=4.8.4 <6.1.0"`, and 6.0.3 is the newest version inside it.
+4. The package is `@base-ui/react`, not `@base-ui-components/react`. It was renamed; the
+   old name is frozen at `1.0.0-rc.0` and its import resolves to nothing.
+5. Never hand-write a UI primitive or type a `@base-ui/react/*` import from memory. Run
+   `npx shadcn@4.21.0 add <name>` from `ui/` and let it write the import.
+
 ## References
 
 - [references/payload.md](references/payload.md): the transcript, marks, heartbeat and

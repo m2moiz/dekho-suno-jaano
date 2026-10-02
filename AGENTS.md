@@ -31,6 +31,44 @@ configs, ruff and the fast suite, and pytest skips the type checker, so a green 
 no evidence that `just check` passes. On 2026-09-22 two agents reported green from pytest
 while type errors sat in the tree (#96).
 
+## Working on the UI
+
+`dsj ui` is a FastAPI server in `dsj/ui/` serving a React page built from `ui/`. The gate
+above holds it too: `just check` also runs `tsc`, vitest, the API-types check and the
+stale-build check, and `just verify` adds Playwright on chromium and webkit.
+
+1. **Commands.**
+   - `just ui-dev` to develop: the API on 127.0.0.1:8721 with reload, and Vite on 5173.
+     Open the Vite URL; Ctrl-C stops both.
+   - `just ui-build` before any commit that touches `ui/`, then commit what it wrote to
+     `dsj/ui/static/`. Every file under `ui/` counts, tests included, because Tailwind
+     reads them all for class names (#114).
+   - `just api` after changing `dsj/ui/schemas.py` or a route (#155).
+   - `just check` before calling anything done, not pytest and not `npm test` (#96).
+   - A fresh clone needs `(cd ui && npm ci)` first: `just check` fails rather than skips
+     without `ui/node_modules` (#157). `just verify` also needs the browsers, once:
+     `(cd ui && npx playwright install chromium webkit)`.
+2. **Where files go.** Frontend source in `ui/src/`, its tests in `ui/tests/unit/`
+   (vitest) and `ui/tests/e2e/` (Playwright). The Python server in `dsj/ui/`, and the
+   shape of everything it sends in `dsj/ui/schemas.py`. The built page in
+   `dsj/ui/static/`, committed. The generated types in `ui/src/api/schema.d.ts`. Never
+   hand-edit those last two: rebuild with `just ui-build`, regenerate with `just api`.
+3. **TypeScript is pinned to 6.0.3. Do not install 7.x.** `typescript-eslint@8.70.1`
+   declares `"typescript": ">=4.8.4 <6.1.0"` (checked on npm 2026-09-22, and still the
+   range of 8.71.0 on 2026-10-02), and 6.0.3 is the newest version inside it. A 7.x
+   installs with a warning and then lints on a compiler the linter does not support. The
+   `overrides` entry in `ui/package.json` is the same pin: openapi-typescript 7.13.0
+   declares `typescript ^5.x`, and the override points it at this 6.0.3 instead of
+   letting npm refuse the install. Every version in `ui/package.json` is exact
+   (`ui/.npmrc` has `save-exact=true`); never add a `^` or `~`.
+4. **The package is `@base-ui/react`, not `@base-ui-components/react`.** It was renamed.
+   The old name is frozen at `1.0.0-rc.0`, is not installed here, and importing it fails
+   as `Cannot find module '@base-ui-components/react'`, which reads like a broken install
+   and is not one.
+5. **Never hand-write a UI primitive, and never type a `@base-ui/react/*` import from
+   memory.** Run `npx shadcn@4.21.0 add <name>` from `ui/` and let it write the file and
+   the import (`npx shadcn@4.21.0 add button --dry-run` shows what it would write).
+
 ## Citing code in issues and docs
 
 Cite code inside a file that is actively edited, `dsj/suno.py` above all, by an `rg`
