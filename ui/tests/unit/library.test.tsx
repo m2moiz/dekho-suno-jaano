@@ -123,6 +123,15 @@ describe("the library page", () => {
     expect(review.getAttribute("data-missing")).toBeNull();
   });
 
+  it("links every transcript to its own page in the reader", async () => {
+    serve(ROWS);
+    render(<LibraryPage />);
+    const review = await screen.findByRole("listitem", { name: "review.mov" });
+    expect(within(review).getByRole("link").getAttribute("href")).toBe("/?recording=2&transcript=7");
+    const standup = screen.getByRole("listitem", { name: "standup.m4a" });
+    expect(within(standup).getByRole("link").getAttribute("href")).toBe("/?recording=1&transcript=3");
+  });
+
   it("says the library is empty when it is", async () => {
     serve([]);
     render(<LibraryPage />);

@@ -1,0 +1,31 @@
+/* The transcript as something to read for forty minutes (#58, #57 section 11.1).
+ *
+ * Literata for the words and the system face for everything else, a 68
+ * character measure, 1.7 leading, 1.25em between speaker turns, ragged right
+ * and never justified. Only the normal-width weight axis is imported: 7 files,
+ * 176 KB, and the browser fetches just the scripts on the page.
+ */
+@import "@fontsource-variable/literata/wght.css";
+
+.transcript {
+  max-width: 68ch;
+  font-family: "Literata Variable", Georgia, serif;
+  font-size: 1.125rem;
+  line-height: 1.7;
+  text-align: left;
+  hyphens: manual;
+}
+
+.transcript section + section {
+  margin-top: 1.25em;
+}
+
+.transcript h2 {
+  font: 500 0.8125rem/1.4 system-ui, sans-serif;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.transcript p {
+  margin: 0;
+}

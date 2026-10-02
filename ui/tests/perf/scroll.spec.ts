@@ -12,10 +12,7 @@
 import { expect, test } from "@playwright/test";
 
 import { SHAPE, syntheticTranscript, type Transcript } from "./fixture.ts";
-
-const P95_CEILING_MS = 20;
-const FRAMES = 200;
-const STEP_PX = 220;
+import { FRAMES, P95_CEILING_MS, STEP_PX, scrollFrames, summarise } from "./sample.ts";
 
 function escape(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -67,35 +64,8 @@ test("scrolling the 1,038-sentence transcript keeps p95 frame time under 20 ms",
   expect(dom.turns).toBe(SHAPE.turns);
   expect(dom.scrollHeight).toBeGreaterThan(FRAMES * STEP_PX + dom.viewport);
 
-  const frames = await tab.evaluate(
-    ({ frames, step }) =>
-      new Promise<number[]>((resolve) => {
-        const times: number[] = [];
-        let last = performance.now();
-        let n = 0;
-        const tick = () => {
-          const now = performance.now();
-          times.push(now - last);
-          last = now;
-          window.scrollBy(0, step);
-          if (++n < frames) requestAnimationFrame(tick);
-          else resolve(times);
-        };
-        requestAnimationFrame(tick);
-      }),
-    { frames: FRAMES, step: STEP_PX },
-  );
   // The first sample spans setContent to the first frame, not a scroll.
-  const sorted = frames.slice(1).sort((a, b) => a - b);
-  const at = (q: number) => +(sorted[Math.floor(sorted.length * q)] ?? Number.NaN).toFixed(1);
-  const result = {
-    ...dom,
-    samples: sorted.length,
-    median: at(0.5),
-    p95: at(0.95),
-    max: +(sorted.at(-1) ?? Number.NaN).toFixed(1),
-    over16_7ms: sorted.filter((ms) => ms > 16.7).length,
-  };
+  const result = { ...dom, ...summarise((await scrollFrames(tab)).slice(1)) };
   console.log(`frame times: ${JSON.stringify(result)}`);
 
   expect(result.samples).toBe(FRAMES - 1);

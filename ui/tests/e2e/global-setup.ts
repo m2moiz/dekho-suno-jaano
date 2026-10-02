@@ -26,9 +26,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // A library of its own: the default one, and the ui.lock beside it, are the
   // owner's, and a test run must neither read nor lock them.
   const scratch = mkdtempSync(path.join(tmpdir(), "dsj-e2e-"));
+  const library = path.join(scratch, "library.db");
+  // Read by the specs that put a transcript in it (seed.ts), as DSJ_UI_URL is.
+  process.env["DSJ_LIBRARY"] = library;
   const server = spawn("uv", ["run", "dsj", "ui", "--print-url"], {
     cwd: REPO,
-    env: { ...process.env, DSJ_LIBRARY: path.join(scratch, "library.db") },
+    env: { ...process.env, DSJ_LIBRARY: library },
     stdio: ["ignore", "pipe", "inherit"],
   });
   const url = await firstLine(server);

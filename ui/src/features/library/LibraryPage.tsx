@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import { transcriptHref } from "@/lib/route";
 import {
   durationLabel,
   engineLabel,
@@ -80,14 +81,14 @@ function Recording({ row }: { row: RecordingRow }) {
       )}
       <ul className="mt-1 flex flex-col gap-0.5">
         {row.transcripts.map((t) => (
-          <Transcript key={t.id} t={t} />
+          <Transcript key={t.id} recording={row.id} t={t} />
         ))}
       </ul>
     </li>
   );
 }
 
-function Transcript({ t }: { t: TranscriptRow }) {
+function Transcript({ recording, t }: { recording: number; t: TranscriptRow }) {
   const parts = [
     whenLabel(t.finished_at),
     engineLabel(t),
@@ -96,5 +97,18 @@ function Transcript({ t }: { t: TranscriptRow }) {
     speakersLabel(t),
     marksLabel(t),
   ];
-  return <li className="text-sm text-muted-foreground">{parts.join(" · ")}</li>;
+  // The whole line opens the transcript (#58): its date and model are what tell
+  // one transcript of a recording from another. A block, so the whole row
+  // takes the click: as an inline link wrapped onto two lines, a click on the
+  // row's middle did not open it in Chromium (2026-10-02).
+  return (
+    <li className="text-sm text-muted-foreground">
+      <a
+        href={transcriptHref(recording, t.id)}
+        className="block underline-offset-4 hover:text-foreground hover:underline"
+      >
+        {parts.join(" · ")}
+      </a>
+    </li>
+  );
 }
