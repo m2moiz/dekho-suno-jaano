@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import json
+import os
 import re
 import signal
 import socket
@@ -31,7 +32,7 @@ from fastapi.testclient import TestClient
 import dsj.ui.server
 from dsj.cli import main
 from dsj.ui import UIUnavailable
-from dsj.ui.server import IDLE_S, STATIC, Heartbeat, create_app
+from dsj.ui.server import BYE_S, IDLE_S, STATIC, Heartbeat, create_app
 
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
@@ -578,3 +579,141 @@ def test_the_cutoff_leaves_a_whole_throttled_beat_to_spare() -> None:
     # Silent for two slowed beats instead of one: still half a minute short of the cutoff.
     spare = IDLE_S - 2 * worst
     assert spare >= 30
+
+
+def test_the_bye_route_takes_the_token_and_marks_the_page_gone() -> None:
+    """`POST /api/bye` is guarded like every /api route, and names the page that left (#206)."""
+    app, token = create_app(port=8721)
+    beats: Heartbeat = app.state.heartbeat
+    client = TestClient(app, base_url=LOOPBACK)
+    assert client.post("/api/bye").status_code == 401
+    assert beats.gone_s(IDLE_S) is None, "a refused goodbye must not count"
+    page = {"Authorization": f"Bearer {token}", "X-Dsj-Page": "tab-1"}
+    assert client.post("/api/heartbeat", headers=page).status_code == 204
+    assert client.post("/api/bye", headers=page).status_code == 204
+    gone = beats.gone_s(IDLE_S)
+    assert gone is not None
+    assert gone < 5
+
+
+def test_any_request_after_a_goodbye_cancels_it() -> None:
+    """A move from the library to a transcript is a goodbye, then the next page's first beat."""
+    now = [0.0]
+    beats = Heartbeat(clock=lambda: now[0])
+    beats.beat("library")
+    now[0] = 5.0
+    beats.bye("library")
+    now[0] = 5.0 + BYE_S / 2
+    assert beats.gone_s(IDLE_S) == pytest.approx(BYE_S / 2)
+    beats.beat("transcript")
+    now[0] = 5.0 + 10 * BYE_S
+    assert beats.gone_s(IDLE_S) is None
+
+
+def test_a_goodbye_from_one_tab_does_not_stop_the_server_under_another() -> None:
+    """The other tab may be hidden and beat once a minute (#204); it keeps the server up."""
+    now = [0.0]
+    beats = Heartbeat(clock=lambda: now[0])
+    beats.beat("hidden")
+    now[0] = 50.0
+    beats.beat("closing")
+    beats.bye("closing")
+    now[0] = 59.0
+    assert beats.gone_s(IDLE_S) is None, "the hidden tab was heard from 59 s ago"
+    # The hidden tab, closed in its turn, says so too.
+    now[0] = 60.0
+    beats.beat("hidden")
+    beats.bye("hidden")
+    now[0] = 60.0 + BYE_S
+    assert beats.gone_s(IDLE_S) == pytest.approx(BYE_S)
+
+
+def test_a_tab_that_vanished_without_a_goodbye_holds_the_server_no_longer_than_the_cutoff() -> None:
+    now = [0.0]
+    beats = Heartbeat(clock=lambda: now[0])
+    beats.beat("crashed")
+    now[0] = 10.0
+    beats.beat("closing")
+    beats.bye("closing")
+    now[0] = IDLE_S - 1
+    assert beats.gone_s(IDLE_S) is None
+    now[0] = IDLE_S
+    assert beats.gone_s(IDLE_S) == pytest.approx(IDLE_S - 10.0)
+
+
+def test_a_running_job_outlasts_a_goodbye() -> None:
+    """A transcription started from the page must not die with the window (#113)."""
+    now = [0.0]
+    beats = Heartbeat(clock=lambda: now[0])
+    with beats.hold():
+        beats.bye("tab")
+        now[0] = 10 * BYE_S
+        assert beats.gone_s(IDLE_S) is None
+    # The job's end counts as a sign of life; then the cutoff applies, as before.
+    assert beats.gone_s(IDLE_S) is None
+    assert beats.idle_s() == 0.0
+
+
+def bye(url: str, page: str) -> int:
+    found = URL.fullmatch(url)
+    assert found
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{found[1]}/api/bye", method="POST",
+        headers={"Authorization": f"Bearer {found[2]}", "X-Dsj-Page": page},
+    )
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        return reply.status
+
+
+def test_a_closed_page_stops_the_server_soon_after(capsys: pytest.CaptureFixture[str]) -> None:
+    """A real server: only the goodbye can stop it within seconds of the last request.
+
+    The cutoff is 20 s rather than an hour so that, with the goodbye broken,
+    the server still stops and this test fails instead of hanging the suite.
+    """
+    server = threading.Thread(
+        target=dsj.ui.server.serve,
+        kwargs={"open_browser": False, "idle_s": 20.0, "bye_s": 0.5},
+    )
+    server.start()
+    said = time.monotonic()
+    try:
+        url = wait_for_url()
+        assert beat(url) == 204
+        said = time.monotonic()
+        assert bye(url, "tab-1") == 204
+    finally:
+        server.join(timeout=30)
+    took = time.monotonic() - said
+    assert not server.is_alive()
+    assert took < 5, f"the server outlived the page's goodbye by {took:.1f} s"
+    assert "The dsj page was closed, so dsj ui stopped." in capsys.readouterr().err
+
+
+def test_the_server_still_stops_when_nobody_reads_its_stderr(tmp_path: Path) -> None:
+    """The stop must not hang on the sentence that announces it.
+
+    Whoever started `dsj ui` may be gone, its end of the stderr pipe with it:
+    an e2e run that timed out left one serving for good, because the print
+    raised BrokenPipeError and killed the watchdog before it set the stop.
+    """
+    code = "import dsj.ui.server as s; s.serve(open_browser=False, idle_s=0.5)"
+    server = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={**os.environ, "DSJ_LIBRARY": str(tmp_path / "library.db")},
+    )
+    try:
+        assert server.stdout is not None
+        assert server.stderr is not None
+        assert URL.fullmatch(server.stdout.readline().decode().strip())
+        server.stderr.close()
+        server.stdout.close()
+        server.wait(timeout=30)
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait()
+            pytest.fail("dsj ui ran on after the reader of its stderr went away")
+    # Not 0: Python exits 120 when it cannot flush its closed streams at exit.
+    # The point is that it exited, on its own.

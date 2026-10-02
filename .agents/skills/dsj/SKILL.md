@@ -252,9 +252,11 @@ on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` reque
 that token as `Authorization: Bearer <token>`, and a request whose `Host` is not that
 loopback address is refused with 403, token or not. The page itself needs no token.
 
-It serves until Ctrl-C or `kill`, or until three minutes pass with no page open: the page
-sends `POST /api/heartbeat` every 15 s (about once a minute while its tab is hidden), and
-a server nobody opens stops on its own.
+It serves until Ctrl-C or `kill`, or until no page is open: the page sends
+`POST /api/heartbeat` every 15 s (about once a minute while its tab is hidden), and
+`POST /api/bye` as it goes away; the server stops 10 s after the last open page's
+goodbye unless a page beats, or after three minutes with no request at all, so a server
+nobody opens stops on its own. A transcription started from the page holds it up.
 Start it with `&` if you need the shell back. A second `dsj ui` while one is running
 prints the running one's URL and exits 0 without binding a port; the running one's
 details are in `ui.lock` beside the library (`$DSJ_LIBRARY`'s folder when that is set).

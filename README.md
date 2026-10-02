@@ -506,9 +506,12 @@ time and ships inside the package, so an install needs no Node.
 Only this Mac's own page can use it. The URL carries a key after `#`, which
 the page takes and wipes from the address bar; every request has to bring it
 back, and a request that names any host but this machine's is refused. Close
-the window and the server stops within three minutes (not one: a browser
-slows a hidden tab's heartbeat to about once a minute, #204). Run `dsj ui` again while it
-is open and you get the running one's address, not a second copy.
+the window and the server stops about ten seconds later: the page says goodbye
+as it closes (#206). A page that never gets to say so (a crashed tab) stops it
+after three minutes of silence instead. A tab hidden behind another keeps it
+running, and a transcription started from the page outlives the window. Run
+`dsj ui` again while it is open and you get the running one's address, not a
+second copy.
 
 It follows the Mac's light or dark Appearance, live, until you pick Light or
 Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike

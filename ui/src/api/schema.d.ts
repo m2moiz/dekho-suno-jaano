@@ -233,6 +233,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/bye": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bye
+         * @description The page is going away (#206). The server stops BYE_S later unless a page beats.
+         *
+         *     Sent by the page on `pagehide` with `fetch(..., {keepalive: true})`, which
+         *     outlives the page and, unlike `sendBeacon`, carries the token header.
+         */
+        post: operations["bye_api_bye_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -653,6 +676,24 @@ export interface operations {
         };
     };
     heartbeat_api_heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    bye_api_bye_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -21,11 +21,18 @@ export const NO_TOKEN: AppError = {
 
 let token: string | null = null;
 
+// This page load's own id, on every request, so the server can tell a goodbye
+// from this page apart from another tab that is still open (#206). A new one
+// for each load: the library and a transcript are two pages, even in one tab.
+export const PAGE_HEADER = "X-Dsj-Page";
+const PAGE = crypto.randomUUID();
+
 // Every request through the generated client carries the token as a header.
 // Without one the server answers 401 with a sentence saying how to get it.
 api.use({
   onRequest({ request }) {
     if (token !== null) request.headers.set("Authorization", `Bearer ${token}`);
+    request.headers.set(PAGE_HEADER, PAGE);
     return request;
   },
 });
@@ -57,14 +64,40 @@ export function sessionToken(): string | null {
 }
 
 // The server exits three minutes after the last beat (#112 rule 6, IDLE_S in
-// dsj/ui/server.py), so a closed window does not leave it running. Every 15 s
-// while the tab is in front; a hidden tab's timer is slowed by the browser to
-// about once a minute (measured in Chromium, #204), which the cutoff allows for.
+// dsj/ui/server.py), so a page that vanished without a word does not leave it
+// running. Every 15 s while the tab is in front; a hidden tab's timer is slowed
+// by the browser to about once a minute (measured in Chromium, #204), which the
+// cutoff allows for. A page that closes says so (sayBye), and the server stops
+// seconds later instead.
 export const BEAT_MS = 15_000;
+
+/**
+ * Tell the server this page is going away: closed, reloaded, or left for the
+ * next page (#206). The server stops shortly after unless a page beats.
+ *
+ * A plain fetch, started inside the `pagehide` handler: the generated client
+ * awaits its middleware before it fetches, and a page being torn down should
+ * not have to outlive a promise. `keepalive` lets the request finish after the
+ * page is gone, and unlike `navigator.sendBeacon` it can carry the token header.
+ */
+function sayBye(win: Window): void {
+  if (token === null) return;
+  const request = new Request(new URL("/api/bye", win.location.origin), {
+    method: "POST",
+    keepalive: true,
+    headers: { Authorization: `Bearer ${token}`, [PAGE_HEADER]: PAGE },
+  });
+  fetch(request).catch((error: unknown) => {
+    console.warn("dsj ui goodbye failed", error);
+  });
+}
 
 /**
  * Beat now, then every BEAT_MS, and the moment the tab comes back into view,
  * so a tab the browser has slowed down does not wait for its next slow tick.
+ *
+ * Say goodbye on `pagehide`, and beat again on a `pageshow` that brings the
+ * page back from the back-forward cache: its goodbye was already sent.
  */
 export function startHeartbeat(win: Window = window): () => void {
   const beat = () => {
@@ -78,11 +111,19 @@ export function startHeartbeat(win: Window = window): () => void {
   const onVisible = () => {
     if (win.document.visibilityState === "visible") beat();
   };
+  const onHide = () => sayBye(win);
+  const onShow = (event: PageTransitionEvent) => {
+    if (event.persisted) beat();
+  };
   beat();
   const timer = win.setInterval(beat, BEAT_MS);
   win.document.addEventListener("visibilitychange", onVisible);
+  win.addEventListener("pagehide", onHide);
+  win.addEventListener("pageshow", onShow);
   return () => {
     win.clearInterval(timer);
     win.document.removeEventListener("visibilitychange", onVisible);
+    win.removeEventListener("pagehide", onHide);
+    win.removeEventListener("pageshow", onShow);
   };
 }

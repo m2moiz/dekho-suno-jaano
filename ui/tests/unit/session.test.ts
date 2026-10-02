@@ -9,7 +9,7 @@ const fetchMock = vi.hoisted(() => {
 });
 
 import { api } from "../../src/api/client";
-import { startHeartbeat, takeToken } from "../../src/features/session/session";
+import { PAGE_HEADER, startHeartbeat, takeToken } from "../../src/features/session/session";
 
 const TOKEN = "abcDEF123_-xyz";
 
@@ -115,5 +115,62 @@ describe("a hidden tab (#204)", () => {
     setVisibility("visible");
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("leaving the page (#206)", () => {
+  async function started() {
+    vi.useFakeTimers();
+    window.history.replaceState(null, "", `/#t=${TOKEN}`);
+    takeToken();
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+    const stop = startHeartbeat();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    return stop;
+  }
+
+  function pageTransition(type: "pagehide" | "pageshow", persisted: boolean) {
+    window.dispatchEvent(new PageTransitionEvent(type, { persisted }));
+  }
+
+  it("says goodbye on pagehide, with the token, this page's id, and keepalive", async () => {
+    const stop = await started();
+    const page = fetchMock.mock.calls[0]?.[0].headers.get(PAGE_HEADER);
+    expect(page).toMatch(/^[0-9a-f-]{36}$/);
+    pageTransition("pagehide", false);
+    // Started inside the handler, not after a promise: the page is going.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bye = fetchMock.mock.calls[1]?.[0];
+    expect(new URL(bye?.url ?? "").pathname).toBe("/api/bye");
+    expect(bye?.method).toBe("POST");
+    expect(bye?.keepalive).toBe(true);
+    expect(bye?.headers.get("Authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(bye?.headers.get(PAGE_HEADER)).toBe(page);
+    stop();
+  });
+
+  it("beats again when the back-forward cache brings the page back, and only then", async () => {
+    const stop = await started();
+    pageTransition("pagehide", true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    pageTransition("pageshow", true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(new URL(fetchMock.mock.calls[2]?.[0].url ?? "").pathname).toBe("/api/heartbeat");
+    // A first load's pageshow is not a return; the page already beat at startup.
+    pageTransition("pageshow", false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it("sends nothing once stopped", async () => {
+    const stop = await started();
+    stop();
+    pageTransition("pagehide", false);
+    pageTransition("pageshow", true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

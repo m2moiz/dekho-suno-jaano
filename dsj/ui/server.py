@@ -24,14 +24,15 @@ it only has to guess the port. So only this machine's own page may use this one
      reply even when it guesses the port and the token check lets it through.
   5. No route takes a filesystem path. The page names a recording by id and
      the server looks the path up itself.
-  6. The page heartbeats, and the process exits after three minutes without one.
-     A lock file lets a second `dsj ui` find the first instead of binding a
-     rival.
+  6. The page heartbeats, and the process exits after three minutes without one,
+     or BYE_S after the last open page says it is going away (#206). A lock
+     file lets a second `dsj ui` find the first instead of binding a rival.
 """
 
 from __future__ import annotations
 
 __all__ = [
+    "BYE_S",
     "IDLE_S",
     "STATIC",
     "Heartbeat",
@@ -83,8 +84,20 @@ HOST = "127.0.0.1"
 # 59.9 to 61.0 s over two runs, and a one-minute cutoff stopped the server
 # 531 s after the tab was hidden. Three minutes rides out one of those beats going missing
 # with a minute to spare (tests/test_ui_server.py replays the measured beats).
-# The cost: a closed window stops the server within three minutes, not one.
+# A closed window does not wait this long: its page says goodbye (BYE_S below).
 IDLE_S = 180.0
+
+# How long the server outlives a page that said it was going away, the last one
+# open (#206). The page says so on `pagehide`, which also fires when it moves
+# between the library and a transcript, or reloads: those are page loads, and
+# the next page's first beat has to land inside this to cancel the stop. A
+# window closed for good stops the server this long after, well inside the 60 s
+# #57 asks for, where the cutoff alone took up to three minutes.
+BYE_S = 10.0
+
+# The header each page puts on its requests: an id it makes when it loads, so a
+# goodbye from one tab does not stop the server under another still open.
+PAGE_HEADER = "x-dsj-page"
 
 # The prefixes whose requests must carry the token. The page and its assets
 # are everything else, and are served to any loopback request (#112 rule 2).
@@ -108,11 +121,43 @@ class Heartbeat:
         self._clock = clock
         self._last = clock()
         self._holds = 0
+        # When each page was last heard from, by the id it sends (PAGE_HEADER).
+        self._pages: dict[str, float] = {}
+        # When the last page said it was going, until anything is heard again.
+        self._bye: float | None = None
         self._lock = threading.Lock()
 
-    def beat(self) -> None:
-        """The page is still there."""
-        self._last = self._clock()
+    def beat(self, page: str | None = None) -> None:
+        """A page is still there: any request cancels a goodbye before it."""
+        with self._lock:
+            self._last = self._clock()
+            self._bye = None
+            if page:
+                self._pages[page] = self._last
+
+    def bye(self, page: str | None) -> None:
+        """`page` is going away: a page load, a reload, or the window closing (#206)."""
+        with self._lock:
+            if page:
+                self._pages.pop(page, None)
+            self._bye = self._clock()
+
+    def gone_s(self, idle_s: float) -> float | None:
+        """Seconds since the last open page said it was going, or None.
+
+        None while nothing has said goodbye since the last request, while a job
+        holds the server, or while another page was heard from within `idle_s`:
+        a tab hidden behind another beats only once a minute (#204), and closing
+        a second tab must not stop the server under it. When that page closes
+        too it says so; if it never does, the `idle_s` cutoff still applies.
+        """
+        with self._lock:
+            if self._bye is None or self._holds:
+                return None
+            now = self._clock()
+            if any(now - seen < idle_s for seen in self._pages.values()):
+                return None
+            return now - self._bye
 
     def idle_s(self) -> float:
         """Seconds since the page was last heard from, or 0 while something holds it."""
@@ -198,7 +243,9 @@ class _Guard:
                 )(scope, receive, send)
                 return
             # Any request from the page shows it is open, not only the beat.
-            self.heartbeat.beat()
+            # A media element's carries no page id, and still counts.
+            page = headers.get(PAGE_HEADER.encode())
+            self.heartbeat.beat(page.decode("latin-1") if page else None)
         await self.app(scope, receive, send)
 
 
@@ -210,6 +257,16 @@ async def failed(request: Request, exc: Exception) -> JSONResponse:
 
 def heartbeat() -> None:
     """The page is still open. The guard has already counted the request."""
+
+
+def bye(request: Request) -> None:
+    """The page is going away (#206). The server stops BYE_S later unless a page beats.
+
+    Sent by the page on `pagehide` with `fetch(..., {keepalive: true})`, which
+    outlives the page and, unlike `sendBeacon`, carries the token header.
+    """
+    beats = cast("Heartbeat", request.app.state.heartbeat)
+    beats.bye(request.headers.get(PAGE_HEADER))
 
 
 def create_app(
@@ -242,6 +299,7 @@ def create_app(
     app.include_router(media.router)
     app.include_router(jobs.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
+    app.add_api_route("/api/bye", bye, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
     # dsj's own errors are answered quietly with their status. Anything else
@@ -305,19 +363,32 @@ def _write_holder(fd: int, holder: dict[str, object]) -> None:
     os.write(fd, json.dumps(holder).encode())
 
 
-def _watch(server: uvicorn.Server, beats: Heartbeat, idle_s: float, done: threading.Event) -> None:
-    """Stop `server` once no page has been heard from for `idle_s` seconds."""
-    while not done.wait(min(1.0, idle_s / 4)):
-        if beats.idle_s() >= idle_s:
-            print(
-                f"No dsj page has been open for {idle_s:g} s, so dsj ui stopped.",
-                file=sys.stderr, flush=True,
-            )
-            server.should_exit = True
-            return
+def _watch(
+    server: uvicorn.Server, beats: Heartbeat, idle_s: float, bye_s: float, done: threading.Event
+) -> None:
+    """Stop `server` when the last open page has gone.
+
+    Gone is `bye_s` after it said so, or `idle_s` without a sign of any page.
+    """
+    while not done.wait(min(1.0, idle_s / 4, bye_s / 4)):
+        gone = beats.gone_s(idle_s)
+        if gone is not None and gone >= bye_s:
+            why = "The dsj page was closed"
+        elif beats.idle_s() >= idle_s:
+            why = f"No dsj page has been open for {idle_s:g} s"
+        else:
+            continue
+        # The stop first, the sentence after. Whoever started dsj ui may be gone,
+        # and with it the reader of stderr: the print then raises BrokenPipeError,
+        # and when it came first that killed this thread before the stop, so the
+        # server ran on with nobody to stop it (an e2e run that timed out, #206).
+        server.should_exit = True
+        with contextlib.suppress(OSError):
+            print(f"{why}, so dsj ui stopped.", file=sys.stderr, flush=True)
+        return
 
 
-def serve(*, open_browser: bool, idle_s: float = IDLE_S) -> None:
+def serve(*, open_browser: bool, idle_s: float = IDLE_S, bye_s: float = BYE_S) -> None:
     """Listen on a port the kernel picks, print the URL, and serve until idle or stopped.
 
     If another `dsj ui` is already serving this library, print its URL (and
@@ -360,7 +431,8 @@ def serve(*, open_browser: bool, idle_s: float = IDLE_S) -> None:
             server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
             done = threading.Event()
             watchdog = threading.Thread(
-                target=_watch, args=(server, app.state.heartbeat, idle_s, done), daemon=True
+                target=_watch, args=(server, app.state.heartbeat, idle_s, bye_s, done),
+                daemon=True,
             )
             watchdog.start()
             try:

@@ -7,7 +7,8 @@ import { createInterface } from "node:readline";
 
 const REPO = path.resolve(import.meta.dirname, "../../..");
 
-export type Server = { url: string; stop: () => Promise<void> };
+// `exited` settles when the process ends, however it ends: stopped, or stopping itself.
+export type Server = { url: string; stop: () => Promise<void>; exited: Promise<void> };
 
 function firstLine(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -31,6 +32,7 @@ export async function startUi(library: string): Promise<Server> {
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   return {
     url,
+    exited,
     // Quit it, as Ctrl-C does, and wait until it has let go of its port and lock.
     stop: async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
