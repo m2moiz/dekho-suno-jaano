@@ -2431,3 +2431,91 @@ def test_a_failed_xattr_write_keeps_the_transcript_and_says_so(
     assert json.loads(status.read_text())["state"] == "done"
     assert f"transcript not tagged onto {fake_media}" in caplog.text
     assert "Operation not permitted" in caplog.text
+
+
+def _recording_at(path: Path) -> Path:
+    """A stand-in recording at `path`: transcribe()'s probe is stubbed in this module."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF")
+    return path
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        ("Library", "CloudStorage", "GoogleDrive-someone", "My Drive", "Hi-Q Recordings"),
+        ("Library", "Mobile Documents", "com~apple~CloudDocs", "Recordings"),
+    ],
+)
+def test_a_recording_in_a_cloud_synced_folder_is_not_tagged(
+    folder: tuple[str, ...],
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Google Drive and iCloud Drive, by path, under a fake home (#202).
+
+    The transcript is written as ever and the recording carries no tag: what a
+    sync client does when a file it syncs gains one is not measured.
+    """
+    from dsj.filetag import TRANSCRIPT_TAG, read_tag
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    media = _recording_at(home.joinpath(*folder) / "standup.m4a")
+    out = media.with_name("standup.dsj.json")
+    fake_parakeet(tokens=_tokens())
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(media, out, diarize=False)
+
+    assert json.loads(out.read_text())["sentences"]
+    assert read_tag(media, TRANSCRIPT_TAG) is None
+    (said,) = [r.getMessage() for r in caplog.records if "not tagged" in r.getMessage()]
+    assert str(home.joinpath(*folder[:2])) in said
+    assert f"so only {out} holds it" in said
+    assert "cloud-synced folder" in said
+
+
+def test_a_folder_a_file_provider_syncs_is_found_by_its_domain_tag(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Desktop & Documents in iCloud keeps ordinary paths; its folder carries the domain tag.
+
+    The tag is put on a temporary folder here, standing in for ~/Documents.
+    """
+    from dsj.filetag import PROVIDER_DOMAIN_TAG, TRANSCRIPT_TAG, read_tag, write_tag
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    documents = tmp_path / "home" / "Documents"
+    documents.mkdir(parents=True)
+    write_tag(documents, PROVIDER_DOMAIN_TAG, b"com.apple.CloudDocs.iCloudDriveFileProvider")
+    media = _recording_at(documents / "talks" / "standup.m4a")
+    fake_parakeet(tokens=_tokens())
+
+    with caplog.at_level(logging.WARNING, logger="dsj.suno"):
+        transcribe(media, tmp_path / "out.json", diarize=False)
+
+    assert read_tag(media, TRANSCRIPT_TAG) is None
+    assert f"{documents} is synced by a file provider" in caplog.text
+
+
+def test_a_domain_tag_on_the_recording_itself_does_not_count(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+) -> None:
+    """A recording copied out of a synced folder keeps its tags; it is local now, so tag it."""
+    from dsj.filetag import PROVIDER_DOMAIN_TAG, TRANSCRIPT_TAG, read_tag, write_tag
+
+    media = _recording_at(tmp_path / "local" / "standup.m4a")
+    write_tag(media, PROVIDER_DOMAIN_TAG, b"com.apple.CloudDocs.iCloudDriveFileProvider")
+    out = tmp_path / "out.json"
+    fake_parakeet(tokens=_tokens())
+
+    transcribe(media, out, diarize=False)
+
+    assert read_tag(media, TRANSCRIPT_TAG) == out.read_bytes()

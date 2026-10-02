@@ -22,12 +22,19 @@ Written with the C library's own setxattr through ctypes, macOS only:
 Writing the tag changes neither the recording's bytes, its size nor its
 `st_mtime_ns`, which is what keeps a checkpoint's fingerprint valid
 (dsj/checkpoint.py keys on size and mtime).
+
+A recording in a cloud-synced folder is never tagged (#202). What a sync client
+does when a file it syncs gains a tag of several MB is not measured, and it may
+upload the whole recording again; the owner chose to skip those files rather
+than measure on their Drive. The transcript JSON is their only copy.
 """
 
 from __future__ import annotations
 
 __all__ = [
+    "PROVIDER_DOMAIN_TAG",
     "TRANSCRIPT_TAG",
+    "cloud_synced",
     "read_tag",
     "read_transcript",
     "sidecar_for",
@@ -48,6 +55,17 @@ from typing import Any, cast
 logger = logging.getLogger("dsj.suno")
 
 TRANSCRIPT_TAG = "com.jaano.transcript"
+
+# The tag macOS's File Provider puts on the root folder of each domain it syncs
+# (Microsoft documents reading it with `xattr -p` on OneDrive's root). It is how
+# a synced folder outside the two paths below shows itself: iCloud's Desktop &
+# Documents keeps the ordinary ~/Desktop and ~/Documents paths. Not observed on
+# a real iCloud folder: this Mac's Desktop and Documents are not synced (#202).
+PROVIDER_DOMAIN_TAG = "com.apple.file-provider-domain-id"
+
+# Under the home folder: where file provider clients (Google Drive, Dropbox,
+# OneDrive) keep their folders, and where iCloud Drive keeps its own.
+_SYNCED_UNDER_HOME = (("Library", "CloudStorage"), ("Library", "Mobile Documents"))
 
 
 def _libc() -> ctypes.CDLL:
@@ -101,6 +119,33 @@ def read_tag(path: Path, name: str) -> bytes | None:
     return buffer.raw[:read]
 
 
+def cloud_synced(path: Path) -> str | None:
+    """Why `path` lies in a cloud-synced folder, or None when nothing says it does.
+
+    Two signals, both read on this Mac with no network and no download: the
+    path (under ~/Library/CloudStorage or ~/Library/Mobile Documents, symlinks
+    resolved), then a File Provider domain tag on any folder above the file.
+    The folders are asked, never the file: a tag copied out of a synced folder
+    along with a recording must not make a local copy count as synced.
+    """
+    resolved = path.resolve()
+    home = Path.home().resolve()
+    for parts in _SYNCED_UNDER_HOME:
+        root = home.joinpath(*parts)
+        if resolved.is_relative_to(root):
+            return f"it is under {root}"
+    for folder in resolved.parents:
+        try:
+            domain = read_tag(folder, PROVIDER_DOMAIN_TAG)
+        except OSError:
+            # A folder this process may not look at (macOS privacy), or no
+            # tags at all off a Mac: no signal from it either way.
+            continue
+        if domain is not None:
+            return f"{folder} is synced by a file provider ({domain.decode(errors='replace')})"
+    return None
+
+
 def tag_transcript(recording: Path, transcript: Path) -> None:
     """Mirror the transcript's bytes onto the recording, or say on stderr why not.
 
@@ -108,7 +153,17 @@ def tag_transcript(recording: Path, transcript: Path) -> None:
     exactly the bytes on disk, labelled or not. A failure is a warning and not
     an error: the transcript is already written and is the truth, and failing
     a finished run over its safety net would throw the transcript away.
+
+    A recording in a cloud-synced folder is not tagged at all (#202).
     """
+    synced = cloud_synced(recording)
+    if synced is not None:
+        logger.warning(
+            "transcript not tagged onto %s, so only %s holds it: %s, and dsj does not "
+            "tag files in a cloud-synced folder (#202)",
+            recording, transcript, synced,
+        )
+        return
     try:
         write_tag(recording, TRANSCRIPT_TAG, transcript.read_bytes())
     except OSError as exc:

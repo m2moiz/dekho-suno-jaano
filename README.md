@@ -378,6 +378,17 @@ modified time stay exactly as they were, so a checkpoint for it stays good.
 written (a read-only recording, say), the run says so on stderr and finishes
 anyway.
 
+A recording in a cloud-synced folder is never tagged, and the run says so in
+one line on stderr; the transcript JSON is its only copy (#202). What a sync
+client does when a file it syncs gains a tag of several MB is not measured, and
+it may upload the whole recording again. dsj counts a folder as synced when it
+is under `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) or
+`~/Library/Mobile Documents` (iCloud Drive), or when a folder above the
+recording carries macOS's `com.apple.file-provider-domain-id` tag, which is how
+iCloud's Desktop & Documents sync would show itself in the ordinary `~/Desktop`
+and `~/Documents` (that last signal is not yet seen on a real iCloud folder).
+The app transcribes such files too, the same way.
+
 From Python, `dsj.filetag.read_transcript(recording)` returns the transcript
 from `<stem>.dsj.json` beside the recording, and from the tag only when that
 file is missing. The JSON file is the real copy; the tag is a local safety net.

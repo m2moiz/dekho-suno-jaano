@@ -23,7 +23,6 @@ __all__ = [
     "Jobs",
     "NotStarted",
     "engine_choices",
-    "in_cloud_storage",
     "transcript_path",
 ]
 
@@ -61,14 +60,6 @@ DEFAULT_MODELS = {
     "sherpa": SHERPA_MODEL,
 }
 
-# The folder macOS's file providers (Google Drive for Desktop, Dropbox,
-# OneDrive) sync from. Every run tags the recording with its transcript
-# (#119), and what Google Drive does when a file it syncs gains that tag is not
-# measured (#202): it may upload the whole recording again. Until it is, the
-# page starts nothing on a file in here.
-_CLOUD_STORAGE = ("Library", "CloudStorage")
-
-
 class NotStarted(RuntimeError):
     """The page asked for a transcription that was refused. Nothing ran and nothing was written."""
 
@@ -99,11 +90,6 @@ def engine_choices() -> list[EngineChoice]:
             reason = str(exc)
         choices.append(EngineChoice(name, reason, DEFAULT_MODELS[name]))
     return choices
-
-
-def in_cloud_storage(path: Path) -> bool:
-    """Whether `path` lies in the folder cloud clients sync, `~/Library/CloudStorage/`."""
-    return path.resolve().is_relative_to(Path.home().resolve().joinpath(*_CLOUD_STORAGE))
 
 
 def transcript_path(recording_id: int, engine: str, model: str, language: str | None) -> Path:
@@ -220,7 +206,7 @@ class Jobs:
         Returns None when the library has no recording with this id.
 
         Raises:
-            NotStarted: the recording's file is gone, or sits in a cloud folder.
+            NotStarted: the recording's file is gone.
             EngineUnavailable: the engine cannot run on this machine.
             dsj.runlock.AlreadyRunning: another transcription holds the machine.
         """
@@ -234,14 +220,8 @@ class Jobs:
                 f"{media} is not there any more, so it cannot be transcribed. Put the file "
                 f"back where it was, then start again."
             )
-        if in_cloud_storage(media):
-            raise NotStarted(
-                f"{media} is in a cloud-synced folder (~/Library/CloudStorage), and the app "
-                f"does not transcribe files there yet. Every run tags the recording with its "
-                f"transcript, and whether the sync client then uploads the whole file again "
-                f"is not yet measured (#202). Copy the file out of that folder and transcribe "
-                f"the copy with `dsj suno`."
-            )
+        # A file in a cloud-synced folder is transcribed like any other: the run
+        # leaves it untagged (dsj/filetag.py, #202) and writes nothing beside it.
         arguments = self._arguments(media, request)
         engine: str = arguments["engine"]
         get_engine(engine)  # EngineUnavailable with its remedy, before any lock is taken

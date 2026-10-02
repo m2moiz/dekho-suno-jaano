@@ -378,9 +378,16 @@ def test_a_job_is_refused_while_a_terminal_run_holds_the_machine(
         os.close(held)
 
 
-def test_a_recording_in_a_cloud_synced_folder_is_refused(
+def test_a_recording_in_a_cloud_synced_folder_is_transcribed_and_left_untagged(
     engine: Callable[..., StubEngine], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A cloud file is transcribed like any other; it just carries no tag (#202).
+
+    The folder is a fake one under a temporary home, never the real
+    ~/Library/CloudStorage.
+    """
+    from dsj.filetag import TRANSCRIPT_TAG, read_tag
+
     engine()
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
@@ -388,16 +395,15 @@ def test_a_recording_in_a_cloud_synced_folder_is_refused(
     media = wav(drive / "standup.wav")
     recording_id = add(media)
     client = page()
-    reply = client.post(f"/api/recordings/{recording_id}/transcribe", json={})
-    assert reply.status_code == 422, reply.text
-    body = reply.json()
-    assert body["error"] == "NotStarted"
-    assert "cloud-synced folder" in body["message"]
-    assert "#202" in body["message"]
-    assert client.get("/api/jobs").json() == []
-    # Nothing was written beside it, and nothing holds the machine.
+    reply = client.post(f"/api/recordings/{recording_id}/transcribe", json={"diarize": False})
+    assert reply.status_code == 202, reply.text
+    job = last_job(client, finished)
+    assert job["state"] == "done", job
+    assert any("cloud-synced folder" in note for note in job["notes"]), job["notes"]
+    assert read_tag(media, TRANSCRIPT_TAG) is None
+    # Nothing was written beside it: the transcript sits beside the library.
     assert sorted(p.name for p in drive.iterdir()) == ["standup.wav"]
-    os.close(runlock.acquire({"pid": os.getpid()}))
+    assert jobs_mod.transcript_path(recording_id, job["engine"], job["model"], None).is_file()
 
 
 def test_a_recording_whose_file_is_gone_is_refused(

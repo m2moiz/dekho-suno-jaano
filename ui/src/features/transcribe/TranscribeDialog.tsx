@@ -86,8 +86,8 @@ export function TranscribeDialog({
     }).then(
       () => onClose(),
       (thrown: unknown) => {
-        // Refused (another run holds the machine, the file is in a synced
-        // folder): the server's sentence says why, in the error dialog.
+        // Refused (another run holds the machine, the file is gone): the
+        // server's sentence says why, in the error dialog.
         onClose();
         showError(fromThrown(thrown));
       },

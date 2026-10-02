@@ -49,7 +49,7 @@ STATUS: dict[type[Exception], int] = {
     MarkError: 422,
     NotATranscript: 422,
     NotTheSameRecording: 422,
-    # Gone from where the library last saw it, or in a cloud-synced folder (#113).
+    # Gone from where the library last saw it (#113).
     NotStarted: 422,
     # Another transcription holds the machine; the request was fine, the moment was not.
     AlreadyRunning: 409,
