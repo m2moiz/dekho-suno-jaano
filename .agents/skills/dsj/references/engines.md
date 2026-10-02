@@ -96,8 +96,27 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 `--engine parakeet` to whisper for you. Roman Urdu is a **prompt**, not a setting: whisper
 writes Urdu in Urdu script by default, and seeding the decoder with a Roman Urdu example
 makes it emit Latin, which its own condition-on-previous-text then carries across
-windows. Measured on 116 seconds of Urdu speech, 275 of 277 words came back in Latin, with
+windows. On the public fixture below, 3% of the text comes back in Urdu script, with
 English words left in English where they were spoken in English.
+
+On long recordings the prompt is pushed out of whisper's context after 22 to 105 seconds,
+so `--roman-urdu` cuts the audio into 120-second windows and re-seeds each one. That
+window is measured, on the owner's two recordings that drift most (issue #100,
+2026-10-02, turbo, `dsj suno <file> --roman-urdu`, the 30-second rows with
+`ANCHOR_CHUNK_S` set to 30 by `scratch/whisper_sweep.py`):
+
+| recording | window | runs | words | Urdu script | loop seconds |
+|---|---|---:|---|---|---|
+| 101117, 13.1 min | none (22 Sep) | 1 | 1,181 | 81% | 196 |
+| | 120 s | 3 | 1,427 · 1,332 · 1,460 | 59 · 47 · 47% | 174 · 166 · 164 |
+| | 30 s | 2 | 1,141 · 1,061 | 13 · 6% | 487 · 321 |
+| 094234, 27.9 min | none (22 Sep) | 1 | 2,786 | 98% | 171 |
+| | 120 s | 2 | 3,251 · 3,102 | 39 · 44% | 86 · 343 |
+| | 30 s | 2 | 3,095 · 2,632 | 10 · 7% | 291 · 562 |
+
+A shorter window keeps more text in Latin and loses words, so the window stays at 120
+seconds. Expect some Urdu script in a long `--roman-urdu` transcript; the owner accepts it,
+because the target is complete text, not Roman spelling.
 
 `--prompt` takes your own text instead. `--language` and `--prompt` are whisper's alone;
 passing either with parakeet is an error rather than a silent no-op.

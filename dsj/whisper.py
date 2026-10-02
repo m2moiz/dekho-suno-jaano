@@ -26,9 +26,9 @@ this is a flag and not a replacement.
 ROMAN URDU IS A PROMPT, NOT A SETTING. whisper transcribes Urdu in Urdu script
 by default. Seeding the decoder with a Roman Urdu `initial_prompt` makes it emit
 Roman instead, and it carries across windows through whisper's own
-condition-on-previous-text. UNVERIFIED -- no reproducing script in this repo,
-see #100: over a 116s Urdu clip, 275 of 277 words were claimed to come back in
-Latin, the two exceptions single words inside otherwise-Roman sentences.
+condition-on-previous-text. On #148's public fixture `--roman-urdu` leaves 3%
+of the text in Urdu script (#33's row below), and a slow test in
+tests/test_urdu_fixture.py fails if that share goes above 15%.
 
 THAT ONLY HOLDS FOR SHORT AUDIO, and not because the seed reaches only the
 first window and nothing past it. `initial_prompt` is folded into an
@@ -97,9 +97,18 @@ DEFAULT_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16000
 
 # The window the Roman Urdu prompt is re-seeded at, and how much of it is
-# decoded twice. 120s because the bias was measured to survive 116s unaided --
-# UNVERIFIED, no reproducing script in this repo, see #100 -- and shortening it
-# buys anchoring at the price of the continuity whisper is good at. The overlap
+# decoded twice. 120s is the best window measured (#100, 2026-10-02): fifteen
+# turbo runs on the owner's two drift recordings, 101117 and 094234, through
+# scratch/whisper_sweep.py, which sets this constant before `dsj suno <file>
+# --roman-urdu` runs. Of the windows tried (120, 60, 30s), 120s gave the most
+# words on both files and the fewest loop seconds on 101117. 30s cut Urdu
+# script to under 13% on both, and lost 10 to 22% of the words and about
+# doubled the loop seconds doing it; 60s sat between, its two runs 18 points
+# apart. Unaided, the Roman bias died 22 to 105s into four recordings, so a
+# 120s window does drift in its back half (47 to 59% Urdu script on 101117, 39
+# to 44% on 094234). That is accepted: the owner decided on 2026-10-02 that
+# Urdu script in the output is fine, and the target is complete text, not
+# Roman spelling. The overlap
 # is there so a word spoken across a boundary is whole in at least one window;
 # `_anchored` keeps each segment in exactly one of them. `_anchored` also
 # requires `ANCHOR_CHUNK_S > ANCHOR_OVERLAP_S >= 1.0`; see its own validation.
@@ -251,8 +260,8 @@ def _anchored(
     Cutting the audio up and prompting each piece bounds that: drift can spread
     within one window and no further. What it costs is the cross-window
     continuity whisper would otherwise carry, which is why the windows overlap
-    and are not shorter than the 116s the Roman bias was measured to survive
-    (also UNVERIFIED, see #100).
+    and are not shorter: at 30s the same recordings lost 10 to 22% of their
+    words (#100, measured beside ANCHOR_CHUNK_S).
 
     `condition_on_previous_text=False` is not the fix it looks like:
     mlx-whisper resets its prompt to `len(all_tokens)`, which drops the seed

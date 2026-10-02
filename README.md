@@ -184,12 +184,29 @@ dsj suno voice-note.m4a -o transcript.json --roman-urdu
 Roman Urdu is a **prompt**, not a setting. whisper writes Urdu in Urdu script by
 default; seeding the decoder with a Roman Urdu example makes it emit Latin, and
 whisper's own condition-on-previous-text carries that across windows, for as
-long as the prompt survives (it does not on long recordings, see below).
-**UNVERIFIED, no reproducing script in this repo (m2moiz/dekho-suno-jaano#100):**
-measured on 116s of Urdu speech, 275 of 277 words were claimed to come back in
-Latin, English words left in English where they were spoken in English, which
-is the point, for speech that switches mid-sentence. `--roman-urdu` is that
-prompt plus `--language ur`; `--prompt` takes your own.
+long as the prompt survives. On the public fixture below, 3% of the text comes
+back in Urdu script, with English words left in English where they were spoken
+in English, which is the point, for speech that switches mid-sentence.
+`--roman-urdu` is that prompt plus `--language ur`; `--prompt` takes your own.
+
+On long recordings the prompt is pushed out of whisper's context after 22 to
+105 seconds, so `--roman-urdu` re-seeds it every 120 seconds. Measured on the
+owner's two recordings where it drifts most, whisper-large-v3-turbo
+(m2moiz/dekho-suno-jaano#100):
+
+| recording | window | runs | words | Urdu script | loop seconds |
+|---|---|---:|---|---|---|
+| 101117, 13.1 min | none (22 Sep) | 1 | 1,181 | 81% | 196 |
+| | 120s | 3 | 1,427 · 1,332 · 1,460 | 59 · 47 · 47% | 174 · 166 · 164 |
+| | 30s | 2 | 1,141 · 1,061 | 13 · 6% | 487 · 321 |
+| 094234, 27.9 min | none (22 Sep) | 1 | 2,786 | 98% | 171 |
+| | 120s | 2 | 3,251 · 3,102 | 39 · 44% | 86 · 343 |
+| | 30s | 2 | 3,095 · 2,632 | 10 · 7% | 291 · 562 |
+
+Each run is `dsj suno <file> --roman-urdu`, the 30s rows with `ANCHOR_CHUNK_S`
+set to 30 by `scratch/whisper_sweep.py`. A shorter window keeps more of the text
+in Latin and loses words, so the window stays at 120s: the goal is complete
+text, and Urdu script in the output is accepted.
 
 The model matters more than it looks. On the public Urdu-English fixture
 (`just urdu-fixture`, 854s), one run each with `--roman-urdu`

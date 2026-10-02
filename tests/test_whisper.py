@@ -696,8 +696,8 @@ def test_anchor_s_must_exceed_overlap_s(monkeypatch: pytest.MonkeyPatch) -> None
     Left unguarded, `step = anchor_s - overlap_s` goes to zero or negative:
     `range(0, total, 0)` raises a confusing `range() arg 3 must not be zero`,
     and a negative step iterates zero times, silently returning no transcript
-    for the whole file. Neither is what should happen when the ratio the
-    116s measurement (#100, unverified) justifies gets retuned.
+    for the whole file. Neither is what should happen when ANCHOR_CHUNK_S,
+    set from #100's window measurements, gets retuned.
     """
     _stub_mlx_whisper(monkeypatch, _result())
 
