@@ -336,6 +336,22 @@ way, once.
 `--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
 none at all, so an interrupted whisper run always starts over.
 
+**Never delete a transcript to force a re-run.** dsj replaces `--out` atomically and
+only once transcription has finished, so a run that stops earlier leaves the old file
+exactly as it was. The only way to lose it is to delete it first: on 2026-09-22 a
+script removed a finished transcript, started a whisper re-run, and the run was stopped
+14 minutes in, leaving neither. Write the retry to a new path, and replace the old file
+yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
+This matters most under whisper, which `--roman-urdu` uses: with no checkpoint, an
+interrupted retry leaves nothing behind.
+
 ## When something fails
 
 | Exit | Meaning |

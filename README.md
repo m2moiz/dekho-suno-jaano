@@ -284,6 +284,19 @@ The per-file numbers, with the command, commit and memory state of each, are in
 three cost more the longer the recording, which is why parakeet stays the
 default.
 
+**Never delete a transcript to force a re-run.** dsj replaces `-o` atomically
+and only once transcription has finished, so a run that stops earlier leaves
+the old file as it was. With no checkpoint, an interrupted whisper retry leaves
+nothing behind, so if the old file was deleted first, both are gone: that is how
+a finished transcript was lost on 2026-09-22. Write the retry to a new path and
+replace the old file yourself once the new one exists:
+
+```bash
+dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
+# only after rec.retry.json exists and looks right:
+mv rec.retry.json rec.json
+```
+
 It is part of the `mac` bundle; standalone installs can pick it alone
 (mlx-whisper pulls torch, ~250 MB):
 
