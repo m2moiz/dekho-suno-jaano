@@ -206,8 +206,9 @@ def _read_payload(path: Path) -> dict[str, Any]:
 def _media_of(transcript: Path, audio: str) -> Path:
     """Where the recording a transcript names is, as an absolute path.
 
-    `dsj suno` writes `audio` exactly as it was typed, so a relative one is
-    relative to wherever that run was started, which the file does not record.
+    Before #201 `dsj suno` wrote `audio` exactly as it was typed, so a relative
+    one is relative to wherever that run was started, which the file does not
+    record. Those transcripts are left as they are, and this guess stays for them.
     Counted on 2026-10-02 over the 97 transcripts under this repo's scratch/: 23
     were relative, all 23 found from the folder the runs were started in and
     none from the folder the JSON sits in. So beside the transcript is tried

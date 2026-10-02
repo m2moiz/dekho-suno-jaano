@@ -1452,8 +1452,11 @@ def _transcribe(
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
-            # an index into that file and has to keep pointing at it.
-            "audio": str(media),
+            # an index into that file and has to keep pointing at it. Absolute
+            # (#201): written as typed, a relative path was relative to a
+            # folder the file never recorded, and 23 of 97 transcripts under
+            # scratch/ named a recording nothing reading them later could find.
+            "audio": str(media.resolve()),
             # Which engine wrote it (#172). The model id alone did not say:
             # under sherpa it is whatever directory the run was given, and a
             # token's `c` means something different under each engine, so a

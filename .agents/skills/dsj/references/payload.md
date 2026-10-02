@@ -40,7 +40,7 @@ Six keys, always, in this order:
 
 | Key | Type | Notes |
 |---|---|---|
-| `audio` | string | The path you passed, verbatim. Not resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. |
+| `audio` | string | The recording's absolute path: the one you passed, resolved, and never the temporary wav. The transcript is an index into that file, so it has to keep pointing at it. Transcripts written before #201 hold the path as it was typed, which can be relative to whatever folder that run started in. |
 | `engine` | string | Which engine wrote it: `parakeet`, `whisper` or `sherpa`. Absent from transcripts written before it existed (#172) and from those `dsj parho` imports, which no engine wrote; for those, tell the engine from `model` with the table below. |
 | `model` | string | The resolved model id. Under sherpa it is the model directory the run was given, so it does not always name the engine; `engine` does. |
 | `text` | string | Whole transcript, one string: every sentence's `text` joined, outer whitespace stripped. |

@@ -432,8 +432,9 @@ def parho(
     # and further from the typo.
     if not media.exists():
         raise FileNotFoundError(media)
-    # utf-8-sig: caption files from Windows tools often open with a BOM.
-    payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
+    # utf-8-sig: caption files from Windows tools often open with a BOM. The
+    # recording by its absolute path, as `dsj suno` names it (#201).
+    payload = parse(source.read_text(encoding="utf-8-sig"), str(media.resolve()))
     atomic_write_text(out, json.dumps(payload))
     return 0
 

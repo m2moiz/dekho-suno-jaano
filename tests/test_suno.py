@@ -45,6 +45,7 @@ from dsj.suno import (
     silences,
     transcribe,
 )
+from dsj.suno import main as suno_main
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -174,6 +175,28 @@ def test_transcribe_writes_the_timestamped_index(
         "charOffset": 0,
     }
     assert on_disk["audio"] == str(fake_media)
+
+
+def test_a_recording_named_relative_to_where_the_run_started_is_written_absolute(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`dsj suno rec.wav -o t.json` from the folder holding rec.wav (#201).
+
+    Written as typed, `audio` was relative to a folder the transcript never
+    recorded, and nothing that opened it later could find the recording.
+    """
+    fake_parakeet(tokens=[])
+    monkeypatch.chdir(fake_media.parent)
+    (tmp_path / "out").mkdir()
+
+    assert suno_main([fake_media.name, "-o", "out/t.json", "--no-diarize"]) == 0
+
+    audio = json.loads((tmp_path / "out" / "t.json").read_text())["audio"]
+    assert Path(audio).is_absolute()
+    assert audio == str(fake_media.resolve())
 
 
 def test_transcribe_on_an_empty_result_still_writes_a_file(
