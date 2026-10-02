@@ -61,10 +61,13 @@ read, not silence. The text is no guide to what was said there, so it is left ou
 `sentences` and `text`, and the span stays here so the gap is not read as a pause. Under
 whisper each loop span is first decoded again on its own, with 2 s either side, once
 without the prompt at temperature 0 and, if that loops too, once with the run's prompt at
-temperature 0.4. The first attempt with no loop and more than five words inside the span
-replaces the loop in `sentences`, cut to the span; a loop that survives both is recorded
-here. On four of the owner's transcripts the two attempts recovered 29 of the 38 loop
-spans they tried, 649 of 787 loop seconds, at 28 to 90 s of extra wall time a file. A
+temperature 0.4. Only the part of the span no other sentence covers is read again: where
+whisper's two-minute windows overlap, a loop at the end of one window can lie inside a
+sentence the next window already read, and that loop is left as it is. The first attempt
+with no loop and more than five words in that part replaces the loop in `sentences`, cut
+to it, so no word is written twice; a loop that survives both is recorded here. On four of the owner's transcripts the two attempts recovered 26 of the 37 loop
+spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a file. The
+second attempt samples, so a rerun can recover a different set. A
 recovered span reads like any other sentence, and whether its words are right is not yet
 measured. To know what was said in a span listed here, listen to it. On the five whisper transcripts
 the rule was measured on, every sentence it matched was a loop. It runs under every

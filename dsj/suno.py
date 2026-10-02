@@ -446,14 +446,14 @@ def _without_silence(
 
 # Decoding a loop span again (#183). A loop is not a fixed property of the
 # audio: two identical runs on 094234 gave 86 and 343 loop seconds (#100). So
-# after a whisper run, each loop sentence over audio that is not silence is cut
-# out with RETRY_PAD_S either side and decoded alone, first with RETRY_PLAIN,
-# then, only if that loops or returns RETRY_MIN_WORDS words or fewer, with
-# RETRY_WARM. The first result with no loop sentence and more than
-# RETRY_MIN_WORDS words inside the span replaces the loop; a span both fail
-# stays a loop and goes to `unclear` as before. Under --roman-urdu the two are
-# language ur with no prompt at temperature 0, and the Roman prompt at
-# temperature 0.4.
+# after a whisper run, the part of each loop's span that is not silence and
+# that no other sentence covers is cut out with RETRY_PAD_S either side and
+# decoded alone, first with RETRY_PLAIN, then, only if that loops or returns
+# RETRY_MIN_WORDS words or fewer, with RETRY_WARM. The first result with no
+# loop sentence and more than RETRY_MIN_WORDS words inside that part replaces
+# the loop; a span both fail stays a loop and goes to `unclear` as before.
+# Under --roman-urdu the two are language ur with no prompt at temperature 0,
+# and the Roman prompt at temperature 0.4.
 #
 # Measured 2026-10-02 by scratch/redecode_probe.py (#183): 38 loop spans, 818
 # loop seconds, of four 120 s anchored turbo transcripts of the owner's
@@ -463,9 +463,14 @@ def _without_silence(
 # second because on 171500, mostly English, plain looped on 4 of 9 spans where
 # the prompted settings did not. Each retry took 1 to 10 s on a 30 s clip.
 # The same four transcripts through this code (scratch/retry_loops_run.py):
-# 29 of the 38 spans it retried recovered, 649 of 787 loop seconds, 1,703
-# words added, 28 to 90 s of wall time a file. Not yet measured: whether the
-# recovered text is right (#182 is the check).
+# 26 of the 37 spans it retried recovered, 551 of their 787 loop seconds,
+# 1,494 words added, 42 to 129 s of wall time a file, and no sentence overlap
+# added. Fewer than the probe, for two measured reasons: two spans the probe
+# counted were almost wholly inside a neighbour (0.4 and 3.8 s left unread),
+# so its words there were duplicates; and warm samples at temperature 0.4, so
+# a span it reads on one run it can miss on the next (two did on 171500, one
+# went the other way). Not yet measured: whether the recovered text is right
+# (#182 is the check).
 #
 # parakeet and sherpa never retry: is_loop catches nothing they write, and
 # neither has a second set of settings to try. RETRY_LOOPS = False turns it
@@ -505,6 +510,27 @@ def _within(sentences: list[Sentence], start: float, end: float) -> list[Sentenc
     return out
 
 
+def _unread(start: float, end: float, others: list[Sentence]) -> tuple[float, float]:
+    """The part of [start, end) that no sentence in `others` covers, as (lo, hi).
+
+    At an anchored seam whisper decodes the window overlap twice, and a loop at
+    the end of one window lies inside the next window's first sentence (#183:
+    on #148's fixture, 221 words timed into 803.94 to 803.98 s, inside a
+    sentence from 798.0 to 825.3 s). Those seconds were read already. A
+    neighbour that runs into the span from before moves `lo` to its end; one
+    that starts inside the span moves `hi` to its start. `lo >= hi` means
+    nothing is left to read. `others` must be sorted by start.
+    """
+    lo, hi = start, end
+    for o in others:
+        if o["start"] <= lo < o["end"]:
+            lo = cast("float", o["end"])
+    for o in others:
+        if lo < o["start"] < hi:
+            hi = cast("float", o["start"])
+    return lo, hi
+
+
 def _retried(
     transcription: Transcription,
     stretches: list[tuple[float, float]],
@@ -517,39 +543,50 @@ def _retried(
     has already left as no speech, and a loop sentence whose span still crosses
     a silent stretch is not retried either, so no retry can write over silence.
     `decoder` is called once, and only when there is a loop to retry, because
-    it loads the audio. Each replacement is cut to the loop's span (_within),
-    so it never overlaps the sentences either side; the result is put back in
-    time order all the same, because a neighbour can start inside the span.
+    it loads the audio.
+
+    Only the part of a loop's span that no other sentence covers is read again
+    (_unread), and the replacement is cut to it (_within), so a retried word
+    never lands inside a neighbour and nothing is written twice. A loop with no
+    such part is not retried and stays a loop. The result is put back in time
+    order all the same.
 
     Reports state "retrying" once before the first span and once after each,
-    counting loop seconds, so a long run does not look stuck.
+    counting the seconds to be read again, so a long run does not look stuck.
     """
     inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
     sentences = transcription.sentences
-    todo = [
-        i
-        for i, s in enumerate(sentences)
-        if is_loop(str(s["text"])) and not any(s["start"] < b and a < s["end"] for a, b in inner)
-    ]
+    loops = [is_loop(str(s["text"])) for s in sentences]
+    read = [s for s, looped in zip(sentences, loops, strict=True) if not looped]
+    todo: list[tuple[int, float]] = []
+    for i, s in enumerate(sentences):
+        if not loops[i] or any(s["start"] < b and a < s["end"] for a, b in inner):
+            continue
+        lo, hi = _unread(s["start"], s["end"], read)
+        if lo < hi:
+            todo.append((i, hi - lo))
     if not todo:
         return transcription
-    total = sum(sentences[i]["end"] - sentences[i]["start"] for i in todo)
+    total = sum(length for _, length in todo)
     started = time.monotonic()
     report(Progress(0.0, total, 0.0), "retrying")
     decode = decoder()
     done = 0.0
     replaced: dict[int, list[Sentence]] = {}
-    for i in todo:
-        start, end = cast("float", sentences[i]["start"]), cast("float", sentences[i]["end"])
-        for options in (RETRY_PLAIN, RETRY_WARM):
-            decoded = decode(start - RETRY_PAD_S, end + RETRY_PAD_S, options)
-            got = _within(decoded, start, end)
+    for i, length in todo:
+        # Against the replacements made so far too: two loops can share seconds.
+        others = sorted(read + [r for got in replaced.values() for r in got],
+                        key=lambda o: cast("float", o["start"]))
+        lo, hi = _unread(sentences[i]["start"], sentences[i]["end"], others)
+        for options in (RETRY_PLAIN, RETRY_WARM) if lo < hi else ():
+            decoded = decode(lo - RETRY_PAD_S, hi + RETRY_PAD_S, options)
+            got = _within(decoded, lo, hi)
             looped = any(is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded)
             words = sum(len(_WORD.findall(str(s["text"]))) for s in got)
             if not looped and words > RETRY_MIN_WORDS:
                 replaced[i] = got
                 break
-        done += end - start
+        done += length
         report(Progress(done, total, time.monotonic() - started), "retrying")
     if not replaced:
         return transcription

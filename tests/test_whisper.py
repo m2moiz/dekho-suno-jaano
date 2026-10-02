@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import wave
+from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -775,10 +776,11 @@ _BEFORE = _words_seg([(0.0, 0.5, " We"), (0.5, 1.0, " began.")])
 _AFTER = _words_seg([(18.0, 18.2, " Then"), (18.2, 18.4, " stop.")])
 _MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
 
-# The retry decodes 8.0 to 20.5 s, so its clip clock is 8 s behind the
-# recording's. A word in the pad on each side (9.0 and 19.0 s) is a neighbour's,
-# decoded again. Seven distinct words fall inside the span, and the last one,
-# from 18.3 s, ends past it at 19.0 s.
+# The neighbour after the loop starts at 18.0 s, inside the loop's span, so the
+# retry reads 10.0 to 18.0 s, decoded as 8.0 to 20.0 s: its clip clock is 8 s
+# behind the recording's. A word in the pad on each side (9.0 and 19.0 s) is a
+# neighbour's, decoded again, and so is the word at 18.3 s, which falls inside
+# the neighbour. Six distinct words are left.
 _READ = {
     "segments": [
         _words_seg(
@@ -810,7 +812,7 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
 
     assert len(calls) == 2
     retry = calls[1]
-    assert retry["n_samples"] == int(20.5 * 16000) - int(8.0 * 16000)
+    assert retry["n_samples"] == int(20.0 * 16000) - int(8.0 * 16000)
     assert retry["initial_prompt"] is None
     assert retry["temperature"] == 0.0
     assert retry["language"] == "ur"
@@ -824,11 +826,9 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
         *[(10.5 + i, 11.0 + i, f" w{i}") for i in range(6)],
         (18.0, 18.2, " Then"),
         (18.2, 18.4, " stop."),
-        (18.3, 18.5, " last"),
     ]
-    starts = [s["start"] for s in payload["sentences"]]
-    assert starts == sorted(starts)
-    assert payload["text"] == "We began. w0 w1 w2 w3 w4 w5 Then stop. last"
+    _assert_no_overlap(payload["sentences"])
+    assert payload["text"] == "We began. w0 w1 w2 w3 w4 w5 Then stop."
     assert states.count("retrying") == 2
     assert states.index("running") < states.index("retrying") < states.index("done")
 
@@ -873,6 +873,75 @@ def test_the_retry_can_be_switched_off(
 ) -> None:
     monkeypatch.setattr("dsj.suno.RETRY_LOOPS", False)
     calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 1
+    assert [u["reason"] for u in payload["unclear"]] == ["repetition loop"]
+
+
+def _assert_no_overlap(sentences: list[dict[str, Any]]) -> None:
+    """Every sentence ends by the next one's start, and holds its own tokens."""
+    for a, b in pairwise(sentences):
+        assert a["end"] <= b["start"], (a["start"], a["end"], b["start"])
+    for s in sentences:
+        assert all(s["start"] <= t["t"] <= t["e"] <= s["end"] for t in s["tokens"])
+
+
+# An anchored seam: the sentence before the loop runs into its span, to 12.0 s,
+# and the one after starts inside it, at 16.0 s, so only 12.0 to 16.0 s is
+# unread. The retry decodes 10.0 to 18.0 s and returns, on its clip clock, a
+# word inside each neighbour (11.0 and 16.5 s) and eight between them.
+_PREV = _words_seg([(7.0, 9.0, " Before"), (9.0, 12.0, " seam.")])
+_NEXT = _words_seg([(16.0, 18.0, " After"), (18.0, 20.0, " seam.")])
+_SEAM_READ = {
+    "segments": [
+        _words_seg(
+            [(1.0, 2.0, " seam.")]
+            + [(2.0 + i * 0.5, 2.5 + i * 0.5, f" v{i}") for i in range(8)]
+            + [(6.5, 7.0, " After")]
+        )
+    ]
+}
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_retried_words_never_land_inside_a_neighbour(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """Only the stretch no other sentence covers is read again, so nothing is written twice."""
+    calls = _stub_anchored(
+        monkeypatch, 30 * 16000, [{"segments": [_PREV, _LOOP, _NEXT]}, _SEAM_READ]
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 2
+    assert calls[1]["n_samples"] == int(18.0 * 16000) - int(10.0 * 16000)
+    assert payload["unclear"] == []
+    _assert_no_overlap(payload["sentences"])
+    tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    assert tokens == [
+        (7.0, " Before"),
+        (9.0, " seam."),
+        *[(12.0 + i * 0.5, f" v{i}") for i in range(8)],
+        (16.0, " After"),
+        (18.0, " seam."),
+    ]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_loop_a_neighbour_already_covers_is_not_decoded_again(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """A window-tail loop whose seconds the next window already read has nothing left to read.
+
+    The case of #148's fixture at 803.94 s: 221 words timed into 0.04 s at the
+    end of one window, inside the next window's first sentence (798.0 to
+    825.3 s). It stays a loop, as before the retry existed.
+    """
+    cover = _words_seg([(8.0, 14.0, " Long"), (14.0, 20.0, " sentence.")])
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [{"segments": [cover, _LOOP]}])
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
 

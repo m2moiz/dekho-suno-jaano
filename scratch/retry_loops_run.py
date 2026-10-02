@@ -10,14 +10,18 @@ goes through the same three steps the product runs after a whisper pass:
 No full re-transcription; one whisper model in this process, spans one at a
 time.
 
-    uv run python scratch/retry_loops_run.py LABEL/NAME [LABEL/NAME ...]
+    uv run python scratch/retry_loops_run.py [--prefix=r183] LABEL/NAME [LABEL/NAME ...]
 
 LABEL/NAME is a transcript under scratch/real_bench/runs/, without `.json`;
 its audio is NAME.m4a in $DSJ_REAL_AUDIO. Prints numbers only, never text: the
 owner's recordings are private. The retried transcript is written to
-scratch/real_bench/runs/r183-LABEL/NAME.json (never over an existing file) so
+scratch/real_bench/runs/PREFIX-LABEL/NAME.json (never over an existing file) so
 it can be scored against #182 when that is back. The table is appended to
 scratch/real_bench/retry183.md.
+
+scratch/transcript_invariants.py checks the transcript as it would be written
+without the retry and as it is written with it; the overlap and stray-token
+counts of both go in the table, so anything the retry breaks shows as a rise.
 """
 
 from __future__ import annotations
@@ -33,6 +37,9 @@ from dsj import media as media_mod
 from dsj import suno
 from dsj.asr import Transcription, with_char_offsets
 from dsj.whisper import ROMAN_URDU_PROMPT, redecoder
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from transcript_invariants import violations
 
 REPO = Path(__file__).resolve().parent.parent
 RUNS = REPO / "scratch" / "real_bench" / "runs"
@@ -62,11 +69,11 @@ def loops(unclear: list[dict[str, Any]]) -> tuple[int, float]:
     return len(spans), sum(u["end"] - u["start"] for u in spans)
 
 
-def one(ref: str, audio_root: Path) -> str:
+def one(ref: str, audio_root: Path, prefix: str) -> str:
     label, name = ref.split("/")
     payload = json.loads((RUNS / label / f"{name}.json").read_text())
     audio = audio_root / f"{name}.m4a"
-    out = RUNS / f"r183-{label}" / f"{name}.json"
+    out = RUNS / f"{prefix}-{label}" / f"{name}.json"
     if out.exists():
         sys.exit(f"{out} exists; refusing to overwrite")
 
@@ -80,6 +87,9 @@ def one(ref: str, audio_root: Path) -> str:
     stretches = suno.silences(media_mod.loudness(audio, suno.LOUDNESS_FRAME_S))
     t, no_speech = suno._without_silence(Transcription(text, sentences), stretches)  # pyright: ignore[reportPrivateUsage]
     loop_sentences = [s for s in t.sentences if suno.is_loop(str(s["text"]))]
+    unretried, unretried_loops = suno._without_loops(t)  # pyright: ignore[reportPrivateUsage]
+    before = violations({"text": unretried.text, "sentences": unretried.sentences,
+                         "unclear": no_speech + unretried_loops})
     base_words = words([s for s in t.sentences if not suno.is_loop(str(s["text"]))])
 
     calls = {"plain": 0, "warm": 0}
@@ -109,34 +119,44 @@ def one(ref: str, audio_root: Path) -> str:
     # A span goes to warm only when plain failed on it.
     by_plain = retried - calls["warm"]
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload | {
+    written = payload | {
         "text": t.text,
         "unclear": sorted(no_speech + loops_after, key=lambda u: u["start"]),
         "sentences": t.sentences,
-    }))
+    }
+    after = violations(written)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(written))
     return (
         f"| {label}/{name[-6:]} | {before_spans} | {before_s:.0f} | "
         f"{len(no_speech)} | {len(loop_sentences)} | {retried} | {after_spans} | "
         f"{after_s:.0f} | {recovered} ({by_plain} plain, {recovered - by_plain} warm) | "
-        f"{words(t.sentences) - base_words} | {wall:.0f} |"
+        f"{words(t.sentences) - base_words} | {wall:.0f} | "
+        f"{before['overlaps']} to {after['overlaps']} | "
+        f"{before['stray_tokens']} to {after['stray_tokens']} | "
+        f"{after['empty_unclear']} · {after['crowded_unclear']} · {after['text_mismatch']} |"
     )
 
 
 def main(argv: list[str]) -> int:
     root = os.environ.get("DSJ_REAL_AUDIO")
+    prefix = "r183"
+    if argv and argv[0].startswith("--prefix="):
+        prefix = argv.pop(0).split("=", 1)[1]
     if not root or not argv:
-        sys.exit("usage: DSJ_REAL_AUDIO=... retry_loops_run.py LABEL/NAME [...]")
+        sys.exit("usage: DSJ_REAL_AUDIO=... retry_loops_run.py [--prefix=r183] LABEL/NAME [...]")
     head = (
         "| transcript | loop spans before | loop s before | no-speech stretches"
         " | loops left after the silence rule | spans retried | loop spans after"
-        " | loop s after | spans recovered | words added | retry wall s |\n"
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|"
+        " | loop s after | spans recovered | words added | retry wall s"
+        " | overlaps without to with retry | stray tokens without to with"
+        " | empty · crowded unclear · text mismatch |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|---|"
     )
     print(head, flush=True)
     rows: list[str] = []
     for ref in argv:
-        row = one(ref, Path(root))
+        row = one(ref, Path(root), prefix)
         print(row, flush=True)
         rows.append(row)
     with OUT.open("a") as fh:
