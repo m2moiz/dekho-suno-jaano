@@ -49,20 +49,30 @@ Inside an `unclear` entry:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | The span of the sentence that was taken out, in whole milliseconds like a sentence's. |
-| `reason` | string | Why. Today always `repetition loop`. |
+| `start`, `end` | float seconds | For a loop, the span of the sentence that was taken out, in whole milliseconds like a sentence's. For no speech, the silent stretch, to the 0.1 s frame. |
+| `reason` | string | Why: `repetition loop` or `no speech`. |
 | `words` | int | How many words the engine wrote there. The words themselves are not kept. |
 
 **A repetition loop** is a sentence of more than six words, at most a third of them
 distinct: whisper writing one letter or a short phrase over and over, up to about 220
 times in one window. On four of the owner's recordings loops covered 133 to 752 seconds a
 file, over audio as loud as the speech around them, so most mark speech whisper failed to
-read, not silence; on the public fixture one sat over 60 s of near-silence instead. The text is no guide to what was said
-there, so it is left out of `sentences` and `text`, and the span stays here so the gap is
-not read as a pause. To know what was said, listen to the span or transcribe it again.
-On the five whisper transcripts the rule was measured on, every sentence it matched was a
-loop. It runs under every engine; on a parakeet transcript of a 17-minute English call it
-matched nothing.
+read, not silence. The text is no guide to what was said there, so it is left out of
+`sentences` and `text`, and the span stays here so the gap is not read as a pause. To know
+what was said, listen to the span or transcribe it again. On the five whisper transcripts
+the rule was measured on, every sentence it matched was a loop. It runs under every
+engine; on a parakeet transcript of a 17-minute English call it matched nothing.
+
+**No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
+than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
+public fixture. Every word that starts more than 1 s inside the stretch is taken out, and
+the stretch is recorded with how many there were. A word within 1 s of its edge stays,
+because whisper starts a real word up to half a second before its speech. Unlike a loop,
+there is nothing to listen to: the audio is silent. The check runs before the loop check,
+so a loop written over silence is reported as `no speech`. It runs under every engine. On
+the measured set it found silence only on the fixture's three gaps and in one near-silent
+passage of one of the owner's recordings, and nowhere in speech; the thresholds and their
+measurement sit beside `SILENCE_DB` in `dsj/suno.py`.
 
 **Test for the key.** Transcripts written before it existed have no `unclear`, and their
 loops are still in `sentences`. Imports from SRT and VTT have none either: nothing checked

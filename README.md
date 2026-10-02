@@ -366,7 +366,8 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
   "speakers": ["SPEAKER_00", "SPEAKER_01"],   // only when diarization ran
   "diarization": "senko 0.1.0",               // absent if it did not
   "text": "the whole transcript as one string",
-  // stretches taken out of `sentences`: whisper looping on one letter or phrase.
+  // stretches taken out of `sentences`: whisper looping on one letter or phrase
+  // ("repetition loop"), or writing words over silence ("no speech").
   // [] when there were none; absent from transcripts written before it existed
   "unclear": [{"start": 134.1, "end": 161.8, "reason": "repetition loop", "words": 223}],
   "sentences": [

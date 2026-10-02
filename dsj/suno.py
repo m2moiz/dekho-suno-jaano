@@ -16,12 +16,15 @@ __all__ = [
     "DEFAULT_WHISPER_MODEL",
     "ENGINES",
     "LOOP_REASON",
+    "LOUDNESS_FRAME_S",
+    "NO_SPEECH_REASON",
     "OVERLAP_S",
     "Progress",
     "clock",
     "is_loop",
     "main",
     "render_bar",
+    "silences",
     "transcribe",
 ]
 
@@ -35,6 +38,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
+import numpy as np
 
 # Imported as media_mod because the parameter it serves is named `media` and
 # would shadow the module inside the function body.
@@ -50,6 +55,8 @@ from dsj.whisper import DEFAULT_WHISPER_MODEL
 from dsj.whisper import SAMPLE_RATE as WHISPER_SAMPLE_RATE
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from dsj.alignment import AlignedToken
 
 # The transcript is JSON, so its two nested shapes are plain dicts rather than
@@ -293,8 +300,9 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
     whisper sometimes decodes a whole window as one letter or a short phrase
     repeated (#140), and the loop text says nothing about what was there. On
     the owner's recordings the audio under the loops is as loud as the speech
-    around them, so most mark speech whisper failed to read; on #148's public
-    fixture one sits over 60 s of near-silence, so not all do. Left in, a
+    around them, so most mark speech whisper failed to read. The one measured
+    over silence, on #148's public fixture, is taken out before this by
+    _without_silence and reported as no speech (#181). Left in, a
     reader gets 200 copies of a letter, and a search or a summary counts them
     as words. Simply dropped, the reader would see a gap and could not tell a
     failed stretch from a quiet one.
@@ -322,6 +330,112 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
         else:
             kept.append(s)
     if not unclear:
+        return transcription, unclear
+    return (
+        Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
+        unclear,
+    )
+
+
+# Text over silence (#181). whisper writes words where nobody speaks: about 220
+# over the 60 s of -60 dB noise in #148's fixture, at every anomaly-switch
+# setting. So after decoding, a run of LOUDNESS_FRAME_S frames all quieter than
+# SILENCE_DB that lasts SILENCE_MIN_S or more is silence, and a word that starts
+# more than SILENCE_EDGE_S inside one is taken out.
+#
+# Measured 2026-10-02 by scratch/speech_loudness.py over 41 transcripts and
+# 84,153 words of #148's fixture and the owner's five recordings, no model run
+# (numbers on #181):
+#
+# - The fixture's gaps are -60.0 dB RMS, loudest 0.1 s frame -59.7.
+#   SILENCE_DB is 4.7 dB above that.
+# - Inside the fixture's real speech no run of frames below -55 dB lasts longer
+#   than 0.5 s, so SILENCE_MIN_S is ten times the longest. The loudest frame
+#   within 1 s of a word's start is -21.1 dB or louder for 99.9% of its words.
+# - On the owner's files the rule finds runs on one file only, 094234, all in
+#   a passage from 19:51 to 25:34 whose frames have a median of -75 dB, where
+#   whisper's words repeat (1 to 16 distinct among 7 to 67 per transcript).
+#   -50 dB, or 3 s, would already take 12 or 13 words on 101117 from quiet runs
+#   of 3.5 to 5.9 s that nothing shows to be empty.
+# - Edges: whisper starts a real word up to 0.52 s before the speech it belongs
+#   to (17 words at the fixture's gap ends across 10 transcripts, 11 of them the
+#   next clip's first word), so a word that close to an edge stays.
+LOUDNESS_FRAME_S = 0.1
+SILENCE_DB = -55.0
+SILENCE_MIN_S = 5.0
+SILENCE_EDGE_S = 1.0
+NO_SPEECH_REASON = "no speech"
+
+
+def silences(
+    frame_db: NDArray[np.float64], frame_s: float = LOUDNESS_FRAME_S
+) -> list[tuple[float, float]]:
+    """Every run of frames below SILENCE_DB lasting SILENCE_MIN_S or more, as (start, end) seconds.
+
+    `frame_db` is dsj.media.loudness's output, one dBFS value per `frame_s`.
+    """
+    quiet = np.concatenate([[False], frame_db < SILENCE_DB, [False]]).astype(np.int8)
+    edges = np.flatnonzero(np.diff(quiet))
+    min_frames = round(SILENCE_MIN_S / frame_s)
+    return [
+        (round(float(a * frame_s), 3), round(float(b * frame_s), 3))
+        for a, b in zip(edges[::2].tolist(), edges[1::2].tolist(), strict=True)
+        if b - a >= min_frames
+    ]
+
+
+def _without_silence(
+    transcription: Transcription, stretches: list[tuple[float, float]]
+) -> tuple[Transcription, list[dict[str, Any]]]:
+    """`transcription` without the words whisper wrote over silence, and where they were.
+
+    A token whose `t` lies more than SILENCE_EDGE_S inside one of `stretches`
+    leaves its sentence; a sentence left with no tokens leaves `sentences`, and
+    one left with some is rebuilt from them, its `text`, bounds and
+    `charOffset`s included. Each stretch that lost a token becomes one entry of
+    the payload's `unclear` list: its `start` and `end`, `reason` "no speech",
+    and how many words were taken from it. That is what tells it apart from a
+    repetition loop, which marks loud audio whisper failed to read (#140).
+
+    Done before _without_loops: a loop over silence (the fixture's 60 s gap) is
+    a stretch with no speech, not a stretch whisper could not read, so it is
+    reported as the first. A loop over loud audio is still a loop.
+    """
+    inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
+    words = [0] * len(stretches)
+    hit = [False] * len(stretches)
+    kept: list[Sentence] = []
+    changed = False
+    for s in transcription.sentences:
+        tokens: list[dict[str, Any]] = s["tokens"]
+        keep: list[dict[str, Any]] = []
+        for t in tokens:
+            where = next((i for i, (a, b) in enumerate(inner) if a <= t["t"] < b), None)
+            if where is None:
+                keep.append(t)
+            else:
+                hit[where] = True
+                words[where] += len(_WORD.findall(str(t["w"])))
+        if len(keep) == len(tokens):
+            kept.append(s)
+            continue
+        changed = True
+        if keep:
+            kept.append(
+                s
+                | {
+                    "start": min(t["t"] for t in keep),
+                    "end": max(t.get("e", t["t"]) for t in keep),
+                    "text": "".join(str(t["w"]) for t in keep),
+                    "tokens": with_char_offsets(keep),
+                }
+            )
+    unclear = [
+        {"start": a, "end": b, "reason": NO_SPEECH_REASON, "words": n}
+        for (a, b), n, h in zip(stretches, words, hit, strict=True)
+        if h
+    ]
+    if not changed:
         return transcription, unclear
     return (
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept),
@@ -577,6 +691,12 @@ def transcribe(
         else:
             audio = media
 
+        # Before the decode, not after it: one cheap pass (measured 0.13 s for
+        # the fixture's 14 minutes of wav, 1.2 s for 28 minutes of m4a), and
+        # audio ffmpeg cannot read fails here rather than after an hour of
+        # whisper.
+        stretches = silences(media_mod.loudness(audio, LOUDNESS_FRAME_S))
+
         ckpt_path: Path | None = None
         resumed_from_s = 0.0
         # The recording's length as this run's transcription frames report it,
@@ -711,10 +831,15 @@ def transcribe(
         # reach it through the chunk loop above, whisper through its own window
         # loop, and both can emit a sentence that starts before the one printed
         # ahead of it. Text first, so the order is rebuilt from the final text.
-        # Loops last, so `unclear` comes out in the same order as `sentences`.
-        transcription, unclear = _without_loops(
-            _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription)))
+        # Silence before loops, so a loop over silence is reported as no
+        # speech (#181); both last, so `unclear` comes out in the same order as
+        # `sentences`.
+        transcription, no_speech = _without_silence(
+            _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription))),
+            stretches,
         )
+        transcription, loops = _without_loops(transcription)
+        unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 
         payload: Payload = {
             # The source the user handed us, never the temp wav -- this JSON is
@@ -727,7 +852,8 @@ def transcribe(
             "text": transcription.text,
             # Always written, `[]` when nothing was taken out, so that a
             # transcript without the key reads as one written before the loop
-            # check existed rather than one the check passed. Ahead of
+            # check existed rather than one the check passed. Two reasons:
+            # "repetition loop" (#140) and "no speech" (#181). Ahead of
             # `sentences`, which is most of the file's bytes.
             "unclear": unclear,
             "sentences": transcription.sentences,

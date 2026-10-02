@@ -18,9 +18,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
     from parakeet_mlx import DecodingConfig
     from parakeet_mlx.alignment import AlignedResult
 
@@ -232,6 +234,11 @@ def _needs_conversion(stream: AudioStream, rate: int) -> bool:
     return False
 
 
+def _loudness(media: Path, frame_s: float, sample_rate: int = 16_000) -> NDArray[np.float64]:
+    """Stand-in for media.loudness: no frames, so no silence and nothing taken out."""
+    return np.zeros(0, dtype=np.float64)
+
+
 @pytest.fixture
 def already_extracted_media(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make transcribe() treat any path as an already-conforming wav.
@@ -255,6 +262,9 @@ def already_extracted_media(monkeypatch: pytest.MonkeyPatch) -> None:
         _probe,
     )
     monkeypatch.setattr(media, "needs_conversion", _needs_conversion)
+    # The stub wav is four bytes ffmpeg cannot read. A test about the silence
+    # rule puts the real loudness back, on a real wav (#181).
+    monkeypatch.setattr(media, "loudness", _loudness)
 
 
 @pytest.fixture

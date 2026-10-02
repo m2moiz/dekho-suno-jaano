@@ -23,6 +23,7 @@ __all__ = [
     "extract_frame",
     "extract_tile_grid",
     "has_video",
+    "loudness",
     "needs_conversion",
     "probe",
 ]
@@ -253,6 +254,62 @@ def extract_audio(
             f"-c:a pcm_s16le out.wav` by hand to see the full log."
         )
     return dest
+
+
+def loudness(media: Path, frame_s: float, sample_rate: int = 16_000) -> NDArray[np.float64]:
+    """The loudness of every whole `frame_s` frame of `media`'s audio, in dBFS.
+
+    RMS of the mono mix at `sample_rate`, one value per frame; a trailing part
+    frame is dropped. One decode pass, read in blocks, so an hour of audio
+    costs about 36,000 numbers in memory and never the samples themselves.
+    Digital silence reads as -180 dB rather than minus infinity.
+
+    Raises:
+        MediaError: if ffmpeg exits non-zero.
+    """
+    frame = round(frame_s * sample_rate)
+    if frame <= 0:
+        raise ValueError(f"frame_s must cover at least one sample, got {frame_s}")
+    cmd = [
+        _tool("ffmpeg"),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(media),
+        "-vn",
+        "-ac", "1",
+        "-ar", str(sample_rate),
+        "-f", "f32le",
+        "-",
+    ]
+    # 1,000 frames a read: big enough that the loop costs nothing, small enough
+    # that a block is a few MB whatever the frame size.
+    block = 1000 * frame * 4
+    power: list[NDArray[np.float64]] = []
+    rest = b""
+    # stderr to a file and Popen as a context manager, for extract_audio's reasons.
+    with (
+        tempfile.TemporaryFile("w+") as errfile,
+        subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errfile) as proc,
+    ):
+        assert proc.stdout is not None
+        while buf := proc.stdout.read(block):
+            buf = rest + buf
+            whole = len(buf) // (frame * 4) * frame * 4
+            rest = buf[whole:]
+            samples = np.frombuffer(buf[:whole], dtype=np.float32).astype(np.float64)
+            power.append(np.mean(samples.reshape(-1, frame) ** 2, axis=1))
+        returncode = _reap(proc, what="the sample stream reaching EOF")
+        errfile.seek(0)
+        stderr = errfile.read().strip()
+
+    if returncode != 0:
+        raise MediaError(
+            f"ffmpeg failed to read the audio of {media} (exit {returncode}):\n{stderr}"
+        )
+    if not power:
+        return np.zeros(0, dtype=np.float64)
+    return 10 * np.log10(np.maximum(np.concatenate(power), 1e-18))
 
 
 def has_video(media: Path) -> bool:

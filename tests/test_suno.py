@@ -17,6 +17,7 @@ import math
 import os
 import shutil
 import sys
+import wave
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -25,16 +26,27 @@ import numpy as np
 import pytest
 from conftest import FakeToken
 
+from dsj import media as media_mod
 from dsj.alignment import AlignedResult, AlignedSentence, AlignedToken
 from dsj.checkpoint import checkpoint_path_for
 from dsj.diarize import DiarizationUnavailable
 from dsj.merge import Turn
-from dsj.suno import CHUNK_S, LOOP_REASON, OVERLAP_S, Progress, is_loop, transcribe
+from dsj.suno import (
+    CHUNK_S,
+    LOOP_REASON,
+    NO_SPEECH_REASON,
+    OVERLAP_S,
+    Progress,
+    is_loop,
+    silences,
+    transcribe,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from conftest import FakeModel
+    from numpy.typing import NDArray
 
     from dsj.media import AudioStream
 
@@ -43,6 +55,10 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.usefixtures("already_extracted_media", "no_real_diarizer")
 
 RATE = 16_000
+
+# The real one, taken before already_extracted_media swaps in its stub, for the
+# tests that run the silence rule on a real wav (#181).
+REAL_LOUDNESS = media_mod.loudness
 
 
 def _tokens() -> list[FakeToken]:
@@ -1541,3 +1557,142 @@ def test_a_sentence_is_timed_in_whole_milliseconds_and_spans_its_words(
         assert (round(s["start"], 3), round(s["end"], 3)) == (s["start"], s["end"])
         assert s["start"] <= s["tokens"][0]["t"]
         assert s["end"] >= max(t["e"] for t in s["tokens"])
+
+
+def _write_wav(path: Path, pieces: list[tuple[float, float, str]]) -> Path:
+    """A 16 kHz mono wav of `pieces`: (seconds, RMS dBFS, "tone" or "noise").
+
+    A 220 Hz tone stands in for speech and seeded white noise for a quiet room,
+    each scaled to the RMS asked for, so the loudness the rule reads is the
+    loudness the test wrote.
+    """
+    rng = np.random.default_rng(181)
+    parts: list[NDArray[np.float64]] = []
+    for seconds, rms_db, kind in pieces:
+        n = round(seconds * RATE)
+        if kind == "tone":
+            wave_ = np.sin(2 * np.pi * 220 * np.arange(n) / RATE)
+        else:
+            wave_ = rng.standard_normal(n)
+        parts.append(wave_ / np.sqrt(np.mean(wave_**2)) * 10 ** (rms_db / 20))
+    samples = np.round(np.concatenate(parts) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(samples.tobytes())
+    return path
+
+
+def _merge_over_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the chunk loop, with words over loud, quiet and silent audio.
+
+    Laid out against _silence_wav: words over the first silence, one sentence
+    half over it, a word just inside its far edge, quiet real speech, a loop
+    over loud audio and a loop over the second silence.
+    """
+
+    def sentence(words: list[tuple[float, str]]) -> AlignedSentence:
+        tokens = [
+            AlignedToken(id=i, text=w, start=t, duration=0.2) for i, (t, w) in enumerate(words)
+        ]
+        return AlignedSentence(text="".join(w for _, w in words), tokens=tokens)
+
+    sentences = [
+        sentence([(1.0, " We"), (1.3, " looked"), (1.6, " at"), (1.9, " it.")]),
+        # Two words over loud audio, then three over the silence from 5 to 15 s.
+        sentence(
+            [(4.0, " Bye"), (4.3, " now."), (8.0, " Thanks"), (8.3, " for"), (8.6, " watching.")]
+        ),
+        # 14.4 s is inside the silence, but within SILENCE_EDGE_S of its end:
+        # where whisper puts the start of a real word that opens the speech.
+        sentence(
+            [(14.4, " Right,"), (16.0, " she"), (16.3, " said"), (16.6, " it"), (16.9, " quietly.")]
+        ),
+        sentence([(26.0 + i * 0.3, " na") for i in range(9)]),
+        sentence([(37.0 + i * 0.3, " na") for i in range(9)]),
+    ]
+
+    def fake(engine: Any, audio_data: Any, **kwargs: Any) -> AlignedResult:
+        return AlignedResult(text="".join(s.text for s in sentences), sentences=sentences)
+
+    monkeypatch.setattr("dsj.chunking.transcribe_chunked", fake)
+
+
+def _silence_wav(path: Path) -> Path:
+    """Loud speech, 10 s of -60 dB noise, 10 s of quiet speech at -45 dB, and so on.
+
+    The -60 dB noise is #148's fixture's gaps; -45 dB is quieter than 99% of the
+    owner's words and still 10 dB over SILENCE_DB.
+    """
+    return _write_wav(
+        path,
+        [(5, -20, "tone"), (10, -60, "noise"), (10, -45, "tone"),
+         (10, -20, "tone"), (10, -60, "noise"), (5, -20, "tone")],
+    )
+
+
+def test_silences_are_runs_below_the_threshold_of_at_least_the_minimum(tmp_path: Path) -> None:
+    """5 s of -60 dB noise is silence; 4.9 s of it is not, nor is 10 s at -45 dB."""
+    wav = _write_wav(
+        tmp_path / "in.wav",
+        [(1, -20, "tone"), (4.9, -60, "noise"), (1, -20, "tone"), (5, -60, "noise"),
+         (1, -20, "tone"), (10, -45, "tone"), (1, -20, "tone")],
+    )
+
+    assert silences(REAL_LOUDNESS(wav, 0.1)) == [(6.9, 11.9)]
+
+
+def test_words_over_silence_leave_and_are_recorded_as_no_speech(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text written over silence is taken out and said to be silence (#181).
+
+    Quiet real speech, a word at the silence's edge and a loop over loud audio
+    stay what they were. A loop over silence is reported as no speech, the case
+    of #148's fixture, so a reader can tell a silent minute from a failed one.
+    """
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    fake_parakeet(tokens=[])
+    _merge_over_silence(monkeypatch)
+    media = _silence_wav(tmp_path / "in.wav")
+    out = tmp_path / "out.json"
+
+    payload = transcribe(media, out, diarize=False)
+
+    assert json.loads(out.read_text()) == payload
+    assert payload["unclear"] == [
+        {"start": 5.0, "end": 15.0, "reason": NO_SPEECH_REASON, "words": 3},
+        {"start": 26.0, "end": 28.6, "reason": LOOP_REASON, "words": 9},
+        {"start": 35.0, "end": 45.0, "reason": NO_SPEECH_REASON, "words": 9},
+    ]
+    assert NO_SPEECH_REASON == "no speech"
+    assert [s["text"] for s in payload["sentences"]] == [
+        " We looked at it.",
+        " Bye now.",
+        " Right, she said it quietly.",
+    ]
+    assert payload["text"] == "We looked at it. Bye now. Right, she said it quietly."
+    trimmed = payload["sentences"][1]
+    assert (trimmed["start"], trimmed["end"]) == (4.0, 4.5)
+    assert [(t["w"], t["charOffset"]) for t in trimmed["tokens"]] == [(" Bye", 0), (" now.", 4)]
+
+
+def test_without_silence_nothing_is_taken_out(
+    fake_parakeet: Callable[..., FakeModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same words over audio with no silent stretch: only the loops leave."""
+    monkeypatch.setattr(media_mod, "loudness", REAL_LOUDNESS)
+    fake_parakeet(tokens=[])
+    _merge_over_silence(monkeypatch)
+    media = _write_wav(tmp_path / "in.wav", [(50, -20, "tone")])
+
+    payload = transcribe(media, tmp_path / "out.json", diarize=False)
+
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON, LOOP_REASON]
+    assert len(payload["sentences"]) == 3
+    assert payload["sentences"][1]["text"] == " Bye now. Thanks for watching."

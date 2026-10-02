@@ -16,6 +16,7 @@ import subprocess
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dsj import media
@@ -246,3 +247,24 @@ def test_extraction_closes_the_ffmpeg_pipe(tmp_path: Path, video_with_audio: Pat
 
     leaked = [w for w in caught if issubclass(w.category, ResourceWarning)]
     assert not leaked, f"extract_audio leaked: {[str(w.message) for w in leaked]}"
+
+
+def test_loudness_is_the_rms_of_each_whole_frame_in_dbfs(ready_wav: Path) -> None:
+    """The sine ffmpeg makes is amplitude 1/8, so RMS 1/(8 * sqrt 2): -21.07 dBFS (#181).
+
+    2 s in 0.3 s frames is six whole frames; the part frame left over is dropped.
+    """
+    expected = 20 * np.log10(1 / (8 * np.sqrt(2)))
+
+    frames = media.loudness(ready_wav, 0.1)
+    assert frames.shape == (20,)
+    assert np.allclose(frames, expected, atol=0.05)
+    assert media.loudness(ready_wav, 0.3).shape == (6,)
+
+
+def test_loudness_reports_a_file_ffmpeg_cannot_read(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"RIFF")
+
+    with pytest.raises(media.MediaError, match="failed to read the audio"):
+        media.loudness(bad, 0.1)
