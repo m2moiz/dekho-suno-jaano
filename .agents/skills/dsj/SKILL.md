@@ -228,8 +228,9 @@ times came from, `import:srt` or `import:vtt`, and no imported token has a `c`:
   no `e`, because a tag marks a start only. An untagged cue is one token, as for SRT.
 - **JSON** must be a dsj transcript. It passes through unchanged but for `audio`.
 
-Speakers come back from VTT voice tags, and from SRT only in the form `likho` writes,
-`SPEAKER_01: ` ahead of the words. A file with no labels imports with no `speakers` and
+Speakers come back from VTT voice tags, and from SRT only as `SPEAKER_01: ` (the form
+`likho` writes) or `Speaker 2: ` ahead of the words. Any other capitals and a colon
+(`NOTE: `, `OK: `) stay in the text as words. A file with no labels imports with no `speakers` and
 no `diarization`, exactly like a transcript that was never labelled.
 
 ### ui

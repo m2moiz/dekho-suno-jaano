@@ -311,3 +311,31 @@ def test_parho_names_the_recording_by_its_absolute_path(
 
     audio = json.loads((tmp_path / "t.json").read_text())["audio"]
     assert audio == str((tmp_path / "rec.wav").resolve())
+
+
+def _srt(*cues: str) -> str:
+    return "".join(
+        f"{i}\n00:00:0{i},000 --> 00:00:0{i},900\n{said}\n\n" for i, said in enumerate(cues, 1)
+    )
+
+
+@pytest.mark.parametrize("said", ["NOTE: the meeting moved", "OK: so", "Q: why", "JOHN: hello"])
+def test_an_all_caps_word_and_a_colon_is_spoken_text_not_a_speaker(said: str) -> None:
+    """A caption file someone else wrote: its words stay, and nobody is invented (#176).
+
+    Read as a speaker, `NOTE: the meeting moved` lost its first word and the
+    transcript gained a speaker called NOTE.
+    """
+    back = parse(_srt(said), "r.mov")
+    assert "speakers" not in back
+    assert [s["text"] for s in back["sentences"]] == [f" {said}"]
+    assert "speaker" not in back["sentences"][0]
+
+
+def test_the_speaker_labels_dsj_and_other_tools_write_are_still_read() -> None:
+    """`SPEAKER_01: ` as likho writes it, and `Speaker 2: ` as many caption tools do."""
+    back = parse(_srt("SPEAKER_01: See this.", "Speaker 2: Yes.", "NOTE: it moved"), "r.mov")
+    assert back["speakers"] == ["SPEAKER_01", "Speaker 2"]
+    assert [(s["speaker"], s["text"]) for s in back["sentences"]] == [
+        (0, " See this."), (1, " Yes."), (None, " NOTE: it moved"),
+    ]

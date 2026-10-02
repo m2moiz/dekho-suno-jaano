@@ -479,8 +479,9 @@ not the file name. The recording must exist and is named in `audio`, not
 opened. What the file cannot hold is not invented: `model` is `import:srt` or
 `import:vtt`, an SRT sentence is one token spanning its cue, a VTT cue with
 word timestamp tags becomes word tokens with starts but no ends, and no
-imported token has a confidence. Speakers come back from VTT voice tags and
-from the `SPEAKER_01: ` prefix `likho` writes into SRT.
+imported token has a confidence. Speakers come back from VTT voice tags and,
+in SRT, from the `SPEAKER_01: ` prefix `likho` writes or a `Speaker 2: ` one;
+any other capitals and a colon (`NOTE: `) stay in the text as words.
 
 ### ui: the app
 
