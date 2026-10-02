@@ -1,17 +1,19 @@
-"""The `dsj` command -- one Typer app, five verbs.
+"""The `dsj` command -- one Typer app, six verbs.
 
     dsj suno   recording.mov -o transcript.json    # listen
     dsj dekho  recording.mov -t transcript.json    # look
     dsj dikhao recording.mov 431.5 -o frame.jpg    # show me
     dsj likho  transcript.json -o captions.srt     # write
     dsj parho  recording.mov captions.vtt -o transcript.json    # read
+    dsj ui                                         # the app, in a browser
 
 Urdu imperatives, and they are not decoration: the first three name the things
 the tool does in the order it does them. Suno gives you what was said, dekho
 gives you when the picture changed, dikhao gives you the picture itself. Jaano
 -- know -- is what you get from all three, which is why it is the command.
 Likho writes what suno heard out for the tools that are not dsj, and parho reads
-a transcript those tools made back in, in place of suno.
+a transcript those tools made back in, in place of suno. `ui` is plain English
+because it is not a step in that sequence: it is the window over all of them.
 
 This file owns ALL argument parsing for the project. `dsj.suno.main`
 and `dsj.dekho.main` are thin shims onto the commands below, so
@@ -476,6 +478,18 @@ def parho(
     payload = parse(source.read_text(encoding="utf-8-sig"), str(media))
     atomic_write_text(out, json.dumps(payload))
     return 0
+
+
+@app.command("ui")
+def ui() -> int:
+    """Open the app: every recording dsj knows, in a browser window."""
+    from dsj.ui import require_extra
+
+    # Inside the command, not at the top of this file: fastapi costs every
+    # `dsj --help` and every `dsj suno` its import time otherwise, and most
+    # installs never open the app.
+    require_extra()
+    raise NotImplementedError("dsj ui has no server to start yet; that is #154")
 
 
 def run(argv: list[str]) -> int:

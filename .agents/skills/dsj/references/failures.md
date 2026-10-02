@@ -89,6 +89,13 @@ FileNotFoundError: sherpa model directory not found: mlx-community/parakeet-tdt-
 
 That is the known defect described in `engines.md`. Pass `--model <directory>` explicitly.
 
+`UIUnavailable` means `dsj ui` started nothing: the `ui` extra, fastapi and uvicorn, is not
+installed. The message names the import that failed and the remedy:
+
+```text
+dsj ui needs the `ui` extra, which is not installed here (No module named 'fastapi'). Install it with `uv tool install "dsj[mac,ui] @ git+https://github.com/m2moiz/dekho-suno-jaano"`, or from a clone add `--extra ui` to the `uv sync` line you already use (`uv sync` uninstalls every extra it is not given).
+```
+
 ## Media and ffmpeg failures
 
 | Class | Message and remedy |

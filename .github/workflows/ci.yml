@@ -96,7 +96,9 @@ jobs:
       # --extra sherpa joined for the same reason as whisper: pyright must
       # resolve the backend the engine module imports, even on a Mac that
       # will never run it.
-      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
+      # --extra ui joined with `dsj ui` (#111): its tests start the real server,
+      # and pyright must resolve fastapi to check dsj/ui/ at all.
+      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
 
       # From PyPI rather than a third-party action or a piped install script.
       # rust-just 1.58.0 publishes a macosx_11_0_arm64 wheel, checked against

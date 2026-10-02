@@ -54,7 +54,7 @@ OPTION = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
 
 # `dsj suno ...`, with or without a `uv run` prefix, found anywhere on the line so that
 # `open "$(dsj dikhao ...)"` is read too.
-INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao|likho|parho)\b(?P<rest>.*)")
+INVOCATION = re.compile(r"\bdsj\s+(suno|dekho|dikhao|likho|parho|ui)\b(?P<rest>.*)")
 
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -182,7 +182,9 @@ def flag_table_problems(text: str, actual: dict[str, set[str]]) -> list[str]:
     problems: list[str] = []
     for verb, real in sorted(actual.items()):
         documented = table_options(text, verb)
-        if not documented:
+        # A verb with no flags needs its section, which the verb-set test holds,
+        # and no table: an empty table would be a heading over nothing.
+        if not documented and real:
             problems.append(f"{verb}: SKILL.md has no `### {verb}` section with a flag table")
             continue
         problems += [

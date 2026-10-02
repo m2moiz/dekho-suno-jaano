@@ -135,12 +135,13 @@ carries more than you want:
 
 | Extra | Pulls in | For |
 |---|---|---|
-| `dsj[mac]` | `parakeet`, `whisper`, `diarize` | The working Mac setup |
+| `dsj[mac]` | `parakeet`, `whisper`, `diarize`, `ui` | The working Mac setup |
 | `dsj[android]` | `sherpa` | The phone |
 | `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
 | `dsj[whisper]` | `mlx-whisper` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch |
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
+| `dsj[ui]` | `fastapi`, `uvicorn` | `dsj ui`, the app in a browser |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -149,7 +150,7 @@ invocation is prefixed with `uv run`:
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
 cd dekho-suno-jaano
-uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
 uv run dsj suno recording.mov -o transcript.json
 ```
 

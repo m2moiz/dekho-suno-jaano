@@ -27,7 +27,8 @@ against about 10,000 for its transcript.
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
 (show me). Two more work on the transcript alone: `likho` (write) turns a finished one
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
-file those tools made into a transcript, in place of `suno`.
+file those tools made into a transcript, in place of `suno`. The sixth, `ui`, is for a
+person rather than an agent: it opens the app in a browser.
 
 The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
 `unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
@@ -57,7 +58,7 @@ was written against the `version` in its own header above. If the two differ, a 
 named below may not exist in that build, and using one fails as `No such option`, which
 reads like a typo and is not one.
 
-`dsj --help` lists the five verbs. There is no `dsj doctor`, and no way to ask the tool
+`dsj --help` lists the six verbs. There is no `dsj doctor`, and no way to ask the tool
 which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
@@ -79,7 +80,7 @@ for the change before running the patched tool, and put a measurement, with the 
 that produced it, behind any constant you introduce. Then gate it as
 [Changing dsj itself](#changing-dsj-itself) says.
 
-## The five verbs
+## The six verbs
 
 ### suno
 
@@ -230,6 +231,18 @@ times came from, `import:srt` or `import:vtt`, and no imported token has a `c`:
 Speakers come back from VTT voice tags, and from SRT only in the form `likho` writes,
 `SPEAKER_01: ` ahead of the words. A file with no labels imports with no `speakers` and
 no `diarization`, exactly like a transcript that was never labelled.
+
+### ui
+
+Open the app in a browser. It is for a person reading transcripts, not for an agent:
+everything it shows comes from the files the other verbs write, so query those instead.
+
+```bash
+dsj ui
+```
+
+It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
+in a second with `UIUnavailable`, whose message is the line that installs it.
 
 ## The transcript is the index
 
