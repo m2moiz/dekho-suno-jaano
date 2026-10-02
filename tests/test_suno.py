@@ -2193,31 +2193,37 @@ def _loaders_that_record(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 @pytest.mark.parametrize("engine", ["parakeet", "whisper"])
 def test_a_status_in_a_missing_directory_is_refused_before_anything_loads(
-    engine: str, fake_media: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    engine: str,
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Refused up front like -o (#197), and the refusal is the error the user sees.
 
     Before, the run loaded its model and decoded a chunk, the first heartbeat
     write failed, and the CLI's own handler then failed writing "failed" into
     the same missing directory: the traceback was about the status file twice
-    over. Driven through the CLI so that handler is on trial too.
+    over. Driven through the CLI so that handler is on trial too: since #200 it
+    prints the refusal as its one line, and nothing else.
     """
     import dsj.suno as transcribe_mod
 
     loaded = _loaders_that_record(monkeypatch)
     missing = tmp_path / "nope"
     out = tmp_path / "out.json"
+    capsys.readouterr()
 
-    with pytest.raises(FileNotFoundError) as refused:
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(out), "--engine", engine,
-             "--status", str(missing / "status.json")]
-        )
+    assert transcribe_mod.main(
+        [str(fake_media), "-o", str(out), "--engine", engine,
+         "--status", str(missing / "status.json")]
+    ) == 1
 
-    said = str(refused.value)
+    said = capsys.readouterr().err
+    assert said.startswith("dsj: cannot write the status file")
+    assert said.count("\n") == 1, said
     assert f"the directory {missing} does not exist" in said
     assert f"mkdir -p {missing}" in said
-    assert refused.value.__context__ is None, "the handler raised while handling the refusal"
     assert loaded == []
     assert not out.exists()
     assert not missing.exists(), "refused, not created"
@@ -2237,15 +2243,15 @@ def test_a_failing_run_still_writes_failed_and_its_own_error_to_a_valid_status(
     missing = tmp_path / "nope"
     status = tmp_path / "status.json"
 
-    with pytest.raises(FileNotFoundError):
-        transcribe_mod.main(
-            [str(fake_media), "-o", str(missing / "out.json"), "--status", str(status)]
-        )
+    # One line on stderr and exit 1 (#200), and the document still written.
+    assert transcribe_mod.main(
+        [str(fake_media), "-o", str(missing / "out.json"), "--status", str(status)]
+    ) == 1
 
     failed = json.loads(status.read_text())
     assert failed["state"] == "failed"
     assert failed["pid"] == os.getpid()
-    assert failed["error"].startswith("FileNotFoundError: ")
+    assert failed["error"].startswith("MissingPath: ")
     assert f"the directory {missing} does not exist" in failed["error"]
     assert "pass another -o" in failed["error"]
     assert loaded == []

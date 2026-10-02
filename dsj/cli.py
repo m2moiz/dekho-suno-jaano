@@ -57,13 +57,16 @@ from typing import Annotated
 
 import typer
 
+from dsj.asr import EngineUnavailable
+
 # Module level, not lazy. These are DEFAULTS, and a lazily-resolved default
 # cannot appear in --help: the first version of this file used 0 as a "not
 # given" sentinel and Typer duly advertised `[default: 0]` for a budget whose
 # real default is 150. Measured cost of the import: ~90ms, inside the noise of
 # `dsj --help` at 120-200ms. The heavy workers below stay lazy.
 from dsj.dekho import DEFAULT_BUDGET, DEFAULT_DELTA, DEFAULT_FPS, DEFAULT_MIN_GAP_S
-from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, Terminated
+from dsj.media import FFmpegNotFound
+from dsj.suno import DEFAULT_MODEL, DEFAULT_WHISPER_MODEL, ENGINES, RunRefused, Terminated
 
 app = typer.Typer(
     add_completion=False,
@@ -124,6 +127,12 @@ def _stderr_logger(name: str) -> None:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
+
+# The failures of `dsj suno` that are its caller's to fix, each already a
+# sentence carrying its remedy: a mistake in the arguments (RunRefused), and an
+# engine or ffmpeg that is not installed. Listed, never `Exception`: everything
+# else is a bug in dsj and keeps its traceback (#200).
+_CALLERS_TO_FIX: tuple[type[Exception], ...] = (RunRefused, EngineUnavailable, FFmpegNotFound)
 
 # EX_TEMPFAIL from sysexits.h, "try again later": the run did not fail, it
 # never started, and the same command will work once the other run is over.
@@ -244,7 +253,7 @@ def suno(
     except runlock.AlreadyRunning as busy:
         if sigterm_installed:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        print(busy, file=sys.stderr)
+        print(f"dsj: {busy}", file=sys.stderr)
         raise typer.Exit(EXIT_ALREADY_RUNNING) from None
 
     started = time.monotonic()
@@ -270,6 +279,12 @@ def suno(
         # `wait` and anything already reading 143 see what they saw before.
         # A Ctrl-C passes through too, and Typer turns it into exit 130.
         raise SystemExit(143) from None
+    except _CALLERS_TO_FIX as exc:
+        # One line, not a traceback (#200). transcribe() has already written
+        # `failed` to --status. Anything not listed is a bug in dsj, and keeps
+        # its traceback.
+        print(f"dsj: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from None
     finally:
         os.close(held)
         if sigterm_installed:

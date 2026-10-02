@@ -21,7 +21,10 @@ __all__ = [
     "OVERLAP_S",
     "RETRY_LOOPS",
     "STALL_S",
+    "BadOption",
+    "MissingPath",
     "Progress",
+    "RunRefused",
     "Terminated",
     "clock",
     "is_loop",
@@ -912,6 +915,28 @@ def _label_speakers(
     return labelled
 
 
+class RunRefused(Exception):
+    """A run refused before anything loaded, over something only its caller can put right.
+
+    `dsj suno` prints one of these as one line, `dsj: <message>`, and not as a
+    traceback (#200): forty lines of stack above a sentence about the caller's
+    own arguments read as a crash in dsj. Anything that is not one of these
+    keeps its traceback, because that is a bug in dsj.
+    """
+
+
+class MissingPath(RunRefused, FileNotFoundError):
+    """A file the run reads, or a directory it writes into, is not there.
+
+    A FileNotFoundError too, so a caller's `except FileNotFoundError` still
+    catches it.
+    """
+
+
+class BadOption(RunRefused, ValueError):
+    """An option this run cannot take. A ValueError too, as it always was."""
+
+
 class Terminated(KeyboardInterrupt):
     """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
 
@@ -1093,12 +1118,16 @@ def _transcribe(
 ) -> Payload:
     """transcribe()'s body: everything it documents but the status a run ends on."""
     if engine not in ENGINES:
-        raise ValueError(f"unknown engine {engine!r}, expected one of {', '.join(ENGINES)}")
+        raise BadOption(f"unknown engine {engine!r}, expected one of {', '.join(ENGINES)}")
     if engine == "parakeet" and (language is not None or prompt is not None):
-        raise ValueError(
+        raise BadOption(
             "--language and --prompt are whisper's; parakeet takes neither. "
             "Add --engine whisper, or drop them."
         )
+    # Before the model loads (#200): a missing input used to cost a parakeet
+    # load before probe() noticed it.
+    if not media.exists():
+        raise MissingPath(f"{media} does not exist.")
     # Before the engine loads or a second of audio is decoded (#191). The first
     # write to `out` comes at parakeet's first checkpoint, and whisper's only
     # at the very end: on 2026-10-02 a whisper run decoded for 441 s and then
@@ -1106,7 +1135,7 @@ def _transcribe(
     # dikhao refuses a frame into a missing directory: a typo in `-o` would
     # otherwise put the transcript somewhere nobody looks.
     if not out.parent.is_dir():
-        raise FileNotFoundError(
+        raise MissingPath(
             f"cannot write {out}: the directory {out.parent} does not exist. "
             f"Create it first (mkdir -p {out.parent}) or pass another -o."
         )
@@ -1114,7 +1143,7 @@ def _transcribe(
     # loaded and a chunk decoded, and the handler that writes "failed" then
     # failed again writing into the same missing directory.
     if status_path is not None and not status_path.parent.is_dir():
-        raise FileNotFoundError(
+        raise MissingPath(
             f"cannot write the status file {status_path}: the directory "
             f"{status_path.parent} does not exist. Create it first "
             f"(mkdir -p {status_path.parent}) or pass another --status."
