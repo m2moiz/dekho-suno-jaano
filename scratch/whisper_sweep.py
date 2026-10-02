@@ -86,9 +86,10 @@ def run_one(run: dict[str, Any], audio_root: Path) -> None:
     if out.exists():
         print(f"{label}: already done, skipping", flush=True)
         return
-    audio = FIXTURE if target == "fixture" else next(
-        p for p in (audio_root / f"{target}.m4a", audio_root / f"{target}.mp3") if p.exists()
-    )
+    found = [p for p in (audio_root / f"{target}.m4a", audio_root / f"{target}.mp3") if p.exists()]
+    if target != "fixture" and not found:
+        sys.exit(f"{label}: no {target}.m4a or .mp3 in {audio_root}")
+    audio = FIXTURE if target == "fixture" else found[0]
     while busy():
         print("  another dsj suno is running, waiting", flush=True)
         time.sleep(60)
