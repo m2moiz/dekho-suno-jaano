@@ -31,7 +31,17 @@ file those tools made into a transcript, in place of `suno`.
 
 ## Before the first command
 
+**On a Mac, run dsj in the Mac's own shell.** If your shell is a Linux sandbox or VM with
+a Mac checkout mounted into it, `uname -s` prints `Linux` rather than `Darwin`: stop, and
+do not run `uv run`, `uv sync` or `just` against that checkout. uv finds a `.venv` whose
+interpreter link points at a macOS path it cannot see, deletes the whole `.venv`, and
+rebuilds it for Linux. That breaks the Mac's install, including a job already running
+there, and the Linux rebuild cannot run the Mac engines anyway. The phone bundle is a
+separate install inside its own proot container; see
+[references/engines.md](references/engines.md).
+
 ```bash
+uname -s        # Darwin, on the Mac a clone of this repo was made for
 dsj --version
 dsj --help
 ```

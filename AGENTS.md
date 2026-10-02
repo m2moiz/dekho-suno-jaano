@@ -24,6 +24,12 @@ It carries the flag tables, the payload schema, the polling and resume semantics
 failure modes, and `tests/test_skill_gate.py` holds it against the CLI so it cannot go
 quietly stale. The README is the same tool explained to a person, and is the longer read.
 
+dsj runs on the Mac, in the Mac's own shell. If `uname -s` does not print `Darwin`, you
+are in a sandbox or VM with this checkout mounted into it: stop, and do not run `uv run`,
+`uv sync` or `just` here. uv deletes a `.venv` whose interpreter link points nowhere and
+rebuilds it for the platform you are on, which wipes the Mac's environment under any job
+running there (#141).
+
 To use it outside this checkout, symlink it once. `~/.agents/skills` is read by Codex and
 by anything else that follows that convention, and `~/.claude/skills` by Claude Code:
 
