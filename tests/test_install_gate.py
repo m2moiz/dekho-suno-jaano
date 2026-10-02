@@ -313,7 +313,9 @@ def test_the_ui_extra_serves_its_page_with_no_node_on_path(tmp_path: Path) -> No
     try:
         assert served.stdout is not None
         url = served.stdout.readline().strip()
-        assert re.fullmatch(r"http://127\.0\.0\.1:\d+/", url), url
+        # Since #112 the address carries the launch token after `#t=`, a fragment
+        # the browser keeps and never sends; the page itself is served without it.
+        assert re.fullmatch(r"http://127\.0\.0\.1:\d+/#t=[A-Za-z0-9_-]+", url), url
         with urllib.request.urlopen(url, timeout=30) as reply:
             assert reply.status == 200
             page = reply.read().decode()

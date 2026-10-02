@@ -227,7 +227,7 @@ def gate(media: Path, work: Path, self_test: bool, probe: bool) -> None:
     check("diarizing" not in plain_states,
           f"--no-diarize still ran the pass: {plain_states}")
     plain = json.loads(plain_out.read_text())
-    check(set(plain) == {"audio", "model", "text", "sentences", "unclear"},
+    check(set(plain) == {"audio", "engine", "model", "text", "sentences", "unclear"},
           f"--no-diarize emitted {sorted(plain)}, not today's schema")
     check(plain["text"] == payload["text"], "the two runs disagree on the transcript text")
     check(plain["unclear"] == payload["unclear"], "the two runs disagree on the unclear spans")
