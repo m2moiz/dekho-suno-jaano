@@ -311,6 +311,60 @@ def test_a_word_written_in_pieces_matches_and_mutes_all_its_pieces(recording: Pa
     assert hatao.mute(flagged, match.start, match.stop, muted=False) == doc
 
 
+def _phrases(*spellings: str) -> None:
+    """A user list of one entry, "phrase", holding `spellings`."""
+    quoted = ", ".join(f'"{x}"' for x in spellings)
+    hatao.user_words_path().write_text(f'[[entry]]\nname = "phrase"\nroman = [{quoted}]\n')
+
+
+def test_a_two_word_entry_matches_inside_a_sentence_and_not_across_one(
+    recording: Path,
+) -> None:
+    """#213: the words of a phrase are consecutive tokens of one sentence."""
+    _phrases("lovely weather")
+    found = _found(recording, [" what", " Lovely,", " WEATHER.", " today"])
+    assert [(m.word, m.entry) for m in found.matches] == [("Lovely, WEATHER.", "user:phrase")]
+    assert _found(recording, [" so", " lovely."], [" Weather", " today"]).count == 0
+    assert _found(recording, [" lovely", " cold", " weather"]).count == 0
+
+
+def test_a_phrase_mutes_all_its_words_and_the_pauses_between_them(recording: Path) -> None:
+    _phrases("lovely weather")
+    doc = hatao.from_transcript(_spoken([" what", " love", "ly", " -", " weather", " today"]),
+                                recording)
+    found = hatao.find(doc, hatao.load_words(hatao.word_lists()))
+    assert [(m.word, m.source_start, m.source_end) for m in found.matches] == [
+        ("lovely - weather", 1.0, 4.5),
+    ]
+    flagged = hatao.flag(doc, found)
+    muted = [e.text for e in flagged.content if isinstance(e, Item) and e.muted]
+    assert muted == [" love", "", "ly", "", " -", "", " weather"]
+
+
+def test_the_longest_phrase_wins_and_its_words_are_not_matched_again(recording: Path) -> None:
+    _phrases("weather", "lovely weather", "very lovely weather")
+    found = _found(recording, [" very", " lovely", " weather", " weather", " lovely", " weather"])
+    assert [m.word for m in found.matches] == ["very lovely weather", "weather", "lovely weather"]
+    assert found.words_searched == 6
+
+
+def test_a_phrase_written_run_together_still_matches(recording: Path) -> None:
+    _phrases("lovely weather")
+    assert [m.word for m in _found(recording, [" lovelyweather"]).matches] == ["lovelyweather"]
+
+
+def test_a_spelling_of_four_words_is_refused_by_name() -> None:
+    _phrases("a very lovely weather")
+    with pytest.raises(hatao.WordListError, match="is 4 words; a spelling is a word or a phrase"):
+        hatao.load_words(hatao.word_lists())
+
+
+def test_a_shipped_two_word_insult_matches_in_one_sentence_only(recording: Path) -> None:
+    found = _found(recording, [" oh", " Bhen", " chod!", " no"])
+    assert [(m.word, m.entry) for m in found.matches] == [("Bhen chod!", "ur:behenchod")]
+    assert _found(recording, [" meri", " bhen."], [" Chod", " do"]).count == 0
+
+
 def test_a_term_that_matches_nothing_is_a_zero_count_not_an_empty_success(
     recording: Path,
 ) -> None:

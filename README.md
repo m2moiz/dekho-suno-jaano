@@ -463,7 +463,9 @@ The shipped lists in `dsj/words/` cover English, Urdu, Hindi and Punjabi, Roman
 and own-script spellings, and every word is looked up in every list, so a
 sentence that switches language halfway is covered. Matching is exact after
 folding case and punctuation; Roman Urdu has no fixed spelling, so an entry
-lists each spelling. Your own words go in `words.toml` in dsj's data folder
+lists each spelling. A spelling can be a phrase of up to three words, such as
+`"bhen chod"`: it matches those words in a row inside one sentence, and they
+are muted together. Your own words go in `words.toml` in dsj's data folder
 (`~/Library/Application Support/dsj/` on a Mac, or the file `$DSJ_WORDS`
 names), which no update touches:
 

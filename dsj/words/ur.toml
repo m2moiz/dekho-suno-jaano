@@ -10,22 +10,27 @@
 #
 # Left out on purpose because their ordinary meaning is common: kutta, kutti
 # (dog), suar (pig), ullu (owl), chod alone (a recogniser writes it for chhod,
-# "leave"), gand alone (dirt, smell). Phrases cannot be entries, because
-# matching is one word at a time; "bhen chod" written as two words is missed,
-# "bhenchod" is not. Add your own words to your user file (`dsj hatao --help`
-# names it), never here: an update replaces this file.
+# "leave"), gand alone (dirt, smell). A spelling may be a phrase of up to
+# three words (#213), matched against that many words in a row in one
+# sentence, because these insults are often written as two: "bhen chod" as
+# well as "bhenchod". The cost: a recogniser that writes chhod as "chod" turns
+# "behen, chhod do" said in one breath into a match. "pen chod" is left out
+# for that reason, since "pen chhod do" is ordinary speech. Add your own words
+# to your user file (`dsj hatao --help` names it), never here: an update
+# replaces this file.
 
 [[entry]]
 name = "madarchod"
 roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod", "madarchodd",
-         "madarchodo"]
-script = ["مادرچود"]
+         "madarchodo", "madar chod", "mader chod", "maadar chod"]
+script = ["مادرچود", "مادر چود"]
 
 [[entry]]
 name = "behenchod"
 roman = ["behenchod", "bhenchod", "benchod", "bhanchod", "behnchod", "bhainchod",
-         "bainchod", "bhencho", "bencho", "bhenchodd", "behanchod"]
-script = ["بہنچود", "بھنچود"]
+         "bainchod", "bhencho", "bencho", "bhenchodd", "behanchod", "behen chod",
+         "bhen chod", "bahen chod", "behn chod", "bhain chod"]
+script = ["بہنچود", "بھنچود", "بہن چود", "بھن چود"]
 
 [[entry]]
 name = "chutiya"
@@ -47,19 +52,22 @@ script = ["لنڈ", "لوڑا", "لوڑے", "لوڑو", "لوڈا", "لوڈے"]
 [[entry]]
 name = "bhosdi"
 roman = ["bhosdi", "bhosdike", "bhosadike", "bhosdiwala", "bhosdiwale", "bhosda", "bhosri",
-         "bhosriwala", "bhosrike"]
-script = ["بھوسڑی", "بھوسڑا", "بھوسڑیکے"]
+         "bhosriwala", "bhosrike", "bhosdi ke", "bhosri ke", "bhosdi wala", "bhosdi wale",
+         "bhosri wala"]
+script = ["بھوسڑی", "بھوسڑا", "بھوسڑیکے", "بھوسڑی کے"]
 
 [[entry]]
 name = "randi"
-roman = ["randi", "raandi", "rundi", "randwa", "randibaz", "randibaaz"]
-script = ["رنڈی", "رنڈوا", "رنڈیباز"]
+roman = ["randi", "raandi", "rundi", "randwa", "randibaz", "randibaaz", "randi baz",
+         "randi baaz"]
+script = ["رنڈی", "رنڈوا", "رنڈیباز", "رنڈی باز"]
 
 [[entry]]
 name = "harami"
 roman = ["harami", "haraami", "haramzada", "haraamzada", "haramzadi", "haramzade",
-         "haramzaday", "haramkhor"]
-script = ["حرامی", "حرامزادہ", "حرامزادی", "حرامزادے", "حرامخور"]
+         "haramzaday", "haramkhor", "haram zada", "haram zadi", "haram zade", "haram khor"]
+script = ["حرامی", "حرامزادہ", "حرامزادی", "حرامزادے", "حرامخور", "حرام زادہ", "حرام زادی",
+          "حرام زادے", "حرام خور"]
 
 [[entry]]
 name = "bharwa"

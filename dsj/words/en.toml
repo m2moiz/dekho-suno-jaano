@@ -8,16 +8,18 @@
 #
 # Each entry: `roman` spellings, `script` (none for English), and `disguised`
 # forms. Recognisers mask profanity with asterisks, so "f***ing" is a spelling
-# to match, not punctuation to strip. Every spelling is one word: matching is
-# word by word, so a phrase cannot be an entry. Add your own words to your
-# user file (`dsj hatao --help` names it), never here: an update replaces
-# this file.
+# to match, not punctuation to strip. A spelling is one word or a phrase of
+# up to three (#213), matched against that many words in a row in one
+# sentence; a phrase also matches written run together, so "bull shit" covers
+# "bullshit". Add your own words to your user file (`dsj hatao --help` names
+# it), never here: an update replaces this file.
 
 [[entry]]
 name = "fuck"
 roman = ["fuck", "fucks", "fucked", "fucker", "fuckers", "fucking", "fuckin", "fuckup",
          "fuckhead", "fuckface", "fuckwit", "motherfucker", "motherfuckers",
-         "motherfucking", "motherfuckin", "mofo"]
+         "motherfucking", "motherfuckin", "mofo", "mother fucker", "mother fuckers",
+         "mother fucking"]
 disguised = ["f*ck", "f**k", "f***", "f*cking", "f**king", "f***ing", "f***in", "f*cked",
              "f***ed", "fck", "fcking", "fuk", "fuking", "phuck", "phucking",
              "motherf***er"]
@@ -25,7 +27,7 @@ disguised = ["f*ck", "f**k", "f***", "f*cking", "f**king", "f***ing", "f***in", 
 [[entry]]
 name = "shit"
 roman = ["shit", "shits", "shitty", "shitting", "shitted", "shithead", "shithole",
-         "bullshit", "horseshit", "dipshit", "shite"]
+         "bullshit", "horseshit", "dipshit", "shite", "bull shit", "horse shit"]
 disguised = ["sh*t", "s**t", "s***", "sh1t", "bulls**t", "bulls***", "sh*tty"]
 
 [[entry]]
@@ -36,7 +38,7 @@ disguised = ["b*tch", "b**ch", "b***h", "b****", "biatch", "biotch"]
 [[entry]]
 name = "ass"
 roman = ["ass", "arse", "asshole", "assholes", "arsehole", "arseholes", "dumbass",
-         "jackass", "asshat"]
+         "jackass", "asshat", "ass hole"]
 disguised = ["a**", "a**hole", "a**h***", "a******"]
 
 [[entry]]
@@ -51,7 +53,7 @@ disguised = ["c*nt", "c**t", "c***"]
 
 [[entry]]
 name = "dickhead"
-roman = ["dickhead", "dickheads", "cocksucker", "cocksuckers"]
+roman = ["dickhead", "dickheads", "cocksucker", "cocksuckers", "dick head", "cock sucker"]
 
 [[entry]]
 name = "wanker"
@@ -67,4 +69,4 @@ roman = ["piss", "pissing"]
 
 [[entry]]
 name = "goddamn"
-roman = ["goddamn", "goddamned", "goddam"]
+roman = ["goddamn", "goddamned", "goddam", "god damn"]

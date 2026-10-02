@@ -3,18 +3,21 @@
 # Hand-written in this repo. `script` holds Gurmukhi, and Shahmukhi (Punjabi in
 # Urdu script, as written in Pakistan) where it differs from ur.toml. Words
 # Punjabi shares with Urdu and Hindi are in those files and match here too,
-# since every list is searched for every word. Add your own words to your user
-# file (`dsj hatao --help` names it), never here: an update replaces this file.
+# since every list is searched for every word. Two-word forms are entries too
+# (#213); "pen chod" is not, because "pen chhod do" is ordinary speech that a
+# recogniser can write that way. Add your own words to your user file
+# (`dsj hatao --help` names it), never here: an update replaces this file.
 
 [[entry]]
 name = "penchod"
-roman = ["penchod", "pencho", "pehnchod", "phenchod", "penchodd", "painchod"]
-script = ["ਭੈਣਚੋਦ", "ਪੈਣਚੋਦ", "پینچود"]
+roman = ["penchod", "pencho", "pehnchod", "phenchod", "penchodd", "painchod", "pehn chod",
+         "phen chod"]
+script = ["ਭੈਣਚੋਦ", "ਪੈਣਚੋਦ", "پینچود", "ਭੈਣ ਚੋਦ"]
 
 [[entry]]
 name = "madarchod"
 roman = ["madarchod", "maderchod"]
-script = ["ਮਾਦਰਚੋਦ"]
+script = ["ਮਾਦਰਚੋਦ", "ਮਾਦਰ ਚੋਦ"]
 
 [[entry]]
 name = "chutiya"
