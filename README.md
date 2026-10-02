@@ -12,6 +12,9 @@
 
 ---
 
+> **Driving dsj from an agent?** Read [.agents/skills/dsj/SKILL.md](.agents/skills/dsj/SKILL.md)
+> first. The transcript format is in [.agents/skills/dsj/references/payload.md](.agents/skills/dsj/references/payload.md).
+
 **An hour of screen recording, made answerable.** `dsj` turns a recording into
 a timestamped transcript that acts as an *index into the video* — so an agent
 reads cheap text, notices a moment that only makes sense visually, and pulls

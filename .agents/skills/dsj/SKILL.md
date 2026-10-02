@@ -29,6 +29,12 @@ Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikh
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
 file those tools made into a transcript, in place of `suno`.
 
+The transcript is one JSON object. Its top-level keys are `audio`, `model`, `text`,
+`unclear` and `sentences`, plus `speakers` and `diarization` when speaker labelling ran
+and `marks` once `dekho` has run. Each entry in `sentences` has `start`, `end`, `text`
+and `tokens`, plus `speaker` when labelled. There is no `segments` or `chunks` key. Every
+field is in [references/payload.md](references/payload.md).
+
 ## Before the first command
 
 **On a Mac, run dsj in the Mac's own shell.** If your shell is a Linux sandbox or VM with
