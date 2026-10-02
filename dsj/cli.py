@@ -123,6 +123,11 @@ def _stderr_logger(name: str) -> None:
     logger.propagate = False
 
 
+# EX_TEMPFAIL from sysexits.h, "try again later": the run did not fail, it
+# never started, and the same command will work once the other run is over.
+EXIT_ALREADY_RUNNING = 75
+
+
 class _Terminated(KeyboardInterrupt):
     """SIGTERM, raised where the run is, so `kill` stops it the way Ctrl-C does (#143).
 
@@ -180,6 +185,7 @@ def suno(
     ] = False,
 ) -> int:
     """Listen: transcribe media to a timestamped index."""
+    from dsj import runlock
     from dsj.atomic import atomic_write_text
     from dsj.suno import Progress, clock, render_bar
     from dsj.suno import transcribe as run_transcribe
@@ -237,6 +243,24 @@ def suno(
     )
     if sigterm_installed:
         signal.signal(signal.SIGTERM, _raise_terminated)
+
+    # Before anything is loaded or written, and before --status is touched: a
+    # refused run that wrote "failed" into a status path it shares with the run
+    # it is refusing would overwrite that run's heartbeat (#136).
+    try:
+        held = runlock.acquire(
+            {
+                "pid": os.getpid(),
+                "out": str(out.absolute()),
+                "status": str(status.absolute()) if status else None,
+                "media": str(media.absolute()),
+            }
+        )
+    except runlock.AlreadyRunning as busy:
+        if sigterm_installed:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        print(busy, file=sys.stderr)
+        raise typer.Exit(EXIT_ALREADY_RUNNING) from None
 
     started = time.monotonic()
     try:
@@ -300,6 +324,7 @@ def suno(
         # Typer turns this into exit 130.
         raise
     finally:
+        os.close(held)
         if sigterm_installed:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
     if tty:

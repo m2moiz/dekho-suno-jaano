@@ -26,6 +26,7 @@ whitelist.fake_media  # tests/conftest.py
 whitelist.frozen_clock  # tests/conftest.py
 whitelist.already_extracted_media  # tests/conftest.py
 whitelist.no_real_diarizer  # tests/conftest.py
+whitelist.private_suno_lock  # tests/conftest.py
 # A session fixture, injected by name into tests/test_chunking.py,
 # tests/test_diarize.py, tests/test_resume_cli.py and tests/test_resume_gate.py.
 whitelist.chunked_audio_path  # tests/conftest.py

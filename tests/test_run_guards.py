@@ -55,16 +55,21 @@ def launch(
         )
 
 
-def stub_run(tmp_path: Path, *extra: str, hold: bool = True) -> subprocess.Popen[bytes]:
-    """The stub `dsj suno` over `tmp_path/rec.wav`, writing `out.json` and `run.json`."""
-    media = tmp_path / "rec.wav"
+def stub_run(work: Path, *extra: str, hold: bool = True) -> subprocess.Popen[bytes]:
+    """The stub `dsj suno` over `work/rec.wav`, writing `out.json` and `run.json`.
+
+    It touches `work/loaded` if it gets as far as loading the model.
+    """
+    work.mkdir(exist_ok=True)
+    media = work / "rec.wav"
     media.touch()
     argv = [
         sys.executable, str(STUB), str(media),
-        "-o", str(tmp_path / "out.json"), "--status", str(tmp_path / "run.json"),
+        "-o", str(work / "out.json"), "--status", str(work / "run.json"),
         "--no-diarize", *extra,
     ]
-    return launch(argv, tmp_path / "stderr.log", {"STUB_HOLD": "1" if hold else "0"})
+    env = {"STUB_HOLD": "1" if hold else "0", "STUB_LOADED": str(work / "loaded")}
+    return launch(argv, work / "stderr.log", env)
 
 
 def read_status(path: Path) -> dict[str, Any] | None:
@@ -194,6 +199,50 @@ def test_every_document_names_its_writer(tmp_path: Path) -> None:
     assert failed is not None
     assert (failed["state"], failed["pid"]) == ("failed", broken.pid)
     assert failed["error"].startswith("FileNotFoundError")
+
+
+# --------------------------------------------------------------------------
+# #136: one run at a time
+# --------------------------------------------------------------------------
+
+
+def test_a_second_run_is_refused_while_the_first_runs(tmp_path: Path) -> None:
+    """Different media, different outputs: the case that froze the machine on 2026-09-19."""
+    first = stub_run(tmp_path / "first")
+    frame = wait_for_state(tmp_path / "first" / "run.json", "running", first)
+
+    second = stub_run(tmp_path / "second", hold=False)
+    assert second.wait(timeout=60) == 75
+
+    said = (tmp_path / "second" / "stderr.log").read_text()
+    assert "already running" in said
+    assert f"pid {first.pid}" in said
+    assert str(tmp_path / "first" / "out.json") in said
+    # Refused before the model loaded and before --status was touched.
+    assert not (tmp_path / "second" / "loaded").exists()
+    assert not (tmp_path / "second" / "run.json").exists()
+    # And the run it refused for carries on, undisturbed.
+    assert first.poll() is None
+    assert read_status(tmp_path / "first" / "run.json") == frame
+
+    assert stop(first, signal.SIGTERM) == 143
+
+
+def test_a_run_killed_with_sigkill_does_not_block_the_next(tmp_path: Path) -> None:
+    first = stub_run(tmp_path / "first")
+    wait_for_state(tmp_path / "first" / "run.json", "running", first)
+    os.kill(first.pid, signal.SIGKILL)
+    assert first.wait(timeout=60) == -signal.SIGKILL
+    # The file outlives the run, still naming it. Its contents are not the lock.
+    lock = Path(os.environ["DSJ_SUNO_LOCK"])
+    assert json.loads(lock.read_text())["pid"] == first.pid
+
+    second = stub_run(tmp_path / "second", hold=False)
+    assert second.wait(timeout=60) == 0, (tmp_path / "second" / "stderr.log").read_text()
+    done = read_status(tmp_path / "second" / "run.json")
+    assert done is not None
+    assert (done["state"], done["pid"]) == ("done", second.pid)
+    assert json.loads(lock.read_text())["pid"] == second.pid
 
 
 @pytest.mark.slow

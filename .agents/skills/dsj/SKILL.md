@@ -278,6 +278,14 @@ failing means the run is dead, not slow. To stop a run, `kill` that pid, never
 
 `eta_s` is `null` whenever speed is 0, which includes the first frame of every run.
 
+**One `dsj suno` at a time, per machine.** A second one started while another runs exits
+75 at once, before it loads a model and without touching its own `--status` file, and
+names the running job's pid and `--out` on stderr. Two at once froze the owner's Mac on
+2026-09-19, which is why it refuses rather than queues. Wait until `kill -0 <pid>` fails,
+or stop that job with `kill <pid>`, then run the command again. A run that died, even by
+`kill -9`, frees the lock as it dies. The lock is `~/.cache/dsj/suno.lock`; deleting it
+frees nothing and lets a second run start beside the first.
+
 ## Interrupting is cheap
 
 A checkpoint is written beside the output every chunk, which is every 105 seconds of
@@ -338,6 +346,7 @@ none at all, so an interrupted whisper run always starts over.
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
 | 130 | Interrupted by Ctrl-C. For `suno` on parakeet or sherpa, re-run to resume |
 | 143 | Stopped by `kill`. The same as 130 otherwise |
+| 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 
 **Read the last line of stderr, not the first.** A failure is a traceback, and when
 ffmpeg is involved its own log prints above the exception, so the useful sentence can be

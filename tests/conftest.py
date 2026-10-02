@@ -41,6 +41,20 @@ SOURCE_AUDIO = REPO / "scratch" / "meeting.wav"
 CLIP_SECONDS = 360
 
 
+@pytest.fixture(autouse=True)
+def private_suno_lock(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test its own `dsj suno` lock file (#136).
+
+    Without it a test that runs suno, in-process or as a subprocess, would take
+    the machine-wide lock in ~/.cache/dsj, and the suite would be refused while
+    the owner had a real run going, or would refuse the owner's run. The env var
+    reaches subprocesses too, since they inherit os.environ.
+    """
+    monkeypatch.setenv("DSJ_SUNO_LOCK", str(tmp_path_factory.mktemp("lock") / "suno.lock"))
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Give every slow-marked test the long timeout ceiling.
 
