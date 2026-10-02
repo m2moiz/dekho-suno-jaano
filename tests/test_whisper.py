@@ -315,7 +315,10 @@ def test_the_missing_extra_names_both_install_forms(monkeypatch: pytest.MonkeyPa
     # Both forms, because `uv sync` is a no-op for someone who installed the
     # tool rather than the project, and the reverse.
     assert "uv tool install" in str(exc.value)
-    assert "uv sync --extra whisper" in str(exc.value)
+    assert "--extra whisper" in str(exc.value)
+    # Never as a whole `uv sync` line: that uninstalls every other extra (#170).
+    assert "uv sync --extra whisper" not in str(exc.value)
+    assert "uninstalls every extra" in str(exc.value)
 
 
 @pytest.mark.usefixtures("already_extracted_media")

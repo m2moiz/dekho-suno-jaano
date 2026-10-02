@@ -43,11 +43,15 @@ from typing import Any, NamedTuple
 from dsj.merge import Turn
 
 # Two hints, because there are two ways to have dsj and the wrong one is a
-# no-op. `uv sync --extra diarize` only means anything inside a clone; someone
-# who ran `uv tool install` has no project to sync and needs the reinstall form.
+# no-op. `--extra diarize` only means anything inside a clone; someone who ran
+# `uv tool install` has no project to sync and needs the reinstall form. The
+# clone form is a flag to add, not a whole line: `uv sync` uninstalls every
+# extra it is not given, so `uv sync --extra diarize` alone would take the
+# engines away (#170).
 INSTALL_HINT = (
-    'uv tool install "dsj[diarize] @ git+https://github.com/m2moiz/dekho-suno-jaano"'
-    " (or `uv sync --extra diarize` from a clone)"
+    '`uv tool install "dsj[diarize] @ git+https://github.com/m2moiz/dekho-suno-jaano"`,'
+    " or from a clone add `--extra diarize` to the `uv sync` line you already use"
+    " (`uv sync` uninstalls every extra it is not given)"
 )
 
 # The remedy for the OTHER failure, which INSTALL_HINT cannot fix: senko is
@@ -148,7 +152,7 @@ def _import_senko() -> ModuleType:
             raise DiarizationUnavailable(_will_not_load(exc)) from exc
         raise DiarizationUnavailable(
             f"senko is not installed, so sentences cannot be labelled with who "
-            f"spoke. Install it with `{INSTALL_HINT}`."
+            f"spoke. Install it with {INSTALL_HINT}."
         ) from exc
     except ImportError as exc:
         # Not a missing module: a module that is present and refuses to load.

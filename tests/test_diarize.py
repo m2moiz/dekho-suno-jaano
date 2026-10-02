@@ -108,7 +108,10 @@ def test_a_missing_senko_becomes_DiarizationUnavailable(
     # The message has to carry the fix, the way media.py's says
     # `brew install ffmpeg`. This is the common failure, not an exotic one:
     # senko is an extra and most installs will not have it.
-    assert "uv sync --extra diarize" in str(caught.value)
+    assert "--extra diarize" in str(caught.value)
+    # And never as a whole `uv sync` line, which would uninstall the engines (#170).
+    assert "uv sync --extra diarize" not in str(caught.value)
+    assert "uninstalls every extra" in str(caught.value)
 
 
 def test_an_installed_senko_that_will_not_load_says_so(
@@ -150,7 +153,7 @@ def test_an_installed_senko_that_will_not_load_says_so(
     # And the remedy must be the one that changes the interpreter, not the one
     # that reinstalls onto the same broken interpreter.
     assert "--python 3.12" in message
-    assert "uv sync --extra diarize" not in message
+    assert "--extra diarize" not in message
 
 
 def test_a_missing_dependency_of_senko_is_not_reported_as_missing_senko(
@@ -179,7 +182,7 @@ def test_a_missing_dependency_of_senko_is_not_reported_as_missing_senko(
     message = str(caught.value)
     assert "installed but will not import" in message
     assert "coremltools" in message
-    assert "uv sync --extra diarize" not in message
+    assert "--extra diarize" not in message
 
 
 def test_empty_turns_become_DiarizationUnavailable(fake_senko: SenkoInstaller) -> None:

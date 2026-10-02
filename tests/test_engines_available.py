@@ -70,6 +70,8 @@ def test_a_sherpa_that_will_not_import_names_the_extra(monkeypatch: pytest.Monke
     assert reason is not None
     assert "libonnxruntime.dylib" in reason
     assert "dsj[sherpa]" in reason
-    assert "uv sync --extra sherpa" in reason
+    assert "--extra sherpa" in reason
+    assert "uv sync --extra sherpa" not in reason  # a whole line uninstalls the rest (#170)
+    assert "uninstalls every extra" in reason
     assert "manylinux" not in reason
     assert "pip install" not in reason

@@ -148,10 +148,14 @@ invocation is prefixed with `uv run`:
 
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
-cd dsj
-uv sync                      # or: uv sync --extra diarize
+cd dekho-suno-jaano
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa
 uv run dsj suno recording.mov -o transcript.json
 ```
+
+That sync line is the one CI runs. `uv sync` installs exactly the extras on its
+line and **uninstalls every other one**, so keep one line and add to it: a bare
+`uv sync`, or `uv sync --extra <one>`, takes away the engines you already had.
 
 Every command below is written bare (`dsj ...`), which is what an installed
 copy gives you. From a clone, prefix each one with `uv run`.
