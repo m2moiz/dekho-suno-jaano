@@ -21,6 +21,16 @@ with Library.open() as library:
     print(json.dumps({"recording": found.recording_id, "transcript": found.id}))
 `;
 
+// The same, for a transcript a run from the app wrote: the run says its engine.
+const RECORD_RUN = `
+import json, sys
+from pathlib import Path
+from dsj.ui.store import Library
+with Library.open() as library:
+    found = library.record_run(Path(sys.argv[1]), engine=sys.argv[2])
+    print(json.dumps({"recording": found.recording_id, "transcript": found.id}))
+`;
+
 export type Seeded = { recording: number; transcript: number; dir: string };
 
 function env(name: string): string {
@@ -36,17 +46,34 @@ export function scratchDir(): string {
   return mkdtempSync(path.join(tmpdir(), "dsj-e2e-seed-"));
 }
 
-/** Write `transcript` as JSON in `dir`, adopt it, and return its ids. */
-export function seed(transcript: object, dir: string = scratchDir()): Seeded {
-  const file = path.join(dir, "transcript.json");
+function put(library: string, transcript: object, dir: string, script: string, ...args: string[]): Seeded {
+  // Its own name, so two transcripts can share a folder.
+  const file = path.join(dir, `transcript-${(seeded += 1)}.json`);
   writeFileSync(file, JSON.stringify(transcript));
-  const run = spawnSync("uv", ["run", "python", "-c", ADOPT, file], {
+  const run = spawnSync("uv", ["run", "python", "-c", script, file, ...args], {
     cwd: REPO,
-    env: { ...process.env, DSJ_LIBRARY: env("DSJ_LIBRARY") },
+    env: { ...process.env, DSJ_LIBRARY: library },
     encoding: "utf8",
   });
-  if (run.status !== 0) throw new Error(`adopting ${file} failed: ${run.stderr}`);
+  if (run.status !== 0) throw new Error(`putting ${file} in ${library} failed: ${run.stderr}`);
   return { ...(JSON.parse(run.stdout) as { recording: number; transcript: number }), dir };
+}
+
+let seeded = 0;
+
+/** Write `transcript` as JSON in `dir`, adopt it into the run's library, and return its ids. */
+export function seed(transcript: object, dir: string = scratchDir()): Seeded {
+  return put(env("DSJ_LIBRARY"), transcript, dir, ADOPT);
+}
+
+/** The same, into the library at `library`. */
+export function adoptInto(library: string, transcript: object, dir: string): Seeded {
+  return put(library, transcript, dir, ADOPT);
+}
+
+/** Put `transcript` into the library at `library` as a run from the app with `engine` would. */
+export function recordRunInto(library: string, transcript: object, dir: string, engine: string): Seeded {
+  return put(library, transcript, dir, RECORD_RUN, engine);
 }
 
 /** The address of a seeded transcript's page, token included. */
