@@ -340,6 +340,25 @@ not its path. An edited recording, a changed model, or a different chunk
 geometry invalidates it, and the run starts over rather than reusing tokens
 that describe something else, saying on stderr which of those it was.
 
+**One `dsj suno` at a time, per machine.** A second one started while another
+runs exits **75** at once, before it loads a model and without touching its own
+`--status` file, and names the job it is waiting on:
+
+```
+another dsj suno is already running on this machine: pid 48213, writing /recordings/out.json.
+```
+
+Two at once froze the owner's Mac on 2026-09-19: one run is already sized
+against the machine's memory, two are not. That is why the second refuses
+rather than queues, and why the lock is one file for the whole machine rather
+than one per output: the two runs that froze it wrote to different files. Wait
+until `kill -0 <pid>` fails, or stop that job with `kill <pid>`, then run the
+command again. A run that dies, even by `kill -9`, frees the lock as it dies.
+The lock is `~/.cache/dsj/suno.lock`; deleting it frees nothing and lets a
+second run start beside the first. `DSJ_SUNO_LOCK=<path>` moves it, which is
+how the test suite keeps out of a real run's way; two runs under different
+lock paths do not see each other.
+
 ### Dekho — change marks
 
 A second pass adds the timestamps where the picture changed most. It is
