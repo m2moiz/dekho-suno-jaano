@@ -245,9 +245,9 @@ jq -r '.sentences[] | select(.start >= 400 and .start <= 460) | "\(.start)  \(.t
 may walk it from the top and stop at the first `start` past its window. The order is
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case
-5.72 s, which pulls its whole sentence that far earlier in the list. Under whisper no
-two sentences overlap; under parakeet and sherpa a seam can still leave one running into
-the next (#192).
+5.72 s, and is written where its time puts it. No two sentences overlap, under every
+engine: whisper merges two that would (#190), parakeet and sherpa re-cut them so the
+fewest tokens change sentence, never merging two speakers into one (#192).
 
 A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
 space, under every engine, and the top-level `text` is the sentences joined. So at a seam

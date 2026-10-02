@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import wave
+from itertools import pairwise
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -1179,8 +1180,11 @@ def test_the_text_reads_in_the_order_the_sentences_are_written_in(
     assert payload["text"] == "".join(s["text"] for s in payload["sentences"]).strip()
     # The mistimed full stop reads where its time puts it, ahead of the words it
     # closed: a sentence's text is its tokens joined (#106), and at this seam
-    # the time is wrong by 5.72s. The text shows what the timing says.
-    assert payload["text"] == ". First name Structured SAP. Yeah."
+    # the time is wrong by 5.72s. The text shows what the timing says. So do
+    # the words it closed: " First name" lies inside the two sentences
+    # after it, so it leaves the full stop and goes where its time puts it,
+    # behind " Yeah." (#192).
+    assert payload["text"] == ". Structured SAP. Yeah. First name"
 
 
 def _merge_that_reordered_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1355,6 +1359,8 @@ def test_speaker_turns_run_forwards_too(
     payload = transcribe(fake_media, tmp_path / "out.json")
 
     assert [s["speaker"] for s in payload["sentences"]] == [0, 1, 1]
+    # Split at the seam, not merged (#192): three sentences, none overlapping.
+    assert _overlapping_pairs(payload["sentences"]) == 0
     turns = [(s["speaker"], s["start"]) for s in payload["sentences"]]
     firsts = [start for i, (spk, start) in enumerate(turns) if i == 0 or turns[i - 1][0] != spk]
     assert firsts == sorted(firsts)
@@ -1896,7 +1902,7 @@ def test_parakeet_never_decodes_a_loop_again(
     assert "retrying" not in states
 
 
-# --- no two whisper sentences overlap (#190); parakeet's still can (#192) ------
+# --- no two sentences overlap: whisper merges (#190), parakeet and sherpa split (#192)
 
 
 def _sentence(*tokens: tuple[float, float, str]) -> dict[str, Any]:
@@ -1942,13 +1948,67 @@ def test_a_token_outside_its_sentence_is_refused() -> None:
             _without_overlaps(Transcription(text="One.", sentences=[stray]), merge=merge)
 
 
-def test_parakeet_and_sherpa_sentences_are_never_merged() -> None:
-    """Merging at a chunk seam would put two speakers under one label (#192)."""
+def _overlapping_pairs(sentences: list[dict[str, Any]]) -> int:
+    return sum(1 for a, b in pairwise(sentences) if a["end"] > b["start"])
+
+
+def _words(sentences: list[dict[str, Any]]) -> list[tuple[float, str]]:
+    return sorted((t["t"], t["w"]) for s in sentences for t in s["tokens"])
+
+
+def test_a_full_stop_timed_early_moves_to_the_sentence_its_time_is_in() -> None:
+    """The seam fault on clip360 (#192): one token, seconds early, starts its sentence too soon.
+
+    Split, never merged: two sentences in, two out, every word and time kept,
+    and the one token that lay inside the sentence before now belongs to it.
+    """
+    said = _sentence((224.28, 224.5, " We"), (225.0, 225.3, " said"), (227.5, 227.84, " it."))
+    next_ = _sentence((224.84, 224.92, "."), (227.84, 228.2, " Then"), (228.3, 228.6, " more."))
+    before = Transcription(text="", sentences=[said, next_])
+
+    got = _without_overlaps(before, merge=False)
+
+    assert _overlapping_pairs(got.sentences) == 0
+    assert _words(got.sentences) == _words(before.sentences)
+    assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
+        (224.28, 227.84, " We. said it."),
+        (227.84, 228.6, " Then more."),
+    ]
+    assert got.text == "We. said it. Then more."
+    for s in got.sentences:
+        assert all(s["text"][t["charOffset"] :].startswith(t["w"]) for t in s["tokens"])
+
+
+def test_parakeet_and_sherpa_sentences_are_split_never_merged() -> None:
+    """Merging at a chunk seam would put two speakers under one label (#192).
+
+    The cut goes where the fewest words change sentence: here " went.", the
+    one word of the first sentence that its time puts after the second.
+    """
     first = _sentence((1.0, 1.5, " We"), (4.0, 4.5, " went."))
     inside = _sentence((2.0, 2.5, " Then"), (2.5, 3.0, " stop."))
     before = Transcription(text="We went. Then stop.", sentences=[first, inside])
 
-    assert _without_overlaps(before, merge=False) is before
+    got = _without_overlaps(before, merge=False)
+
+    assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
+        (1.0, 1.5, " We"),
+        (2.0, 4.5, " Then stop. went."),
+    ]
+    assert _words(got.sentences) == _words(before.sentences)
+
+
+def test_two_words_that_overlap_each_other_leave_the_pair_as_decoded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No cut can separate them without moving a time, so nothing moves, and it is logged."""
+    a = _sentence((1.0, 2.0, " One."))
+    b = _sentence((1.5, 2.5, " Two."))
+    before = Transcription(text="One. Two.", sentences=[a, b])
+    caplog.set_level(logging.WARNING, logger="dsj.suno")
+
+    assert _without_overlaps(before, merge=False) == before
+    assert "1 overlapping sentence pair left as decoded" in caplog.text
 
 
 @pytest.mark.parametrize("engine", ["parakeet", "whisper"])

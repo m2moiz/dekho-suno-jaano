@@ -615,43 +615,44 @@ def _retried(
 
 
 def _without_overlaps(transcription: Transcription, *, merge: bool) -> Transcription:
-    """`transcription` with every token inside its sentence, and under whisper no two overlapping.
+    """`transcription` with every token inside its sentence, and no two sentences overlapping.
 
-    The last step before the payload is written. Under every engine it checks
-    that each token's `t` and `e` lie within its own sentence's bounds. With
-    `merge`, which transcribe() sets for whisper only, it also makes sure a
-    sentence ends by the time the next one starts.
+    The last step before the payload is written. Under every engine it makes
+    sure a sentence ends by the time the next one starts, and checks that each
+    token's `t` and `e` lie within its own sentence's bounds. `merge`, which
+    transcribe() sets for whisper only, picks how an overlap is undone.
 
-    Two overlapping whisper sentences are written as one, their tokens in time
+    whisper: two overlapping sentences are written as one, their tokens in time
     order: every word and every time kept as decoded, where moving or clipping
     times would write times no decoder gave. whisper's anchored windows wrote
     the same speech twice at their seams (#190); _owned in dsj/whisper.py now
     gives each second to one window, and on #148's fixture and the owner's
     101117 whisper reached here with nothing to merge. A merge is logged.
 
-    parakeet and sherpa are left as they are, overlaps included (#192). Their
+    parakeet and sherpa: split, never merged (#192, _split_at_seams). Their
     vendored chunk merge can time a word seconds early at a seam
-    (_in_time_order), so the sentence holding it starts inside the one before:
-    measured 2026-10-02, 1 pair on a 6 minute parakeet run of
-    scratch/clip360.wav, 17 to 33 on three older long parakeet transcripts.
-    Merging those puts two speakers' words in one sentence under one label
-    (tests/test_suno.py's seam case went from labels [0, 1, 1] to [1]), so
-    their fix is a split at the seam, not a merge.
+    (_in_time_order), so the sentence holding it starts inside the one before.
+    Merging those put two speakers' words in one sentence under one label
+    (tests/test_suno.py's seam case went from labels [0, 1, 1] to [1]).
 
     A token outside its sentence raises, under every engine, because no path
     here makes one: the engines' bounds are widened to their tokens
-    (_in_whole_milliseconds), and every later step that drops tokens rebuilds
-    the bounds from the ones left. None was found on that parakeet run or the
-    three older transcripts. One appearing means a step was broken, and a test
-    should stop there rather than write a file whose words point outside their
-    sentence.
+    (_in_whole_milliseconds), and every later step that moves or drops tokens
+    rebuilds the bounds from the ones left. One appearing means a step was
+    broken, and a test should stop there rather than write a file whose words
+    point outside their sentence.
 
     Raises:
         RuntimeError: if a token lies outside its sentence.
     """
     if not merge:
-        _tokens_inside(transcription.sentences)
-        return transcription
+        sentences, split = _split_at_seams(transcription.sentences)
+        _tokens_inside(sentences)
+        if not split:
+            return transcription
+        return Transcription(
+            text="".join(str(s["text"]) for s in sentences).strip(), sentences=sentences
+        )
     ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
     out: list[Sentence] = []
     merged = 0
@@ -673,6 +674,87 @@ def _without_overlaps(transcription: Transcription, *, merge: bool) -> Transcrip
         return transcription._replace(sentences=out)
     logger.info("%d overlapping sentence pairs written as one", merged)
     return Transcription(text="".join(str(s["text"]) for s in out).strip(), sentences=out)
+
+
+def _split_at_seams(sentences: list[Sentence]) -> tuple[list[Sentence], int]:
+    """`sentences` earliest first with each overlapping pair split apart, and how many splits.
+
+    Two overlapping sentences keep their own tokens except the fewest that must
+    change sentence for the first to end by the time the second starts. Their
+    tokens are laid out in time order and cut once, between two tokens where
+    nothing before the cut ends after the first token past it; of those cuts,
+    the one that moves the fewest tokens wins, and between equals the one at
+    the widest pause, where a sentence most likely ended. No time changes and
+    no sentence disappears, so each still gets its own speaker vote.
+
+    The fewest, not a cut at the overlap's midpoint, because the usual fault is
+    one token. On scratch/clip360.wav it is a full stop timed 3 s before the
+    rest of its sentence, inside the one before: the cut moves that full stop
+    and nothing else, where a cut at the overlap's midpoint also moved 6 tokens
+    of the earlier sentence. Measured 2026-10-02 on three older long parakeet
+    transcripts (17, 33 and 19 overlapping pairs): 19, 40 and 15 tokens end in
+    another sentence this way, against 57, 104 and 77 at the midpoint, and 0
+    pairs are left either way.
+
+    A pair is left as decoded, and logged, where no cut exists: two of its
+    words overlap each other, so separating them would move a time. Never seen
+    on those transcripts. The splits are capped at the number of tokens, so
+    the loop ends.
+    """
+    out = sorted(sentences, key=lambda s: cast("float", s["start"]))
+    budget = sum(len(s["tokens"]) for s in out)
+    split = left = 0
+    i = 0
+    while i + 1 < len(out):
+        a, b = out[i], out[i + 1]
+        cut = _seam_cut(a, b) if a["end"] > b["start"] and split < budget else None
+        if cut is None:
+            left += a["end"] > b["start"]
+            i += 1
+            continue
+        out[i], out[i + 1] = cut
+        # Nothing ahead of `a` moves: it ends by `a`'s start, and every token
+        # re-cut here starts at or after that.
+        out[i:] = sorted(out[i:], key=lambda s: cast("float", s["start"]))
+        split += 1
+    if split:
+        logger.info("%d overlapping sentence pairs split at the seam", split)
+    if left:
+        logger.warning("%d overlapping sentence pair left as decoded: no cut separates them", left)
+    return out, split
+
+
+def _seam_cut(a: Sentence, b: Sentence) -> tuple[Sentence, Sentence] | None:
+    """`a` and `b` re-cut so `a` ends by the time `b` starts, or None if no cut can."""
+    tokens = sorted(
+        [(t, False) for t in a["tokens"]] + [(t, True) for t in b["tokens"]],
+        key=lambda tb: cast("float", tb[0]["t"]),
+    )
+    # Tokens of b before the cut, and of a after it, change sentence.
+    moved = sum(1 for _, of_b in tokens if not of_b)
+    ends = 0.0
+    best: tuple[int, float, int] | None = None
+    for k in range(1, len(tokens)):
+        token, of_b = tokens[k - 1]
+        moved += 1 if of_b else -1
+        ends = max(ends, cast("float", token.get("e", token["t"])))
+        pause = cast("float", tokens[k][0]["t"]) - ends
+        if pause >= 0 and (best is None or (moved, -pause) < best[:2]):
+            best = (moved, -pause, k)
+    if best is None:
+        return None
+    k = best[2]
+    return _with_tokens(a, [t for t, _ in tokens[:k]]), _with_tokens(b, [t for t, _ in tokens[k:]])
+
+
+def _with_tokens(sentence: Sentence, tokens: list[dict[str, Any]]) -> Sentence:
+    """`sentence` holding `tokens`, already in time order, with its bounds and text rebuilt."""
+    return sentence | {
+        "start": tokens[0]["t"],
+        "end": max(cast("float", t.get("e", t["t"])) for t in tokens),
+        "text": "".join(str(t["w"]) for t in tokens),
+        "tokens": with_char_offsets(tokens),
+    }
 
 
 def _tokens_inside(sentences: list[Sentence]) -> None:
@@ -1190,7 +1272,8 @@ def transcribe(
             )
         transcription, loops = _without_loops(transcription)
         # After the loops leave, so a loop never merges into a real sentence
-        # and hides from is_loop. Merging is whisper's only (#192).
+        # and hides from is_loop. whisper merges overlapping sentences (#190);
+        # parakeet and sherpa split them, never merge (#192).
         transcription = _without_overlaps(transcription, merge=spec.kind == "file")
         unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 

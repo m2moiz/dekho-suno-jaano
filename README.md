@@ -498,19 +498,22 @@ from the `SPEAKER_01: ` prefix `likho` writes into SRT.
 A reader may walk the list from the top and stop at the first `start` past the
 window it cares about. That is a promise about *order*, not about *accuracy*: a
 recording longer than 120 s is transcribed in overlapping pieces and stitched,
-and the stitch can mistime a word at a seam by a few seconds, so the sentence
-that word belongs to sorts to where its earliest token claims it began. Measured
+and the stitch can mistime a word at a seam by a few seconds. That word is
+written where its time puts it, in the sentence its time falls inside if there
+is one (#192), and otherwise its sentence sorts to where it claims. Measured
 on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
 
-**Under whisper no two sentences overlap**: each ends at or before the next
-one's `start`. Each of the 6 s two of whisper's two-minute windows share is
-written by one of them, its own half by default or all of it by the one that
+**No two sentences overlap**: each ends at or before the next one's `start`,
+under every engine. Each of the 6 s two of whisper's two-minute windows share
+is written by one of them, its own half by default or all of it by the one that
 did not loop there, so the same speech is not written twice at a seam (#190).
-Under parakeet and sherpa a chunk seam can still leave a sentence starting
-inside the one before, 1 pair on a 6-minute parakeet run; they are left apart,
-because merging them would put two speakers under one label (#192).
+Under parakeet and sherpa a word timed seconds early at a chunk seam would
+start its sentence inside the one before. The two are split rather than
+merged, because one merged sentence would put two speakers under one label
+(#192): the fewest tokens that must change sentence do, usually one full stop,
+and no time changes.
 
 **A sentence's `text` is its `tokens` joined**: every `w` in that time order,
 leading space included, under every engine. The top-level `text` is the
