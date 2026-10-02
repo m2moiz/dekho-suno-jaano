@@ -307,7 +307,8 @@ the signal, and `audio_done_s` and `audio_total_s` are that frame's, so they cou
 extraction if `during` is `extracting`. `during`, `audio_done_s` and `audio_total_s` are
 absent when the signal arrived before the first frame, while the model was loading. `interrupted` is terminal: nothing
 writes to the file again. Do not wait on it. A parakeet or sherpa run resumes from its
-checkpoint when the same command is run again; a whisper run starts over. `kill -9`
+checkpoint when the same command is run again. A whisper run resumes only if `during` is
+`retrying` or `diarizing`, past its decode; stopped while `running`, it starts over. `kill -9`
 cannot be caught, so it writes nothing and the file keeps its last frame.
 
 **Dead or slow: ask the process table, not the clock.** A run ended by `kill -9`, by the
@@ -322,7 +323,8 @@ if kill -0 "$pid" 2>/dev/null; then echo alive; else echo "gone: the run died"; 
 
 Alive means alive, however long since the last frame: a plain whisper run writes one
 frame at 0% and nothing more until it ends. Gone, on a non-terminal frame, means the run
-died without a word; the same command resumes it on parakeet and sherpa. Three limits.
+died without a word; the same command resumes it on parakeet and sherpa, and on whisper
+once its decode had ended. Three limits.
 The check only works on the machine that ran the job, not on a status file read from
 another. A pid is reused eventually, so on a frame hours old confirm it is still dsj with
 `ps -p "$pid" -o command=`. And a status file written before `pid` existed has none, so
@@ -417,3 +419,31 @@ mtime. They cannot match, so a run interrupted on an older dsj starts over once,
 
 `sherpa` contributes `sherpa_onnx_version` where parakeet contributes `parakeet_version`,
 so a checkpoint cannot cross engines even if every shared value matched.
+
+### whisper's banked result
+
+whisper decodes the whole recording in one call, so there is no chunk to bank while it
+runs. The moment the call returns, before loops are decoded again and before speakers are
+labelled, its result is banked at the same path, fsynced, and kept until labelling is
+over. A run stopped in `retrying` or `diarizing` therefore decodes nothing on the rerun:
+it retries the loops and labels again from the banked result. A run stopped in `running`
+has banked nothing and starts over.
+
+```json
+{"media": "/recordings/voice-note.m4a",
+ "fingerprint": {"schema": 2,
+                 "content_id": "1048576-5a1b0c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+                 "model_id": "mlx-community/whisper-large-v3-turbo",
+                 "mlx_whisper_version": "0.4.3", "language": "ur",
+                 "prompt": "Yeh Roman Urdu transcript hai.", "anchor_s": "120.0",
+                 "anchor_overlap_s": "6.0", "hallucination_silence_s": "None"},
+ "transcription": {"text": "...", "sentences": []}}
+```
+
+`transcription` is whisper's text and sentences as it returned them, in the transcript's
+own sentence shape. Every fingerprint field must match. `language`, `prompt` and the two
+`anchor_` fields are what `--language`, `--prompt` and `--roman-urdu` set, and each
+changes what whisper writes, so a rerun with another of any of them decodes again and
+says so: `checkpoint ignored, transcribing from the start: the prompt changed (prompt)`.
+Values are strings, and `"None"` means the setting was not given. `--no-resume` deletes
+the file as it deletes a chunk checkpoint.

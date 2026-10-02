@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -18,14 +19,19 @@ import wave
 from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
+from dsj.checkpoint import checkpoint_path_for
+from dsj.merge import Turn
 from dsj.suno import Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _stub_mlx_whisper(
@@ -329,8 +335,8 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
 
     Downstream -- dekho, and any agent reading the index -- must not be able to
     tell which engine wrote it apart from the model id. The checkpoint check is
-    the other half: whisper has no chunk loop of dsj's to bank, so a file
-    beside the output would be a stale one nothing could ever resume from.
+    the other half: the result whisper banks beside the output (#171) is gone
+    once the run has finished, so nothing stale is left for a later run to find.
     """
     _stub_mlx_whisper(monkeypatch, _result())
     out = tmp_path / "out.json"
@@ -346,7 +352,125 @@ def test_the_whisper_engine_writes_the_schema_and_leaves_no_checkpoint(
         "c": 0.25,
         "charOffset": 0,
     }
-    assert list(tmp_path.glob("*.checkpoint*")) == []
+    assert not checkpoint_path_for(out).exists()
+    assert [p.name for p in tmp_path.iterdir()] == [fake_media.name, out.name]
+
+
+def _interrupt(wav: Path) -> None:
+    raise KeyboardInterrupt
+
+
+ONE_SPEAKER: dict[str, Any] = {"turns": [Turn(0.0, 400.0, 0)], "labels": ["SPEAKER_01"]}
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_an_interrupt_while_labelling_does_not_decode_whisper_again(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    """Stopped during speaker labelling, the rerun labels the banked result (#171).
+
+    The whisper half of #101. Labelling runs after the decode, so this is where
+    someone who thinks "it is nearly done" presses Ctrl-C, and on the owner's
+    85.6 minute recording that used to cost up to an hour of whisper again.
+    KeyboardInterrupt stands in for the signal, as in #101's test. The stub
+    counts its decodes, so "not decoded again" is asserted directly.
+    """
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper")
+    unlabelled = json.loads(out.read_text())
+    assert "speakers" not in unlabelled
+    assert len(calls) == 1
+    assert checkpoint_path_for(out).exists(), "nothing was banked before labelling"
+
+    fake_turns(**ONE_SPEAKER)
+    states: list[str] = []
+
+    # def, not lambda: an annotated lambda parameter is not expressible.
+    def capture(p: Progress, state: str) -> None:
+        states.append(state)
+
+    payload = transcribe(fake_media, out, engine="whisper", on_progress=capture)
+
+    assert len(calls) == 1, "the rerun decoded the audio again"
+    assert "running" not in states, "the rerun reported transcription progress again"
+    assert payload["speakers"] == ["SPEAKER_01"]
+    assert [s["tokens"] for s in payload["sentences"]] == [
+        s["tokens"] for s in unlabelled["sentences"]
+    ]
+    assert not checkpoint_path_for(out).exists()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+@pytest.mark.parametrize(
+    ("first", "second", "changed"),
+    [
+        ({"prompt": "one"}, {"prompt": "two"}, "the prompt changed (prompt)"),
+        (
+            {"prompt": "seed"},
+            {"prompt": "seed", "anchor_s": 10.0},
+            "the anchor window changed (anchor_s, anchor_overlap_s)",
+        ),
+        ({"language": "ur"}, {"language": "en"}, "the language changed (language)"),
+        ({"model_id": "m/a"}, {"model_id": "m/b"}, "the model changed (model_id)"),
+    ],
+)
+def test_a_result_banked_under_other_settings_is_decoded_again(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    changed: str,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A prompt, an anchor, a language or a model changes what whisper writes (#171).
+
+    So a result banked under one is not labelled as though it came from
+    another: the rerun decodes again, and says on stderr which setting moved.
+    """
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper", **first)
+    assert len(calls) == 1
+
+    fake_turns(**ONE_SPEAKER)
+    caplog.set_level(logging.INFO, logger="dsj.suno")
+    transcribe(fake_media, out, engine="whisper", **second)
+
+    assert len(calls) == 2, "a result banked under other settings was reused"
+    assert "checkpoint ignored, transcribing from the start" in caplog.text
+    assert changed in caplog.text
+    assert not checkpoint_path_for(out).exists()
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_no_resume_decodes_whisper_again_and_removes_the_bank(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_media: Path,
+    tmp_path: Path,
+    fake_turns: Callable[..., list[Path]],
+) -> None:
+    calls = _stub_anchored(monkeypatch, samples=whisper_mod.SAMPLE_RATE, results=[_result()] * 2)
+    out = tmp_path / "out.json"
+    fake_turns(**ONE_SPEAKER, then=_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(fake_media, out, engine="whisper")
+
+    fake_turns(**ONE_SPEAKER)
+    transcribe(fake_media, out, engine="whisper", resume=False)
+
+    assert len(calls) == 2
+    assert not checkpoint_path_for(out).exists()
 
 
 @pytest.mark.usefixtures("already_extracted_media")

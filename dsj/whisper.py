@@ -68,6 +68,7 @@ __all__ = [
     "SAMPLE_RATE",
     "WhisperUnavailable",
     "available",
+    "fingerprint_fields",
     "redecoder",
     "transcribe_whisper",
 ]
@@ -165,6 +166,34 @@ def available() -> str | None:
 
 class WhisperUnavailable(RuntimeError):
     """The whisper engine was asked for and mlx-whisper is not installed."""
+
+
+def fingerprint_fields(
+    language: str | None, prompt: str | None, anchor_s: float | None
+) -> dict[str, str]:
+    """Everything besides the recording and the model that changes what whisper writes.
+
+    The key a banked whisper result is matched on (#171), as parakeet's and
+    sherpa's fingerprint_fields key their checkpoints. A prompt biases spelling
+    and script, a language skips detection, an anchor cuts the audio into
+    re-prompted windows (`_anchored`), and the anomaly threshold drops
+    segments: a result decoded under any other value of one of them is a
+    different transcript. The anchor is the one `transcribe_whisper` acts on,
+    so `anchor_s` without a prompt reads as no anchor, which is what it is.
+    Values are strings because the fingerprint is compared as JSON.
+    """
+    from importlib.metadata import version
+
+    anchored = anchor_s is not None and prompt is not None
+    return {
+        "mlx_whisper_version": version("mlx-whisper"),
+        "language": str(language),
+        "prompt": str(prompt),
+        "anchor_s": str(anchor_s) if anchored else "None",
+        "anchor_overlap_s": str(ANCHOR_OVERLAP_S) if anchored else "None",
+        "hallucination_silence_s": str(HALLUCINATION_SILENCE_S),
+    }
+
 
 def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:
     """Turn whisper's segments into payload sentences, shifted by `offset` seconds.

@@ -864,11 +864,13 @@ def transcribe(
     `engine` picks the ASR backend. "parakeet" is the default and everything
     above describes it. "whisper" exists for the languages parakeet does not
     have -- see dsj/whisper.py -- and differs in two ways worth knowing
-    before you choose it: it owns its own window loop, so there is no
-    checkpoint and no resume, and only an anchored run (`anchor_s` and
-    `prompt`, which `--roman-urdu` sets) reports progress between start and
-    finish, once per window. `language` and `prompt` are whisper's; parakeet
-    takes neither.
+    before you choose it: it owns its own window loop, so nothing is banked
+    until it has decoded the whole recording, and only an anchored run
+    (`anchor_s` and `prompt`, which `--roman-urdu` sets) reports progress
+    between start and finish, once per window. Its finished result is banked
+    beside `out` until labelling is over, so an interrupt after the decode
+    costs no decode on the next run. `language` and `prompt` are whisper's;
+    parakeet takes neither.
     `model_id` defaults to whichever engine's model, so it is usually left
     alone.
     """
@@ -900,7 +902,10 @@ def transcribe(
         checkpoint_path_for,
         fingerprint,
         read_checkpoint,
+        read_transcription,
+        whisper_fingerprint,
         write_checkpoint,
+        write_transcription,
     )
     from dsj.chunking import transcribe_chunked
 
@@ -992,7 +997,9 @@ def transcribe(
         # cannot read fails here rather than after an hour of whisper.
         stretches = silences(media_mod.loudness(media, LOUDNESS_FRAME_S))
 
-        ckpt_path: Path | None = None
+        # Beside `out`, for every engine: the chunk engines bank tokens there
+        # after every chunk, whisper its finished result (dsj/checkpoint.py).
+        ckpt_path = checkpoint_path_for(out)
         resumed_from_s = 0.0
         # The recording's length as this run's transcription frames report it,
         # kept so the done frame can report the same number (#52). whisper's
@@ -1000,45 +1007,77 @@ def transcribe(
         # with the decoded length, which is what its running frames divide by.
         audio_total_s = stream.duration_s
         if spec.kind == "file":
+            from dsj.whisper import fingerprint_fields as whisper_fields
             from dsj.whisper import transcribe_whisper
 
-            # No checkpoint, and so no resume: whisper owns its window loop and
-            # exposes no per-window hook to bank one from. Said out loud rather
-            # than left as a silently absent feature, because a resumable engine
-            # and a non-resumable one look identical until the run is killed.
-            if resume:
-                logger.info("whisper writes no checkpoint; an interrupted run starts over")
-            report(Progress(0.0, stream.duration_s, 0.0), "running")
-            whisper_started = time.monotonic()
-
-            # The anchored path cuts the audio itself, so it can say where it
-            # has got to. Unanchored there is still one report at 0% and
-            # nothing until the end: mlx-whisper takes no progress callback,
-            # and a bar that moved without evidence would be a bar that lies.
-            whisper_progress: Callable[[float], None] | None = None
-            if anchor_s is not None and prompt is not None:
-
-                def _whisper_progress(done_s: float) -> None:
-                    report(
-                        Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
-                        "running",
-                    )
-
-                whisper_progress = _whisper_progress
-
-            transcription = transcribe_whisper(
-                audio,
-                model_id=model_id,
-                language=language,
-                prompt=prompt,
-                anchor_s=anchor_s,
-                on_progress=whisper_progress,
+            # whisper owns its window loop and exposes no per-window hook, so
+            # nothing is banked while it decodes; its finished result is, at
+            # the checkpoint's path, before the loop retry and the labelling
+            # that follow it (#171). Before that, an hour of whisper was lost
+            # to an interrupt that came after the decode had finished.
+            whisper_fp = whisper_fingerprint(
+                media, model_id, whisper_fields(language, prompt, anchor_s)
             )
+            banked_result: Transcription | None = None
+            if resume:
+                banked_result = read_transcription(
+                    ckpt_path,
+                    whisper_fp,
+                    on_reject=lambda why: logger.warning(
+                        "checkpoint ignored, transcribing from the start: %s", why
+                    ),
+                )
+            else:
+                ckpt_path.unlink(missing_ok=True)
+
+            if banked_result is not None:
+                # The whole recording was decoded by an earlier run, so this
+                # one credits itself with none of it and ends at 0.0x, as a
+                # parakeet run resumed from a finished checkpoint does.
+                logger.info("whisper's result was banked by an earlier run; not decoding again")
+                transcription = banked_result
+                resumed_from_s = audio_total_s
+            else:
+                # Said out loud rather than left as a silently absent
+                # feature, because a resumable engine and a non-resumable one
+                # look identical until the run is killed.
+                if resume:
+                    logger.info(
+                        "whisper banks nothing until its transcription is finished; "
+                        "an interrupt before then starts over"
+                    )
+                report(Progress(0.0, stream.duration_s, 0.0), "running")
+                whisper_started = time.monotonic()
+
+                # The anchored path cuts the audio itself, so it can say where
+                # it has got to. Unanchored there is still one report at 0%
+                # and nothing until the end: mlx-whisper takes no progress
+                # callback, and a bar that moved without evidence would be a
+                # bar that lies.
+                whisper_progress: Callable[[float], None] | None = None
+                if anchor_s is not None and prompt is not None:
+
+                    def _whisper_progress(done_s: float) -> None:
+                        report(
+                            Progress(done_s, stream.duration_s, time.monotonic() - whisper_started),
+                            "running",
+                        )
+
+                    whisper_progress = _whisper_progress
+
+                transcription = transcribe_whisper(
+                    audio,
+                    model_id=model_id,
+                    language=language,
+                    prompt=prompt,
+                    anchor_s=anchor_s,
+                    on_progress=whisper_progress,
+                )
+                write_transcription(ckpt_path, whisper_fp, media, transcription)
         else:
             audio_data = loaded.load_audio(audio)
             audio_total_s = len(audio_data) / rate
 
-            ckpt_path = checkpoint_path_for(out)
             # Fingerprinted on `media`, never on `audio`: for a .mov those
             # differ, and `audio` is a temp wav made fresh on every run, so a
             # checkpoint keyed to it would name ffmpeg's output rather than the
@@ -1184,7 +1223,9 @@ def transcribe(
             )
 
         # Removed once labelling is over, not as soon as `out` is written
-        # (#101). The unlabelled transcript carries no fingerprint, so the next
+        # (#101). whisper's banked result goes at the same moment and for the
+        # same reason (#171); the rest of this comment is about the chunk
+        # engines' checkpoint. The unlabelled transcript carries no fingerprint, so the next
         # run cannot tell it is finished, or for this media and model; only the
         # checkpoint can. It used to go first, on the reasoning that a crash in
         # labelling would strand a stale checkpoint and the next run would
@@ -1198,8 +1239,7 @@ def transcribe(
         #
         # After the write, not before, for the same reason: a crash between
         # the two costs one redundant resume rather than the whole run.
-        if ckpt_path is not None:
-            ckpt_path.unlink(missing_ok=True)
+        ckpt_path.unlink(missing_ok=True)
 
         elapsed = time.monotonic() - started
         # The length of the recording, the total every running frame reported,

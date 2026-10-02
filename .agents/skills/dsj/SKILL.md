@@ -110,7 +110,7 @@ about whether it worked.
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
 anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
 `--roman-urdu` and about 5 to 6x on English (measured per file in
-[references/engines.md](references/engines.md#whisper-speed)) and writes no checkpoint. A `--roman-urdu` run reports progress once per window of about two minutes;
+[references/engines.md](references/engines.md#whisper-speed)) and banks nothing until it has decoded the whole recording. A `--roman-urdu` run reports progress once per window of about two minutes;
 any other whisper run reports 0% and then nothing until transcription ends:
 
 ```bash
@@ -363,8 +363,20 @@ silent: stderr says `checkpoint ignored, transcribing from the start:` and names
 that changed. A checkpoint written by a dsj from before this rule is ignored the same
 way, once.
 
-`--no-resume` deletes the checkpoint rather than ignoring it. The whisper engine writes
-none at all, so an interrupted whisper run always starts over.
+`--no-resume` deletes the checkpoint rather than ignoring it.
+
+**What survives an interrupt depends on the engine and the state it stopped in.** whisper
+has no chunk loop of dsj's to bank from, so it banks its whole result once, at the same
+path, the moment its decode ends, and keeps it until labelling is over. A different
+`--model`, `--prompt`, `--language` or `--roman-urdu` on the rerun invalidates it, and
+stderr says which.
+
+| Stopped in | parakeet, sherpa: the rerun | whisper: the rerun |
+|---|---|---|
+| `extracting`, or before the first frame | has nothing new banked | has nothing new banked |
+| `running` | resumes from the last chunk banked, at most 105 s back | starts over: the decode is lost |
+| `retrying` | (never retries) | decodes nothing; retries its loops again |
+| `diarizing` | decodes nothing; labels again | decodes nothing; retries its loops and labels again |
 
 **Never delete a transcript to force a re-run.** dsj replaces `--out` atomically and
 only once transcription has finished, so a run that stops earlier leaves the old file
@@ -379,8 +391,8 @@ dsj suno rec.m4a -o rec.retry.json --status rec.retry.status.json --roman-urdu
 mv rec.retry.json rec.json
 ```
 
-This matters most under whisper, which `--roman-urdu` uses: with no checkpoint, an
-interrupted retry leaves nothing behind.
+This matters most under whisper, which `--roman-urdu` uses: a retry stopped before its
+decode ends leaves nothing behind.
 
 ## When something fails
 
@@ -389,7 +401,7 @@ interrupted retry leaves nothing behind.
 | 0 | Success |
 | 1 | An uncaught exception, printed as a traceback on stderr |
 | 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
-| 130 | Interrupted by Ctrl-C. For `suno` on parakeet or sherpa, re-run to resume |
+| 130 | Interrupted by Ctrl-C. For `suno`, re-run to resume; under whisper only a run stopped after its decode resumes |
 | 143 | Stopped by `kill`. The same as 130 otherwise |
 | 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 

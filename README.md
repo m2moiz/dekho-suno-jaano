@@ -271,8 +271,11 @@ dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize --model <id>
 The full model writes most of its text in Urdu script whatever the prompt says.
 Turbo is the default here for that reason, and changing it means re-measuring.
 
-The whisper engine writes **no checkpoint**, so an interrupted run starts over:
-it owns its own window loop and exposes no hook to bank one from. How much
+The whisper engine banks **nothing while it decodes**, so a run interrupted in
+the `running` state starts over: it owns its own window loop and exposes no hook
+to bank from. Its finished result is banked beside `-o` the moment the decode
+ends and kept until speaker labelling is over, so a run stopped after that
+decodes nothing on the rerun (#171). How much
 progress it reports depends on the run. `--roman-urdu` cuts the audio into
 two-minute windows itself and reports after each one. Any other whisper run,
 `--prompt` and `--language` included, reports 0% and then **nothing until
@@ -286,7 +289,7 @@ default.
 
 **Never delete a transcript to force a re-run.** dsj replaces `-o` atomically
 and only once transcription has finished, so a run that stops earlier leaves
-the old file as it was. With no checkpoint, an interrupted whisper retry leaves
+the old file as it was. A whisper retry stopped before its decode ends leaves
 nothing behind, so if the old file was deleted first, both are gone: that is how
 a finished transcript was lost on 2026-09-22. Write the retry to a new path and
 replace the old file yourself once the new one exists:
