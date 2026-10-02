@@ -273,8 +273,9 @@ Two things will break a poller that assumes otherwise:
 the system under memory pressure, cannot write anything, so its file says `running`
 forever. Every frame carries the writer's `pid`: `kill -0 "$(jq -r .pid run.json)"`
 failing means the run is dead, not slow. To stop a run, `kill` that pid, never
-`pkill -f 'dsj suno'`, which stops every run on the machine. Details in
-[references/payload.md](references/payload.md).
+`pkill -f 'dsj suno'`, which stops every run on the machine. An `extracting` frame that
+carries `stalled_s` is alive but has not moved for that many seconds: report it, do not
+kill it. Details in [references/payload.md](references/payload.md).
 
 `eta_s` is `null` whenever speed is 0, which includes the first frame of every run.
 

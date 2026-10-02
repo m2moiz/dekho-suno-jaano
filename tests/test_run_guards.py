@@ -245,6 +245,86 @@ def test_a_run_killed_with_sigkill_does_not_block_the_next(tmp_path: Path) -> No
     assert json.loads(lock.read_text())["pid"] == second.pid
 
 
+# --------------------------------------------------------------------------
+# #164: an extraction that stops moving says so
+# --------------------------------------------------------------------------
+
+# Stands in for ffmpeg on PATH, so the real extract_audio reads a real progress
+# stream from a real process. Its position advances to 1 s, stands still there
+# for about a second while it keeps reporting, which is what ffmpeg did for 15
+# minutes on 2026-09-22, then advances again and ends.
+FAKE_FFMPEG = """\
+#!{python}
+import sys, time
+open(sys.argv[-1], "wb").write(b"RIFF")
+def report(us):
+    print(f"out_time_us={{us}}", flush=True)
+    print("progress=continue", flush=True)
+report(500000)
+report(1000000)
+for _ in range(20):
+    time.sleep(0.05)
+    report(1000000)
+report(2000000)
+print("progress=end", flush=True)
+"""
+
+
+@pytest.mark.usefixtures("already_extracted_media", "no_real_diarizer")
+def test_a_stalled_extraction_says_so_until_it_moves_again(
+    fake_parakeet: Any,
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dsj.suno as suno_mod
+    from dsj import media
+
+    fake_parakeet()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ffmpeg = bin_dir / "ffmpeg"
+    ffmpeg.write_text(FAKE_FFMPEG.format(python=sys.executable))
+    ffmpeg.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    def always_convert(stream: media.AudioStream, rate: int) -> bool:
+        return True
+
+    monkeypatch.setattr(media, "needs_conversion", always_convert)
+    # A third of a second for the minute: the rule under test is the same, and
+    # the fake stands still for about three times the bound.
+    monkeypatch.setattr(suno_mod, "STALL_S", 0.3)
+
+    status = tmp_path / "run.json"
+    frames: list[dict[str, Any]] = []
+    real = suno_mod.atomic_write_text
+
+    def record(path: Path, text: str, **kwargs: Any) -> None:
+        if path == status:
+            frames.append(json.loads(text))
+        real(path, text, **kwargs)
+
+    monkeypatch.setattr(suno_mod, "atomic_write_text", record)
+
+    suno_mod.transcribe(fake_media, tmp_path / "out.json", status_path=status, diarize=False)
+
+    extracting = [f for f in frames if f["state"] == "extracting"]
+    marked = [i for i, f in enumerate(extracting) if "stalled_s" in f]
+    assert marked, f"no frame said the extraction had stalled: {extracting}"
+    # Only frames standing at 1 s, only once the bound has passed, and growing.
+    assert all(extracting[i]["audio_done_s"] == 1.0 for i in marked)
+    assert extracting[marked[0]]["stalled_s"] >= 0.3
+    stalls = [extracting[i]["stalled_s"] for i in marked]
+    assert stalls == sorted(stalls)
+    assert "stalled_s" not in extracting[0]
+    # Cleared as soon as the position moves again, and never on another phase.
+    moved = [f for f in extracting if f["audio_done_s"] == 2.0]
+    assert moved, extracting
+    assert all("stalled_s" not in f for f in moved)
+    assert all("stalled_s" not in f for f in frames if f["state"] != "extracting")
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(("sig", "code"), [(signal.SIGINT, 130), (signal.SIGTERM, 143)])
 def test_parakeet_stopped_mid_run_says_interrupted(

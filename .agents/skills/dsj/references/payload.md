@@ -269,6 +269,7 @@ sees half of one. It is not a log and not JSONL.
 | `fraction` | float | Rounded to 4 places. Not clamped, and see the warning below. |
 | `speed` | float | Realtime multiple over this run's own work only. |
 | `eta_s` | float or **null** | `null` whenever `speed` is 0, which includes the first frame of every run. |
+| `stalled_s` | float seconds | `extracting` frames only, and **only while** ffmpeg's position has not moved for 60 s or more: how long it has stood still. Absent otherwise, so test for the key. Below. |
 
 **Poll `state`. Do not use `fraction` to detect completion.** `fraction` reaches `1.0`
 when the audio is decoded, which is before the speaker labels exist, then starts over at
@@ -326,6 +327,26 @@ The check only works on the machine that ran the job, not on a status file read 
 another. A pid is reused eventually, so on a frame hours old confirm it is still dsj with
 `ps -p "$pid" -o command=`. And a status file written before `pid` existed has none, so
 the only signal there is the file's mtime against the cadence table below.
+
+**A stalled extraction says so, and is not stopped.** On 2026-09-22 ffmpeg sat at 4:20 of
+a 27:52 recording for over 15 minutes, still reporting, and then finished. The process
+was alive throughout, so `pid` reads alive, and every frame was fresh, so the file's
+mtime looked healthy; only `audio_done_s` had stopped. Now an `extracting` frame carries
+`stalled_s` once the position has stood still for a minute, and loses it as soon as it
+moves:
+
+```json
+{"audio_done_s": 260.0, "audio_total_s": 1672.0, "elapsed_s": 923.0, "resumed_from_s": 0.0,
+ "state": "extracting", "pid": 48213, "fraction": 0.1555, "speed": 0.28, "eta_s": 5012.6,
+ "stalled_s": 903.4}
+```
+
+Report it; do not kill the job for it. Why that extraction stalled is not known, and
+killing a run that would have finished costs the whole run. A machine short of memory
+(`memory_pressure`) or a recording that is still downloading from a cloud drive are the
+two suspects, neither reproduced. `stalled_s` is computed when ffmpeg reports, about
+twice a second; an ffmpeg that stops reporting altogether stops the frames too, and then
+the file's mtime is what goes stale.
 
 **Stop the job you started, and only that one:** `kill "$(jq -r .pid run.json)"`. Never
 `pkill -f 'dsj suno'`, which stops every run on the machine, another session's included.

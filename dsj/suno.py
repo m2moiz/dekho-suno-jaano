@@ -20,6 +20,7 @@ __all__ = [
     "NO_SPEECH_REASON",
     "OVERLAP_S",
     "RETRY_LOOPS",
+    "STALL_S",
     "Progress",
     "clock",
     "is_loop",
@@ -81,6 +82,16 @@ logger = logging.getLogger("dsj.suno")
 # what makes chunk_callback fire, so progress reporting depends on it too.
 CHUNK_S = 120.0
 OVERLAP_S = 15.0
+
+# How long ffmpeg's position may stand still before the heartbeat says so (#164).
+# On 2026-09-22 an extraction sat at 4:20 of 27:52 for 15 minutes 23 seconds and
+# then finished, while the status kept reading `extracting` with nothing to show
+# that it had stopped moving. Healthy extraction runs about a thousand times
+# realtime and reports twice a second, so a minute without one advance is
+# nothing a healthy run does. It is reported, never acted on: why that one
+# stalled is not known, and killing a job that would have finished is worse
+# than saying it has stopped.
+STALL_S = 60.0
 
 
 @dataclass
@@ -900,7 +911,7 @@ def transcribe(
         loaded = eng_mod.load(model_id)
         rate = int(loaded.sample_rate)
 
-    def write_status(p: Progress, state: str) -> None:
+    def write_status(p: Progress, state: str, stalled_s: float | None = None) -> None:
         if status_path is None:
             return
         payload = asdict(p) | {
@@ -914,12 +925,15 @@ def transcribe(
             "speed": round(p.speed, 2),
             "eta_s": p.eta_s,
         }
+        # Present only while it applies, so a reader tests for the key.
+        if stalled_s is not None:
+            payload["stalled_s"] = round(stalled_s, 1)
         # Not fsynced: a reader is protected by the rename alone, and a
         # heartbeat lost to a power cut costs nothing to regenerate.
         atomic_write_text(status_path, json.dumps(payload))
 
-    def report(p: Progress, state: str) -> None:
-        write_status(p, state)
+    def report(p: Progress, state: str, stalled_s: float | None = None) -> None:
+        write_status(p, state, stalled_s)
         if on_progress:
             on_progress(p, state)
 
@@ -931,11 +945,22 @@ def transcribe(
             # than realtime and the transcription that follows around 20x;
             # sharing one elapsed would make both speeds meaningless.
             extract_started = time.monotonic()
+            # ffmpeg keeps reporting while its position stands still, which is
+            # what made the 2026-09-22 stall look like a slow run: every frame
+            # was fresh, and each one named the same second.
+            furthest_s = -1.0
+            moved_at = extract_started
 
             def on_extract(done_s: float) -> None:
+                nonlocal furthest_s, moved_at
+                now = time.monotonic()
+                if done_s > furthest_s:
+                    furthest_s, moved_at = done_s, now
+                still_s = now - moved_at
                 report(
-                    Progress(done_s, stream.duration_s, time.monotonic() - extract_started),
+                    Progress(done_s, stream.duration_s, now - extract_started),
                     "extracting",
+                    still_s if still_s >= STALL_S else None,
                 )
 
             audio = media_mod.extract_audio(
