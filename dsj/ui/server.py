@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from dsj.ui import UIUnavailable
+from dsj.ui.schemas import Recording
 
 # Committed, and inside the package, so an install carries the page with no
 # Node on the machine. `just ui-build` writes it from ui/ (#57 section 8).
@@ -33,7 +34,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 HOST = "127.0.0.1"
 
 
-def list_recordings() -> list[dict[str, object]]:
+def list_recordings() -> list[Recording]:
     """Every recording dsj knows: none, until the store (#105) and the page (#156)."""
     return []
 
