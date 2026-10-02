@@ -25,6 +25,22 @@ The undo for each kind is #66's, in the app.
 
 Every change ends in `validate`, as loading does, so a broken list fails at the
 change that broke it and the message names the entry.
+
+Finding what to bleep (#64) is a word list and a matcher over the same list. The
+shipped lists are data in `dsj/words/`, one TOML file a language, inside the
+package so `uv tool install` carries them; the user's additions live in a file of
+their own in dsj's data folder, which no reinstall touches. A match is a flag,
+and a flag is a `mute` of the word's entries, so a later detector (filler words,
+hallucinations) is the same operation with another list.
+
+Matching is exact, one word at a time, after folding case, punctuation and
+script variants, never by edit distance. Roman Urdu has no fixed spelling, so
+each entry lists the spellings recognisers choose between. Edit distance 1 was
+the alternative, and on the short words these lists hold it reaches ordinary
+words: measured on a 45 s parakeet transcript of English speech (202 tokens, 114
+words), 6 of its words sit within distance 1 of a listed spelling and 0 match
+exactly, every one of the 6 an ordinary word. A missed spelling is fixed by one
+line in the user file; a false mute is found by the person you sent the file to.
 """
 
 from __future__ import annotations
@@ -32,27 +48,43 @@ from __future__ import annotations
 __all__ = [
     "FORMAT",
     "FORMAT_VERSION",
+    "SHIPPED_LISTS",
+    "WORDS_ENV",
     "Document",
     "Entry",
+    "Found",
     "InvalidDocument",
     "Item",
+    "Match",
     "Paragraph",
     "TranscriptUnusable",
+    "WordList",
+    "WordListError",
     "delete",
     "dumps",
+    "find",
+    "flag",
     "from_transcript",
     "load",
+    "load_words",
     "loads",
     "move",
     "mute",
+    "normalize",
     "save",
+    "user_words_path",
     "validate",
+    "word_lists",
 ]
 
 import json
 import math
+import os
 import re
-from collections.abc import Mapping
+import sys
+import tomllib
+import unicodedata
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -376,3 +408,220 @@ def save(doc: Document, path: Path) -> None:
 def load(path: Path) -> Document:
     """Read a document `save` wrote."""
     return loads(path.read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------------------
+# Finding the words to bleep (#64)
+# --------------------------------------------------------------------------
+
+# The shipped lists, in the order a spelling found in two of them is credited:
+# ur before hi, since the two share most Roman spellings and this tool's Hindi
+# and Urdu speakers are mostly Urdu speakers.
+SHIPPED_LISTS = ("en", "ur", "hi", "pa")
+_WORDS_DIR = Path(__file__).parent / "words"
+
+# Names the user's own list, in place of the default below. Tests point it at a
+# temp file, so the suite never reads or writes the owner's list.
+WORDS_ENV = "DSJ_WORDS"
+
+# The keys an entry may carry. Anything else is a typo, and a typo'd key would
+# otherwise drop its spellings in silence.
+_SPELLING_KEYS = ("roman", "script", "disguised")
+
+# Arabic-script letters a recogniser or a keyboard writes for their Urdu forms,
+# which look the same and compare different: Arabic yeh, alef maksura, kaf, heh
+# and teh marbuta, each to the letter Urdu uses.
+_FOLD = str.maketrans({"\u064a": "\u06cc", "\u0649": "\u06cc", "\u0643": "\u06a9",
+                       "\u0647": "\u06c1", "\u0629": "\u06c1"})
+# Arabic short-vowel marks (harakat) and the superscript alef: optional in
+# written Urdu, so one word arrives with or without them.
+_HARAKAT = re.compile("[\u064b-\u065f\u0670]")
+
+
+class WordListError(ValueError):
+    """A word list file is broken. The message names the file and the entry."""
+
+
+def user_words_path() -> Path:
+    """The user's own word list: `$DSJ_WORDS`, else `words.toml` in dsj's data folder.
+
+    The same folder the library uses (`dsj/ui/store.py`, `library_path`), worked out
+    here rather than imported because `dsj hatao` imports nothing from `dsj.ui`;
+    a test holds the two equal. Outside the package, so reinstalling dsj never
+    touches it.
+    """
+    configured = os.environ.get(WORDS_ENV)
+    if configured:
+        return Path(configured)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "dsj" / "words.toml"
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(data) / "dsj" / "words.toml"
+
+
+def word_lists() -> list[Path]:
+    """Every list a run searches: the shipped ones, then the user's if it exists."""
+    user = user_words_path()
+    return [_WORDS_DIR / f"{name}.toml" for name in SHIPPED_LISTS] + (
+        [user] if user.is_file() else []
+    )
+
+
+def normalize(word: str) -> str:
+    """The form a spelling is compared in: one recogniser's word, or one list entry.
+
+    NFKC, case folded, the Urdu letter variants folded, Arabic short vowels
+    dropped, and every character that is not a letter, a mark or a digit dropped:
+    "Bhen-chod," and "bhenchod" compare equal. The asterisk is kept, because a
+    recogniser that masks a word writes "f***ing", and that is a spelling to
+    match, not punctuation.
+    """
+    folded = _HARAKAT.sub("", unicodedata.normalize("NFKC", word).casefold().translate(_FOLD))
+    return "".join(
+        ch for ch in folded if ch == "*" or unicodedata.category(ch)[0] in ("L", "M", "N")
+    )
+
+
+@dataclass(frozen=True)
+class WordList:
+    """Normalised spellings, each to the entry it belongs to, and the files read."""
+
+    spellings: Mapping[str, str]
+    files: tuple[Path, ...]
+
+
+def load_words(paths: Sequence[Path]) -> WordList:
+    """Read word list files into one lookup, earlier files winning a shared spelling.
+
+    An entry is credited as `<list>:<name>`, the list being the file's stem for a
+    shipped list and `user` for the user's own, so the bleep log can say which.
+
+    Raises:
+        WordListError: a file that is not TOML, or an entry with no name, no
+            spellings, a key it does not know, or a spelling that is all
+            punctuation, named with its file.
+    """
+    spellings: dict[str, str] = {}
+    for path in paths:
+        label = path.stem if path.parent == _WORDS_DIR else "user"
+        try:
+            raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            raise WordListError(f"{path} is not valid TOML: {exc}") from exc
+        entries = raw.get("entry", [])
+        if not isinstance(entries, list):
+            raise WordListError(f"{path}: `entry` must be a list of [[entry]] tables")
+        for index, item in enumerate(cast("list[Any]", entries)):
+            where = f"{path}, entry {index}"
+            if not isinstance(item, dict):
+                raise WordListError(f"{where} is not a table")
+            fields = cast("dict[str, Any]", item)
+            name = fields.get("name")
+            if not isinstance(name, str) or not name:
+                raise WordListError(f"{where} has no `name`")
+            unknown = sorted(set(fields) - {"name", *_SPELLING_KEYS})
+            if unknown:
+                raise WordListError(
+                    f"{where} ({name}) has keys {unknown}; an entry takes `name` and "
+                    f"any of {list(_SPELLING_KEYS)}"
+                )
+            found = [
+                spelling
+                for key in _SPELLING_KEYS
+                for spelling in cast("list[Any]", fields.get(key, []))
+            ]
+            if not found or not all(isinstance(x, str) for x in found):
+                raise WordListError(f"{where} ({name}) needs at least one spelling, all strings")
+            for spelling in cast("list[str]", found):
+                key = normalize(spelling)
+                if not key:
+                    raise WordListError(f"{where} ({name}): {spelling!r} is all punctuation")
+                spellings.setdefault(key, f"{label}:{name}")
+    return WordList(spellings, tuple(paths))
+
+
+@dataclass(frozen=True)
+class Match:
+    """One word a list matched: its entries in the document, its time, what matched it."""
+
+    start: int
+    stop: int
+    word: str
+    entry: str
+    source_start: float
+    source_end: float
+
+
+@dataclass(frozen=True)
+class Found:
+    """What a search found, and what it searched: zero is a result to report."""
+
+    matches: tuple[Match, ...]
+    words_searched: int
+    lists: tuple[Path, ...]
+
+    @property
+    def count(self) -> int:
+        """How many words matched. The caller says so out loud when it is 0."""
+        return len(self.matches)
+
+
+def _words(doc: Document) -> Iterator[tuple[int, int]]:
+    """Each word as the range of entries it spans.
+
+    A word starts at an item whose text starts with a space, or the first one in
+    a paragraph, and runs through the items with text after it: parakeet and
+    sherpa write a word in pieces (" questi", "on") and a full stop as a piece of
+    its own. A gap item between two pieces stays inside the word.
+    """
+    start: int | None = None
+    last = 0
+    for index, entry in enumerate(doc.content):
+        if isinstance(entry, Paragraph):
+            if start is not None:
+                yield start, last + 1
+            start = None
+            continue
+        if not entry.text:
+            continue
+        if start is None or entry.text[0].isspace():
+            if start is not None:
+                yield start, last + 1
+            start = index
+        last = index
+    if start is not None:
+        yield start, last + 1
+
+
+def find(doc: Document, words: WordList) -> Found:
+    """Every word of `doc` a list spells, one word at a time, never one language at a time.
+
+    One sentence routinely mixes Urdu and English, so every word is looked up in
+    every list.
+    """
+    matches: list[Match] = []
+    searched = 0
+    for start, stop in _words(doc):
+        searched += 1
+        pieces = [e for e in doc.content[start:stop] if isinstance(e, Item) and e.text]
+        written = "".join(piece.text for piece in pieces).strip()
+        entry = words.spellings.get(normalize(written))
+        if entry is not None:
+            matches.append(
+                Match(
+                    start=start,
+                    stop=stop,
+                    word=written,
+                    entry=entry,
+                    source_start=min(piece.source_start for piece in pieces),
+                    source_end=max(piece.source_end for piece in pieces),
+                )
+            )
+    return Found(tuple(matches), searched, words.files)
+
+
+def flag(doc: Document, found: Found) -> Document:
+    """Mute every word `found` matched."""
+    for match in found.matches:
+        doc = mute(doc, match.start, match.stop)
+    return doc

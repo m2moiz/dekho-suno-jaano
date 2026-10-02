@@ -1,0 +1,57 @@
+# Punjabi words `dsj hatao` mutes by default (#64).
+#
+# Hand-written in this repo. `script` holds Gurmukhi, and Shahmukhi (Punjabi in
+# Urdu script, as written in Pakistan) where it differs from ur.toml. Words
+# Punjabi shares with Urdu and Hindi are in those files and match here too,
+# since every list is searched for every word. Add your own words to your user
+# file (`dsj hatao --help` names it), never here: an update replaces this file.
+
+[[entry]]
+name = "penchod"
+roman = ["penchod", "pencho", "pehnchod", "phenchod", "penchodd", "painchod"]
+script = ["ਭੈਣਚੋਦ", "ਪੈਣਚੋਦ", "پینچود"]
+
+[[entry]]
+name = "madarchod"
+roman = ["madarchod", "maderchod"]
+script = ["ਮਾਦਰਚੋਦ"]
+
+[[entry]]
+name = "chutiya"
+roman = ["chutiya", "chutia"]
+script = ["ਚੂਤੀਆ", "ਚੁਤੀਆ"]
+
+[[entry]]
+name = "gandu"
+roman = ["gandu", "gaandu"]
+script = ["ਗਾਂਡੂ", "ਗਾਂਡ"]
+
+[[entry]]
+name = "harami"
+roman = ["harami", "haramzada", "haramzadi"]
+script = ["ਹਰਾਮੀ", "ਹਰਾਮਜ਼ਾਦਾ", "ਹਰਾਮਜਾਦਾ", "ਹਰਾਮਜ਼ਾਦੀ"]
+
+[[entry]]
+name = "lun"
+roman = ["lun", "lunn", "lund", "lauda", "lora", "loray"]
+script = ["ਲੰਡ", "ਲੁੰਨ", "ਲੌੜਾ", "ਲੌੜੇ", "لن"]
+
+[[entry]]
+name = "kanjar"
+roman = ["kanjar", "kanjri", "kanjari"]
+script = ["ਕੰਜਰ", "ਕੰਜਰੀ"]
+
+[[entry]]
+name = "dalla"
+roman = ["dalla", "dallay", "dalle"]
+script = ["ਦੱਲਾ", "ਦੱਲੇ", "دلا", "دلے"]
+
+[[entry]]
+name = "phuddi"
+roman = ["phuddi", "fuddi", "phudi", "fudi", "phuddu", "fuddu"]
+script = ["ਫੁੱਦੀ", "ਫੁੱਦੂ", "پھدی", "پھدو", "پھدّی"]
+
+[[entry]]
+name = "tatte"
+roman = ["tatte", "tattay", "tattey"]
+script = ["ਟੱਟੇ", "ٹٹے"]

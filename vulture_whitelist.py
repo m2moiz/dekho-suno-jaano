@@ -27,6 +27,17 @@ whitelist.frozen_clock  # tests/conftest.py
 whitelist.already_extracted_media  # tests/conftest.py
 whitelist.no_real_diarizer  # tests/conftest.py
 whitelist.private_suno_lock  # tests/conftest.py
+whitelist.private_words  # tests/conftest.py
+whitelist.private_library  # tests/conftest.py, autouse
+# A session fixture, injected by name into the slow tests that load a model.
+whitelist.model_id  # tests/conftest.py
+# Signature fidelity for conftest's stand-ins: each restates the parameters of
+# the function it replaces (parakeet_mlx's load_audio, media.needs_conversion,
+# media.loudness), and the caller passes them, so the body ignoring one is the
+# point of a stub. Seen only when a branch changes conftest.
+whitelist.rate  # tests/conftest.py
+whitelist.stream  # tests/conftest.py
+whitelist.frame_s  # tests/conftest.py
 whitelist.end_what_the_test_started  # tests/test_run_guards.py, autouse
 whitelist.no_stub_outlives_the_module  # tests/test_run_guards.py, autouse
 # A session fixture, injected by name into tests/test_chunking.py,
