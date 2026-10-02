@@ -327,8 +327,8 @@ timing a subtitle format has room for. TXT is for reading: a block per speaker
 turn headed by its start time, or a timestamped line per sentence when there
 are no labels.
 
-The cues never overlap. A chunk seam can leave a sentence ending after the next
-one starts, and MP4 timed text, like most players, keeps one cue at a time, so
+The cues never overlap. A transcript written before dsj kept sentences apart
+(#190) can have a sentence ending after the next one starts, and MP4 timed text, like most players, keeps one cue at a time, so
 exporting an early transcript and muxing it into its recording moved 22 of 480
 cues. Each cue now ends no later than the next begins, and the same transcript
 exported by `likho` muxes into the same recording and back with 0 of 480
@@ -402,6 +402,14 @@ that word belongs to sorts to where its earliest token claims it began. Measured
 on three recordings: 8 sentences of 1038, 3 of 664 and 4 of 480 arrived out of
 order before the sort, the worst by 5.72 s. Recordings short enough to need no
 stitching were already in order.
+
+**No two sentences overlap**: each ends at or before the next one's `start`.
+Where a seam leaves one sentence's time running into another's, the two are
+written as one sentence, with every word and time as decoded; on a 6-minute
+parakeet run that was one pair, from a full stop timed 3 s early. Each of the
+6 s two of whisper's two-minute windows share is written by one of them: its
+own half by default, or all of it by the one that did not loop there, so the
+same speech is not written twice at a seam (#190).
 
 **A sentence's `text` is its `tokens` joined**: every `w` in that time order,
 leading space included, under every engine. The top-level `text` is the

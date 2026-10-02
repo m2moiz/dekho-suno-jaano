@@ -642,14 +642,14 @@ def test_anchored_reports_progress_at_each_windows_real_end(
 def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A segment re-decoded inside the overlap is kept once; new content past it survives.
+    """A segment decoded by two windows is written once, by the window that owns its seconds.
 
-    Same 16s/10s/6s geometry: windows at offset 0, 4, 8. Window 0's segment near
-    its right edge (8.5-9.3) sits inside window 1's overlap and reappears there
-    at the same absolute time -- that copy must be dropped, not duplicated.
-    Window 1's own new segment (10.5-12.0) is past window 0's watermark and must
-    survive; window 2 re-decodes part of it (11.0-12.0) and must not duplicate
-    it either. 4 of the 6 segments across the three windows should survive.
+    Same 16s/10s/6s geometry: windows at offset 0, 4, 8, handing over at the
+    middles of their overlaps, 7 s and 11 s (#190). Window 0's segment near its
+    right edge (8.5-9.3) reappears in window 1 at the same time; it lies past
+    7 s, so window 1's copy is the one written. Window 1's segment at 10.5-12.0
+    has its midpoint past 11 s, so window 2's decode of the same speech
+    (11.0-12.0) is written instead of it. 4 of the 6 segments survive.
     """
     calls = _stub_anchored(
         monkeypatch,
@@ -658,8 +658,8 @@ def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(
             _result(segments=[_seg(1.0, 2.0, " one"), _seg(8.5, 9.3, " edge")]),
             # Offset +4s: local 4.5-5.3 is global 8.5-9.3, the duplicate above.
             _result(segments=[_seg(4.5, 5.3, " edge"), _seg(6.5, 8.0, " new")]),
-            # Offset +8s: local 3.0-4.0 is global 11.0-12.0, inside the segment
-            # window 1 already kept (10.5-12.0).
+            # Offset +8s: local 3.0-4.0 is global 11.0-12.0, the speech window
+            # 1 decoded as 10.5-12.0.
             _result(segments=[_seg(3.0, 4.0, " newagain"), _seg(6.0, 7.5, " tail")]),
         ],
     )
@@ -670,7 +670,7 @@ def test_anchored_drops_the_overlap_duplicate_and_keeps_new_content(
     assert [(s["start"], s["end"], s["text"]) for s in got.sentences] == [
         (1.0, 2.0, "one"),
         (8.5, 9.3, "edge"),
-        (10.5, 12.0, "new"),
+        (11.0, 12.0, "newagain"),
         (14.0, 15.5, "tail"),
     ]
 
@@ -988,4 +988,120 @@ def test_a_loop_over_silence_is_never_decoded_again(
     assert [(u["reason"], u["words"]) for u in payload["unclear"]] == [
         ("repetition loop", 8),
         (NO_SPEECH_REASON, 9),
+    ]
+
+
+# --- the seconds two anchored windows share (#190) --------------------------
+
+
+def test_the_seconds_two_windows_share_are_written_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both windows decode the overlap, differently, and only one copy is written.
+
+    A 14 s clip at anchor_s=10 is two windows, [0, 10) and [4, 14), sharing 4
+    to 10 s. As on #148's fixture at 114 s, each window returns its own segment
+    for those seconds, starting at a different time and spelled differently,
+    and the second one runs on past the first window's end. Keeping a segment
+    by its midpoint keeps both (#190: 9 overlapping pairs on the fixture).
+
+    Each second has one owner instead: the first window up to the middle of
+    the overlap, 7 s, the second from there on. A word goes to the window that
+    owns its midpoint, so " here", which the first window times at 7.0 to
+    8.0 s, is the second window's; and the second window's " Shared" and
+    " Words" lie before 7 s, so they are the first window's to write.
+    """
+    _stub_anchored(
+        monkeypatch,
+        samples=14 * whisper_mod.SAMPLE_RATE,
+        results=[
+            {"segments": [
+                _words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two")]),
+                _words_seg([(5.0, 6.0, " shared"), (6.0, 7.0, " words"), (7.0, 8.0, " here")]),
+            ]},
+            # Offset +4 s: local 0.6 is global 4.6.
+            {"segments": [
+                _words_seg([
+                    (0.6, 1.8, " Shared"), (1.8, 3.1, " Words"), (3.1, 4.1, " here"),
+                    (4.1, 6.0, " then"), (6.0, 9.0, " more."),
+                ]),
+            ]},
+        ],
+    )
+
+    got = transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    _assert_no_overlap(got.sentences)
+    assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
+        (1.0, " one"), (2.0, " two"), (5.0, " shared"), (6.0, " words"),
+        (7.1, " here"), (8.1, " then"), (10.0, " more."),
+    ]
+
+
+def test_a_loop_timed_into_a_windows_last_second_is_not_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A window-tail loop belongs to seconds the next window owns, and reads them itself.
+
+    On #148's fixture whisper ended a window with 221 words timed into 233.7 to
+    233.86 s, the last 0.3 s of the window. Kept by its midpoint, it became a
+    sub-second `unclear` span that says nothing about where the failure was,
+    and the next window's sentence from 228 s was written over it.
+    """
+    loop = _words_seg([(9.8, 9.95, " na")] * 30)
+    _stub_anchored(
+        monkeypatch,
+        samples=14 * whisper_mod.SAMPLE_RATE,
+        results=[
+            {"segments": [_words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two.")]), loop]},
+            {"segments": [
+                _words_seg([(4.0, 5.0, " The"), (5.0, 6.0, " next"), (6.0, 9.0, " window.")]),
+            ]},
+        ],
+    )
+
+    got = transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    _assert_no_overlap(got.sentences)
+    assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
+        (1.0, " one"), (2.0, " two."), (8.0, " The"), (9.0, " next"), (10.0, " window."),
+    ]
+
+
+@pytest.mark.parametrize("looped", ["before", "after"])
+def test_where_one_window_loops_over_the_shared_seconds_the_other_writes_them(
+    monkeypatch: pytest.MonkeyPatch, looped: str
+) -> None:
+    """The window that read the shared seconds writes all of them, not the one that looped.
+
+    On #148's fixture one window looped from 343.3 s to its end while the next
+    read speech from 342 s; split at the middle, the loop kept 345 s onwards of
+    the first and the speech before 345 s of the second was lost. Here the two
+    windows share 4 to 10 s; one loops across all of it and the other reads
+    words at 4.5 and 8.5 s, either side of the middle.
+    """
+    loop = _words_seg([(4.2 + i * 0.6, 4.5 + i * 0.6, " na") for i in range(9)])
+    first: list[dict[str, Any]] = [_words_seg([(1.0, 2.0, " one")])]
+    second: list[dict[str, Any]] = [_words_seg([(9.0, 9.5, " last.")])]
+    # On the second window's clock, 4 s behind the recording's.
+    read = _words_seg([(0.5, 1.0, " early"), (4.5, 5.0, " late")])
+    if looped == "before":
+        first.append(loop)
+        second.insert(0, read)
+    else:
+        first.append(_words_seg([(4.5, 5.0, " early"), (8.5, 9.0, " late")]))
+        second.insert(0, _words_seg([(t - 4.0, e - 4.0, " na") for t, e in [
+            (4.2 + i * 0.6, 4.5 + i * 0.6) for i in range(9)
+        ]]))
+    _stub_anchored(
+        monkeypatch,
+        samples=14 * whisper_mod.SAMPLE_RATE,
+        results=[{"segments": first}, {"segments": second}],
+    )
+
+    got = transcribe_whisper(Path("a.wav"), prompt="seed", anchor_s=10.0)
+
+    _assert_no_overlap(got.sentences)
+    assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
+        (1.0, " one"), (4.5, " early"), (8.5, " late"), (13.0, " last."),
     ]

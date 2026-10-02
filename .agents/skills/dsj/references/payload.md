@@ -61,9 +61,8 @@ read, not silence. The text is no guide to what was said there, so it is left ou
 `sentences` and `text`, and the span stays here so the gap is not read as a pause. Under
 whisper each loop span is first decoded again on its own, with 2 s either side, once
 without the prompt at temperature 0 and, if that loops too, once with the run's prompt at
-temperature 0.4. Only the part of the span no other sentence covers is read again: where
-whisper's two-minute windows overlap, a loop at the end of one window can lie inside a
-sentence the next window already read, and that loop is left as it is. The first attempt
+temperature 0.4. Only the part of the span no other sentence covers is read again, and a
+loop with no such part is left as it is. The first attempt
 with no loop and more than five words in that part replaces the loop in `sentences`, cut
 to it, so no word is written twice; a loop that survives both is recorded here. On four of the owner's transcripts the two attempts recovered 26 of the 37 loop
 spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a file. The
@@ -92,7 +91,7 @@ Inside a sentence:
 
 | Field | Type | Notes |
 |---|---|---|
-| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. |
+| `start`, `end` | float seconds | In whole milliseconds, like the token times, and never narrower than the sentence's own words: `start` is at or before the first token's `t`, `end` at or after the last `e`. A sentence ends at or before the next one's `start`: no two overlap. |
 | `text` | string | Its tokens' `w` joined, in their time order, leading space included, under every engine. At a chunk seam a word the stitch mistimed reads out of place here too, about 1 sentence in 100. |
 | `tokens` | array of objects | One per word piece, below. Can be `[]` for a whisper segment with no words. |
 
@@ -237,6 +236,13 @@ stop at the first `start` past its window; there is nothing to re-sort. The orde
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
 pieces, and a word at a seam can be mistimed by a few seconds, measured worst case 5.72 s,
 which pulls its whole sentence that far earlier in the list.
+
+**No two sentences overlap**: each ends at or before the next one's `start`, under every
+engine. Where a seam leaves one sentence's time running into another's, the two are
+written as one sentence, every word and every time as decoded: on a 6-minute parakeet run
+one pair, from a full stop timed 3 s early. Each of the 6 s two of whisper's two-minute
+windows share is written by one of them: its own half by default, or all of it by the one
+that did not loop there, so the same speech is not written twice at a seam.
 
 ## The status heartbeat, written by `--status`
 

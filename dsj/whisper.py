@@ -104,7 +104,7 @@ SAMPLE_RATE = 16000
 # Urdu script in the output is fine, and the target is complete text, not
 # Roman spelling. The overlap
 # is there so a word spoken across a boundary is whole in at least one window;
-# `_anchored` keeps each segment in exactly one of them. `_anchored` also
+# `_owned` gives each second of it to exactly one of them (#190). `_anchored` also
 # requires `ANCHOR_CHUNK_S > ANCHOR_OVERLAP_S >= 1.0`; see its own validation.
 ANCHOR_CHUNK_S = 120.0
 ANCHOR_OVERLAP_S = 6.0
@@ -294,15 +294,20 @@ def _anchored(
     window = int(anchor_s * SAMPLE_RATE)
     step = int((anchor_s - overlap_s) * SAMPLE_RATE)
 
-    sentences: list[dict[str, Any]] = []
-    covered = 0.0
+    starts: list[int] = []
     for start in range(0, total, step):
         end = min(start + window, total)
         # Under a second of audio is a feature window whisper cannot fill, and
         # is in any case the tail of the previous window's overlap.
         if end - start < SAMPLE_RATE:
             break
+        starts.append(start)
+        if end >= total:
+            break
 
+    windows: list[list[dict[str, Any]]] = []
+    for start in starts:
+        end = min(start + window, total)
         result = transcribe(
             data[start:end],
             path_or_hf_repo=model_id,
@@ -312,31 +317,119 @@ def _anchored(
             hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
             verbose=None,
         )
-        offset = start / SAMPLE_RATE
-        for sentence in _sentences_from(
-            cast("list[dict[str, Any]]", result.get("segments") or []), offset
-        ):
-            # The overlap is decoded twice on purpose, so that a word across a
-            # boundary is whole in at least one window. A segment is kept by
-            # its midpoint, which puts it in exactly one of the two. Known
-            # limitation, not fixed here: this trusts whichever window decoded
-            # the overlap first. A hallucinated segment there (whisper is known
-            # to hallucinate over silence -- see this function's own docstring)
-            # can push `covered` past real content, and the next window's
-            # re-decode of that same span -- possibly the correct one -- is
-            # the copy that gets dropped. Needs a real failing recording to
-            # measure against (#100); none exists in this repo yet.
-            if (sentence["start"] + sentence["end"]) / 2 < covered:
-                continue
-            sentences.append(sentence)
-            covered = max(covered, float(sentence["end"]))
-
+        windows.append(
+            _sentences_from(
+                cast("list[dict[str, Any]]", result.get("segments") or []), start / SAMPLE_RATE
+            )
+        )
         if on_progress is not None:
             on_progress(end / SAMPLE_RATE)
-        if end >= total:
-            break
 
+    # A window with a next one always runs its full length, so the seconds two
+    # neighbours share start at the later one's start and last the overlap.
+    shared = (window - step) / SAMPLE_RATE
+    cuts = [
+        _handover(windows[i], windows[i + 1], starts[i + 1] / SAMPLE_RATE, shared)
+        for i in range(len(starts) - 1)
+    ]
+    sentences: list[dict[str, Any]] = []
+    written = 0.0
+    for i, got in enumerate(windows):
+        owned = _owned(
+            got,
+            cuts[i - 1] if i > 0 else 0.0,
+            cuts[i] if i < len(cuts) else float("inf"),
+            written,
+        )
+        sentences.extend(owned)
+        written = max([written, *(float(s["end"]) for s in owned)])
     return sentences
+
+
+def _handover(
+    before: list[dict[str, Any]], after: list[dict[str, Any]], start: float, shared: float
+) -> float:
+    """The second at which one anchored window hands over to the next (#190).
+
+    The two share `shared` seconds from `start`, and by default each writes its
+    own half: the middle is as far from both windows' edges as it can be, and
+    whisper is weakest at a window's edge. Except where one of them looped
+    there and the other did not. On #148's fixture one window looped from
+    343.3 s to its end at 348 s, 232 words, while the next read 12 words of
+    speech from 342 to 345 s; split at the middle, the loop kept 345 s and the
+    speech was lost. So where only one window loops in the shared seconds, the
+    other writes all of them. Not just from where the loop starts: a loop
+    whisper timed into a window's last second has a start that says nothing
+    about where it began. Both looping, or neither, keeps the middle. A word
+    across the edge of the shared seconds can then be cut by the window edge
+    in the window that writes it, which is one word against a loop.
+
+    is_loop is dsj.suno's, imported here because suno imports this module.
+    """
+    from dsj.suno import is_loop
+
+    end = start + shared
+    looped_before = [s for s in before if s["end"] > start and is_loop(str(s["text"]))]
+    looped_after = [s for s in after if s["start"] < end and is_loop(str(s["text"]))]
+    if looped_before and not looped_after:
+        return start
+    if looped_after and not looped_before:
+        return end
+    return start + shared / 2
+
+
+def _owned(
+    sentences: list[dict[str, Any]], lo: float, hi: float, written: float
+) -> list[dict[str, Any]]:
+    """The part of one anchored window's `sentences` that is this window's to write (#190).
+
+    Two neighbouring windows both decode the seconds they share, and not the
+    same way: on #148's fixture one wrote 114.0 to 119.1 s in Urdu script and
+    the next 114.0 to 142.1 s in Roman, starting with the same words. Keeping
+    whole segments by their midpoint kept both, so every anchored transcript
+    measured had 4 to 13 pairs of sentences overlapping at its seams.
+
+    So each second has one owner. A window writes from `lo` to `hi`, where it
+    hands over to the windows either side (_handover: the middle of the
+    seconds they share, unless one of them looped there), and a word is
+    written by the window that owns its midpoint. The overlap still does its
+    job: a word spoken across the middle lies at least half the overlap inside
+    both windows, so it is whole in each and written by exactly one. What the
+    window decoded past `hi` is the next window's to write, including a loop
+    whisper timed into a window's last second (221 words in 0.16 s at 233.7 s
+    on the fixture), which the next window reads over again.
+
+    Two windows can still time one word a little differently, so a word that
+    starts before `written`, the end of what earlier windows wrote, is taken as
+    one of theirs and dropped: that is what keeps sentences from overlapping
+    across a seam. A sentence that lost words, or whose bounds reach outside
+    the window's share, is rebuilt from the words it keeps; one that keeps
+    none is dropped. A sentence with no words at all goes by its midpoint.
+    """
+    floor = max(lo, written)
+    out: list[dict[str, Any]] = []
+    for s in sentences:
+        tokens: list[dict[str, Any]] = s["tokens"]
+        if not tokens:
+            if floor <= (s["start"] + s["end"]) / 2 < hi:
+                out.append(s | {"start": max(s["start"], floor), "end": min(s["end"], hi)})
+            continue
+        keep = [t for t in tokens if lo <= (t["t"] + t["e"]) / 2 < hi and t["t"] >= written]
+        if not keep:
+            continue
+        if len(keep) == len(tokens) and floor <= s["start"] and s["end"] <= hi:
+            out.append(s)
+            continue
+        out.append(
+            s
+            | {
+                "start": min(float(t["t"]) for t in keep),
+                "end": max(float(t["e"]) for t in keep),
+                "text": "".join(str(t["w"]) for t in keep).strip(),
+                "tokens": with_char_offsets(keep),
+            }
+        )
+    return out
 
 
 def transcribe_whisper(

@@ -166,8 +166,8 @@ Any other suffix and no `--format` is a usage error, exit 2, and nothing is writ
   one `[1:02] ...` line per sentence when labelling did not run.
 
 Cues run in time order and **never overlap**: each one ends no later than the next
-begins, and nothing else about the times changes. A seam can leave a sentence ending
-after the next one starts, and a player or muxer that keeps one cue at a time would
+begins, and nothing else about the times changes. A transcript written before dsj kept
+sentences apart (#190) can have one ending after the next starts, and a player or muxer that keeps one cue at a time would
 rewrite it. Measured on a 480-sentence transcript: the exported SRT muxed into its
 recording and back with 0 of 480 cues changed, where 22 moved before.
 
@@ -216,8 +216,9 @@ jq -r '.sentences[] | select(.start >= 400 and .start <= 460) | "\(.start)  \(.t
 `.sentences` runs earliest to latest, and so do the `tokens` inside each one, so a reader
 may walk it from the top and stop at the first `start` past its window. The order is
 promised; the times are not exact. A recording over 120 s is transcribed in overlapping
-pieces, and a word at a seam can be mistimed by a few seconds — measured worst case
-5.72 s — which pulls its whole sentence that far earlier in the list.
+pieces, and a word at a seam can be mistimed by a few seconds, measured worst case
+5.72 s, which pulls its whole sentence that far earlier in the list. No two sentences
+overlap: where a seam leaves one running into the next, the two are written as one.
 
 A sentence's `text` is its `tokens` joined, each `w` in that time order with its leading
 space, under every engine, and the top-level `text` is the sentences joined. So at a seam

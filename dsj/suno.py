@@ -513,10 +513,12 @@ def _within(sentences: list[Sentence], start: float, end: float) -> list[Sentenc
 def _unread(start: float, end: float, others: list[Sentence]) -> tuple[float, float]:
     """The part of [start, end) that no sentence in `others` covers, as (lo, hi).
 
-    At an anchored seam whisper decodes the window overlap twice, and a loop at
-    the end of one window lies inside the next window's first sentence (#183:
-    on #148's fixture, 221 words timed into 803.94 to 803.98 s, inside a
-    sentence from 798.0 to 825.3 s). Those seconds were read already. A
+    A loop's span can share seconds with a neighbour. Before #190 every
+    anchored seam made one: a loop at the end of one window lay inside the
+    next window's first sentence (#183: on #148's fixture, 221 words timed
+    into 803.94 to 803.98 s, inside a sentence from 798.0 to 825.3 s), and
+    whisper's sentences can still run into a loop's span from either side.
+    Those seconds were read already. A
     neighbour that runs into the span from before moves `lo` to its end; one
     that starts inside the span moves `hi` to its start. `lo >= hi` means
     nothing is left to read. `others` must be sorted by start.
@@ -594,6 +596,65 @@ def _retried(
     return _in_time_order(
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept)
     )
+
+
+def _without_overlaps(transcription: Transcription) -> Transcription:
+    """`transcription` with no two sentences overlapping, and every token inside its sentence.
+
+    The last step before the payload is written, under every engine, so the
+    file can promise both: a sentence ends by the time the next one starts,
+    and each token's `t` and `e` lie within its own sentence's bounds.
+
+    Two sentences that overlap are written as one, their tokens in time order.
+    Repaired, not raised, because the chunk engines produce it today and it is
+    not a fault in what was heard: the vendored parakeet merge can time a word
+    seconds early at a chunk seam (_in_time_order), and the sentence holding it
+    then starts inside the one before. Measured 2026-10-02: 1 pair on a 6
+    minute parakeet run of scratch/clip360.wav, 17 to 33 on three older
+    parakeet transcripts of 8 to 74 minutes. Raising would throw away a whole
+    decode over a disagreement of a few seconds, and moving or clipping times
+    would write times no decoder gave; one sentence spanning both keeps every
+    word and every time as decoded. whisper's anchored windows wrote the same
+    speech twice at their seams (#190); _owned in dsj/whisper.py now gives
+    each second to one window, and on #148's fixture and the owner's 101117
+    whisper reached here with nothing to merge. A merge is logged either way.
+
+    A token outside its sentence raises, because no path here makes one: the
+    engines' bounds are widened to their tokens (_in_whole_milliseconds), and
+    every later step that drops tokens rebuilds the bounds from the ones left.
+    One appearing means a step was broken, and a test should stop there rather
+    than write a file whose words point outside their sentence.
+
+    Raises:
+        RuntimeError: if a token lies outside its sentence.
+    """
+    ordered = sorted(transcription.sentences, key=lambda s: cast("float", s["start"]))
+    out: list[Sentence] = []
+    merged = 0
+    for s in ordered:
+        if out and s["start"] < out[-1]["end"]:
+            prev = out[-1]
+            tokens = sorted([*prev["tokens"], *s["tokens"]], key=lambda t: cast("float", t["t"]))
+            out[-1] = prev | {
+                "start": min(prev["start"], s["start"]),
+                "end": max(prev["end"], s["end"]),
+                "text": "".join(str(t["w"]) for t in tokens),
+                "tokens": with_char_offsets(tokens),
+            }
+            merged += 1
+        else:
+            out.append(s)
+    for s in out:
+        for t in s["tokens"]:
+            if not s["start"] <= t["t"] <= t.get("e", t["t"]) <= s["end"]:
+                raise RuntimeError(
+                    f"token at {t['t']} s lies outside its sentence "
+                    f"({s['start']} to {s['end']} s); a step before the payload broke its bounds"
+                )
+    if not merged:
+        return transcription._replace(sentences=out)
+    logger.info("%d overlapping sentence pairs written as one", merged)
+    return Transcription(text="".join(str(s["text"]) for s in out).strip(), sentences=out)
 
 
 def _token(token: AlignedToken, measured: bool) -> dict[str, Any]:
@@ -1005,6 +1066,9 @@ def transcribe(
                 report,
             )
         transcription, loops = _without_loops(transcription)
+        # After the loops leave, so a loop never merges into a real sentence
+        # and hides from is_loop.
+        transcription = _without_overlaps(transcription)
         unclear = sorted(no_speech + loops, key=lambda u: cast("float", u["start"]))
 
         payload: Payload = {
