@@ -71,7 +71,7 @@ fallback: if the chosen engine cannot run, nothing is transcribed and the run ex
 
 | | parakeet | whisper | sherpa |
 |---|---|---|---|
-| Speed | About 13x realtime | About 2 to 3x on Urdu with `--roman-urdu`, about 5 to 6x on English. Per file in [whisper speed](#whisper-speed) | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
+| Speed | About 13x realtime | About 1.7 to 3x on Urdu with `--roman-urdu`, about 5 to 6x on English. Per file in [whisper speed](#whisper-speed) | About 11.4x, measured on a OnePlus 15 in proot Ubuntu |
 | Platform | Apple Silicon, Metal | Apple Silicon, Metal | Anywhere sherpa-onnx has wheels |
 | Languages | 25, all European. No Urdu | Whatever whisper reads, including Urdu | Same weights as parakeet |
 | Checkpoint and resume | Yes | **No.** An interrupted run starts over | Yes |
@@ -95,12 +95,13 @@ M2 running one whisper at a time. Memory pressure alone has moved these threefol
 | owner's 094234, Urdu, 27.9 min | `dsj suno <file> --roman-urdu` | `2f66fce` | 2.98x, 2.63x (two runs) | not logged |
 | owner's 162033, Urdu, 22.0 min | `dsj suno <file> --roman-urdu` | `2f66fce` | 2.90x | 28 to 29% |
 | owner's 171500, Urdu, 28.1 min | `dsj suno <file> --roman-urdu` | `9506685` | 2.19x | not logged |
+| owner's 101117, Urdu and English, 13.1 min | `dsj suno <file> --roman-urdu` | `8ff5871` | 1.71x | 77% at the start, low point not logged |
 | public fixture, Urdu and English, 854 s | `dsj suno scratch/urdu_cs/podcast.wav --roman-urdu --no-diarize` | `06d0576` | 3.41x (earlier 3.22x) | not logged |
 | owner's 153458, English, 16.7 min | `dsj suno <file> --engine whisper` | `2f66fce` | 5.31x (earlier 6.37x) | 39% |
 
 The owner's recordings are private and ran with speaker labelling, so their times include
 it; the fixture ran with `--no-diarize`. `9506685` differs from `2f66fce` only in
-`scratch/`, so the decode path is the same. `scratch/real_bench.py run --label <new> --only
+`scratch/`, and `8ff5871` only in comments and docs, so the decode path is the same. `scratch/real_bench.py run --label <new> --only
 <name>` re-measures an owner's file, and `scratch/real_bench.py fixture --label <new>` the
 fixture.
 

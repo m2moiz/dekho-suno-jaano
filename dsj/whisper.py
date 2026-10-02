@@ -5,7 +5,7 @@
 Urdu -- its 25 languages are European, and `ur` is not among the model card's
 tags. A voice note that mixes Urdu and English comes back as nothing usable.
 
-whisper-large-v3-turbo does read it, at a cost: about 2 to 3x realtime on
+whisper-large-v3-turbo does read it, at a cost: about 1.7 to 3x realtime on
 Urdu with `--roman-urdu`, about 5 to 6x on English, on a 16 GB M2 running one
 whisper at a time, model load included. Each figure, with its file, command,
 commit and the memory free while it ran, is in one place:

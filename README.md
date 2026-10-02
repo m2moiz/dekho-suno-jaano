@@ -230,7 +230,7 @@ progress it reports depends on the run. `--roman-urdu` cuts the audio into
 two-minute windows itself and reports after each one. Any other whisper run,
 `--prompt` and `--language` included, reports 0% and then **nothing until
 transcription ends**, because mlx-whisper takes no progress callback. It runs
-at about 2 to 3x realtime on Urdu with `--roman-urdu` and about 5 to 6x on
+at about 1.7 to 3x realtime on Urdu with `--roman-urdu` and about 5 to 6x on
 English, against parakeet's ~13x, on a 16 GB M2 running one whisper at a time.
 The per-file numbers, with the command, commit and memory state of each, are in
 [engines.md](.agents/skills/dsj/references/engines.md#whisper-speed). All
