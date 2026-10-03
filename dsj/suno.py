@@ -563,8 +563,16 @@ def _without_silence(
 # counted were almost wholly inside a neighbour (0.4 and 3.8 s left unread),
 # so its words there were duplicates; and warm samples at temperature 0.4, so
 # a span it reads on one run it can miss on the next (two did on 171500, one
-# went the other way). Not yet measured: whether the recovered text is right
-# (#182 is the check).
+# went the other way). Whether the recovered text is right, scored 3 Oct
+# 2026 against #184's three public references (scratch/accuracy/score.py
+# retry): under --roman-urdu 58 to 95% of recovered words match the
+# reference (77% or more in 11 of 12 runs), as the rest of each transcript
+# does, and the file's word error rate falls in every run (35.7 to 33.9% on
+# #148's podcast). A split loop (#223), read as one span since, cut the word
+# error rate in 8 of 12 runs that had one and raised it in none (70.8 to
+# 62.3% on the podcast's worst; scratch/accuracy/split_retry.py). Under whisper
+# left to detect the language, on Urdu, 3 to 5% match: the retry, deciding
+# the language on a short clip, writes the wrong one there.
 #
 # parakeet and sherpa never retry: is_loop catches nothing they write, and
 # neither has a second set of settings to try. RETRY_LOOPS = False turns it
@@ -647,18 +655,39 @@ def _retried(
     such part is not retried and stays a loop. The result is put back in time
     order all the same.
 
+    A loop split into one-word sentences (_loop_runs, #223) is one loop here
+    too: its whole run, first sentence's start to latest end, is read again as
+    one span, and a replacement takes the place of every sentence in it. Each
+    of its sentences alone is one or two words, which is_loop never calls a
+    loop, so before this the run was taken out unread. A retry is refused when
+    it is itself a loop either way.
+
     Reports state "retrying" once before the first span and once after each,
     counting the seconds to be read again, so a long run does not look stuck.
     """
     inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
     sentences = transcription.sentences
-    loops = [is_loop(str(s["text"])) for s in sentences]
-    read = [s for s, looped in zip(sentences, loops, strict=True) if not looped]
+    # Each loop as (first sentence, last sentence): one loop sentence, or a run
+    # of sentences _loop_runs calls a split loop (#223), read again as one
+    # span from its first start to its latest end.
+    runs = dict(_loop_runs(sentences))
+    inside = {k for a, b in runs.items() for k in range(a, b + 1)}
+    spans = runs | {
+        i: i for i, s in enumerate(sentences) if i not in inside and is_loop(str(s["text"]))
+    }
+    looped = inside | set(spans)
+    read = [s for i, s in enumerate(sentences) if i not in looped]
+
+    def bounds(first: int) -> tuple[float, float]:
+        run = sentences[first : spans[first] + 1]
+        return cast("float", run[0]["start"]), max(cast("float", r["end"]) for r in run)
+
     todo: list[tuple[int, float]] = []
-    for i, s in enumerate(sentences):
-        if not loops[i] or any(s["start"] < b and a < s["end"] for a, b in inner):
+    for i in sorted(spans):
+        start, end = bounds(i)
+        if any(start < b and a < end for a, b in inner):
             continue
-        lo, hi = _unread(s["start"], s["end"], read)
+        lo, hi = _unread(start, end, read)
         if lo < hi:
             todo.append((i, hi - lo))
     if not todo:
@@ -673,11 +702,13 @@ def _retried(
         # Against the replacements made so far too: two loops can share seconds.
         others = sorted(read + [r for got in replaced.values() for r in got],
                         key=lambda o: cast("float", o["start"]))
-        lo, hi = _unread(sentences[i]["start"], sentences[i]["end"], others)
+        lo, hi = _unread(*bounds(i), others)
         for options in (RETRY_PLAIN, RETRY_WARM) if lo < hi else ():
             decoded = decode(lo - RETRY_PAD_S, hi + RETRY_PAD_S, options)
             got = _within(decoded, lo, hi)
-            looped = any(is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded)
+            looped = bool(_loop_runs(decoded)) or any(
+                is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded
+            )
             words = sum(len(_WORD.findall(str(s["text"]))) for s in got)
             if not looped and words > RETRY_MIN_WORDS:
                 replaced[i] = got
@@ -686,7 +717,8 @@ def _retried(
         report(Progress(done, total, time.monotonic() - started), "retrying")
     if not replaced:
         return transcription
-    kept = [r for i, s in enumerate(sentences) for r in replaced.get(i, [s])]
+    gone = {k for i in replaced for k in range(i + 1, spans[i] + 1)}
+    kept = [r for i, s in enumerate(sentences) if i not in gone for r in replaced.get(i, [s])]
     return _in_time_order(
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept)
     )

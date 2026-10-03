@@ -1032,6 +1032,8 @@ _READ = {
 }
 _LOOPED = {"segments": [_words_seg([(2.0 + i * 0.5, 2.4 + i * 0.5, " na") for i in range(9)])]}
 _SHORT = {"segments": [_words_seg([(3.0, 3.5, " one"), (3.5, 4.0, " two")])]}
+# A retry that loops as one-word sentences (#223), which no single segment shows.
+_SPLIT_LOOPED = {"segments": [_words_seg([(2.0 + i, 2.4 + i, " na.")]) for i in range(9)]}
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -1074,7 +1076,9 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
 
 
 @pytest.mark.usefixtures("already_extracted_media")
-@pytest.mark.parametrize("first", [_LOOPED, _SHORT], ids=["loops", "five-words-or-fewer"])
+@pytest.mark.parametrize(
+    "first", [_LOOPED, _SHORT, _SPLIT_LOOPED], ids=["loops", "five-words-or-fewer", "split-loop"]
+)
 def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path, first: dict[str, Any]
 ) -> None:
@@ -1090,6 +1094,39 @@ def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     assert calls[2]["initial_prompt"] == ROMAN_URDU_PROMPT
     assert payload["unclear"] == []
     assert " w0" in payload["text"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_loop_split_into_one_word_sentences_is_decoded_again_as_one_span(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """#223's split loop gets #183's retry: its whole run is one span, read once.
+
+    Nine one-word sentences from 10.0 to 18.5 s, none of them a loop alone. The
+    retry reads 10.0 to 18.5 s, decoded as 8.0 to 20.5 s, and the seven of its
+    words that start in that span replace all nine sentences.
+    """
+    split = [_words_seg([(10.0 + i, 10.5 + i, " na.")]) for i in range(9)]
+    after = _words_seg([(19.0, 19.2, " Then"), (19.2, 19.4, " stop.")])
+    calls = _stub_anchored(
+        monkeypatch, 30 * 16000, [{"text": "", "segments": [_BEFORE, *split, after]}, _READ]
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 2
+    assert calls[1]["n_samples"] == int(20.5 * 16000) - int(8.0 * 16000)
+    assert payload["unclear"] == []
+    tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    assert tokens == [
+        (0.0, " We"),
+        (0.5, " began."),
+        *[(10.5 + i, f" w{i}") for i in range(6)],
+        (18.3, " last"),
+        (19.0, " Then"),
+        (19.2, " stop."),
+    ]
+    _assert_no_overlap(payload["sentences"])
 
 
 @pytest.mark.usefixtures("already_extracted_media")

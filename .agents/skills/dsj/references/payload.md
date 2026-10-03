@@ -70,8 +70,10 @@ with no loop and more than five words in that part replaces the loop in `sentenc
 to it, so no word is written twice; a loop that survives both is recorded here. On four of the owner's transcripts the two attempts recovered 26 of the 37 loop
 spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a file. The
 second attempt samples, so a rerun can recover a different set. A
-recovered span reads like any other sentence, and whether its words are right is not yet
-measured. To know what was said in a span listed here, listen to it. On the five whisper transcripts
+recovered span reads like any other sentence. Scored against three public hand-checked
+references, 58 to 95% of the words it recovered under `--roman-urdu` were right (77% or
+more in 11 of 12 runs), about the rate of the rest of those transcripts; under whisper left to detect the language, on Urdu,
+3 to 5% were, so the retry wrote words in the wrong language there. To know what was said in a span listed here, listen to it. On the five whisper transcripts
 the rule was measured on, every sentence it matched was a loop. It runs under every
 engine; on a parakeet transcript of a 17-minute English call it matched nothing.
 
@@ -81,7 +83,9 @@ same words are a loop too when, taken together, they make more than six words: s
 one-word sentences, or five of two words. The whole run is one entry here, from its first
 sentence's start to its last one's end, with every word of it counted. A hand-checked
 transcript of 14 minutes of real speech never repeats a sentence and never says one word
-more than four times in a row. A split loop is not decoded again.
+more than four times in a row. Under whisper a split loop is decoded again the same way
+as a single loop sentence, its whole run as one span, and a retry that is itself a split
+loop is refused.
 
 **No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
 than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
