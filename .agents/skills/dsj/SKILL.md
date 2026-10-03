@@ -191,11 +191,14 @@ dsj hatao recording.mov -t transcript.json -o clean.mov
 | `--overwrite` | replace `--out` and the two files beside it if they exist; refused otherwise, exit 1 |
 
 The shipped word lists cover English, Urdu, Hindi and Punjabi, in Roman and in their own
-scripts, and are searched one word at a time, so a sentence that mixes languages is
-covered. Add a word by adding its spellings to the user's own list, the file
+scripts, and every word is looked up in every list, so a sentence that mixes languages
+is covered. Add a word by adding its spellings to the user's own list, the file
 `$DSJ_WORDS` names, else `words.toml` in dsj's data folder
 (`~/Library/Application Support/dsj/` on a Mac). Matching is exact after folding case
-and punctuation, so list every spelling you want caught:
+and punctuation, so list every spelling you want caught. A spelling may be a phrase of
+up to three words (`"bhen chod"`), which matches that many words in a row inside one
+sentence, never across a sentence's end, and mutes them together with the pauses
+between them; written run together (`bhenchod`) it matches too:
 
 ```toml
 [[entry]]
@@ -204,7 +207,9 @@ roman = ["yaar", "yar"]
 script = ["یار"]
 ```
 
-Each muted word is silenced from 0.1 s before its start to 0.1 s after its end. The
+Each muted word is silenced from 0.1 s before its start to 0.1 s after its end, for at
+most 1.4 s and never past the start of the next word, since whisper can run a word's end
+on through the pause after it; stderr says when it cut one, and the log lists each. The
 picture is copied untouched, the sound re-encoded in its own codec. Beside `--out` goes
 `<stem>.bleeps.json`, listing every muted word with its `start`, `end` and the list
 `entry` that matched it, and the merged `spans` that were silenced. Read it to check

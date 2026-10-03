@@ -9,14 +9,14 @@
 
 [[entry]]
 name = "madarchod"
-roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod"]
-script = ["मादरचोद", "मादरचोत"]
+roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod", "madar chod"]
+script = ["मादरचोद", "मादरचोत", "मादर चोद"]
 
 [[entry]]
 name = "behenchod"
 roman = ["behenchod", "bhenchod", "benchod", "bhanchod", "behnchod", "bhainchod",
-         "bhencho", "bencho"]
-script = ["बहनचोद", "बहेनचोद", "भेनचोद", "भैनचोद", "बहनचोत"]
+         "bhencho", "bencho", "behen chod", "bhen chod"]
+script = ["बहनचोद", "बहेनचोद", "भेनचोद", "भैनचोद", "बहनचोत", "बहन चोद", "बहेन चोद", "भेन चोद"]
 
 [[entry]]
 name = "chutiya"
@@ -36,7 +36,7 @@ script = ["लंड", "लण्ड", "लौड़ा", "लौडा", "ल�
 [[entry]]
 name = "bhosdi"
 roman = ["bhosdi", "bhosdike", "bhosadike", "bhosdiwala", "bhosda", "bhosri"]
-script = ["भोसड़ी", "भोसडी", "भोसड़ा", "भोसडा", "भोसड़ीके", "भोसडीके"]
+script = ["भोसड़ी", "भोसडी", "भोसड़ा", "भोसडा", "भोसड़ीके", "भोसडीके", "भोसड़ी के", "भोसडी के"]
 
 [[entry]]
 name = "randi"
@@ -46,7 +46,8 @@ script = ["रंडी", "रण्डी", "रंडवा"]
 [[entry]]
 name = "harami"
 roman = ["harami", "haraami", "haramzada", "haramzadi", "haramzade", "haramkhor"]
-script = ["हरामी", "हरामज़ादा", "हरामजादा", "हरामज़ादी", "हरामजादी", "हरामज़ादे", "हरामखोर"]
+script = ["हरामी", "हरामज़ादा", "हरामजादा", "हरामज़ादी", "हरामजादी", "हरामज़ादे", "हरामखोर",
+          "हराम ज़ादा", "हराम जादा", "हराम खोर"]
 
 [[entry]]
 name = "bharwa"

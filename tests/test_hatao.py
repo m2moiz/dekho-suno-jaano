@@ -311,6 +311,60 @@ def test_a_word_written_in_pieces_matches_and_mutes_all_its_pieces(recording: Pa
     assert hatao.mute(flagged, match.start, match.stop, muted=False) == doc
 
 
+def _phrases(*spellings: str) -> None:
+    """A user list of one entry, "phrase", holding `spellings`."""
+    quoted = ", ".join(f'"{x}"' for x in spellings)
+    hatao.user_words_path().write_text(f'[[entry]]\nname = "phrase"\nroman = [{quoted}]\n')
+
+
+def test_a_two_word_entry_matches_inside_a_sentence_and_not_across_one(
+    recording: Path,
+) -> None:
+    """#213: the words of a phrase are consecutive tokens of one sentence."""
+    _phrases("lovely weather")
+    found = _found(recording, [" what", " Lovely,", " WEATHER.", " today"])
+    assert [(m.word, m.entry) for m in found.matches] == [("Lovely, WEATHER.", "user:phrase")]
+    assert _found(recording, [" so", " lovely."], [" Weather", " today"]).count == 0
+    assert _found(recording, [" lovely", " cold", " weather"]).count == 0
+
+
+def test_a_phrase_mutes_all_its_words_and_the_pauses_between_them(recording: Path) -> None:
+    _phrases("lovely weather")
+    doc = hatao.from_transcript(_spoken([" what", " love", "ly", " -", " weather", " today"]),
+                                recording)
+    found = hatao.find(doc, hatao.load_words(hatao.word_lists()))
+    assert [(m.word, m.source_start, m.source_end) for m in found.matches] == [
+        ("lovely - weather", 1.0, 4.5),
+    ]
+    flagged = hatao.flag(doc, found)
+    muted = [e.text for e in flagged.content if isinstance(e, Item) and e.muted]
+    assert muted == [" love", "", "ly", "", " -", "", " weather"]
+
+
+def test_the_longest_phrase_wins_and_its_words_are_not_matched_again(recording: Path) -> None:
+    _phrases("weather", "lovely weather", "very lovely weather")
+    found = _found(recording, [" very", " lovely", " weather", " weather", " lovely", " weather"])
+    assert [m.word for m in found.matches] == ["very lovely weather", "weather", "lovely weather"]
+    assert found.words_searched == 6
+
+
+def test_a_phrase_written_run_together_still_matches(recording: Path) -> None:
+    _phrases("lovely weather")
+    assert [m.word for m in _found(recording, [" lovelyweather"]).matches] == ["lovelyweather"]
+
+
+def test_a_spelling_of_four_words_is_refused_by_name() -> None:
+    _phrases("a very lovely weather")
+    with pytest.raises(hatao.WordListError, match="is 4 words; a spelling is a word or a phrase"):
+        hatao.load_words(hatao.word_lists())
+
+
+def test_a_shipped_two_word_insult_matches_in_one_sentence_only(recording: Path) -> None:
+    found = _found(recording, [" oh", " Bhen", " chod!", " no"])
+    assert [(m.word, m.entry) for m in found.matches] == [("Bhen chod!", "ur:behenchod")]
+    assert _found(recording, [" meri", " bhen."], [" Chod", " do"]).count == 0
+
+
 def test_a_term_that_matches_nothing_is_a_zero_count_not_an_empty_success(
     recording: Path,
 ) -> None:
@@ -394,6 +448,36 @@ def test_a_zero_length_word_is_muted_by_its_pad(recording: Path) -> None:
     doc = hatao.from_transcript(payload, recording)
     doc = hatao.mute(doc, *list(hatao._words(doc))[1])  # pyright: ignore[reportPrivateUsage]
     assert hatao.spans_to_mute(doc, duration_s=2.0) == [(0.9, 1.1)]
+
+
+def test_a_twenty_second_word_mutes_no_more_than_the_ceiling(recording: Path) -> None:
+    """Whisper can end a word 20 s late, swallowing the pause and the speech after it (#212)."""
+    payload = _spoken([" x", " y"])
+    tokens = payload["sentences"][0]["tokens"]
+    tokens[0]["e"] = 21.0  # " x" at 0.0, its end put 21 s on, through a long pause
+    tokens[1].update(t=25.0, e=25.5)  # " y" after the pause, so only the ceiling cuts " x"
+    doc = hatao.from_transcript(payload, recording, duration_s=30.0)
+    doc = hatao.mute(doc, *next(hatao._words(doc)))  # pyright: ignore[reportPrivateUsage]
+    spans, capped = hatao._mute_plan(  # pyright: ignore[reportPrivateUsage]
+        doc, duration_s=30.0, pad_s=0.1, max_word_s=hatao.MAX_WORD_S
+    )
+    assert spans == hatao.spans_to_mute(doc, duration_s=30.0)
+    assert spans == [(0.0, round(hatao.MAX_WORD_S + 0.1, 3))]
+    assert spans[0][1] - spans[0][0] <= hatao.MAX_WORD_S + 0.1
+    assert capped == [hatao.Capped(0.0, 21.0, hatao.MAX_WORD_S)]
+
+
+def test_a_muted_word_stops_where_the_next_word_starts(recording: Path) -> None:
+    payload = _spoken([" x", " y"])
+    payload["sentences"][0]["tokens"][0]["e"] = 1.3  # runs 0.3 s into " y" at 1.0
+    doc = hatao.from_transcript(payload, recording, duration_s=2.0)
+    doc = hatao.mute(doc, *next(hatao._words(doc)))  # pyright: ignore[reportPrivateUsage]
+    assert hatao.spans_to_mute(doc, duration_s=2.0, pad_s=0.0) == [(0.0, 1.0)]
+    assert hatao.spans_to_mute(doc, duration_s=2.0, pad_s=0.0, max_word_s=5.0) == [(0.0, 1.0)]
+    # A word that ends before both limits keeps its own end.
+    whole = hatao.from_transcript(_spoken([" x", " y"]), recording, duration_s=2.0)
+    whole = hatao.mute(whole, *next(hatao._words(whole)))  # pyright: ignore[reportPrivateUsage]
+    assert hatao.spans_to_mute(whole, duration_s=2.0, pad_s=0.0) == [(0.0, 0.5)]
 
 
 def test_a_render_refuses_a_delete_or_a_move(recording: Path) -> None:

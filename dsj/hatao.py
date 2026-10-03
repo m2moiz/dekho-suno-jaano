@@ -33,9 +33,11 @@ their own in dsj's data folder, which no reinstall touches. A match is a flag,
 and a flag is a `mute` of the word's entries, so a later detector (filler words,
 hallucinations) is the same operation with another list.
 
-Matching is exact, one word at a time, after folding case, punctuation and
-script variants, never by edit distance. Roman Urdu has no fixed spelling, so
-each entry lists the spellings recognisers choose between. Edit distance 1 was
+Matching is exact, after folding case, punctuation and script variants, never
+by edit distance. A spelling is one word, or a phrase of up to three words
+(#213) that matches that many words in a row inside one sentence. Roman Urdu
+has no fixed spelling, so each entry lists the spellings recognisers choose
+between. Edit distance 1 was
 the alternative, and on the short words these lists hold it reaches ordinary
 words: measured on a 45 s parakeet transcript of English speech (202 tokens, 114
 words), 6 of its words sit within distance 1 of a listed spelling and 0 match
@@ -48,10 +50,13 @@ from __future__ import annotations
 __all__ = [
     "FORMAT",
     "FORMAT_VERSION",
+    "MAX_PHRASE_WORDS",
+    "MAX_WORD_S",
     "PAD_S",
     "RECALL",
     "SHIPPED_LISTS",
     "WORDS_ENV",
+    "Capped",
     "Document",
     "Entry",
     "Found",
@@ -437,6 +442,11 @@ WORDS_ENV = "DSJ_WORDS"
 # otherwise drop its spellings in silence.
 _SPELLING_KEYS = ("roman", "script", "disguised")
 
+# The most words one list spelling may hold (#213). Two-word insults are common
+# in Urdu and Punjabi ("bhen chod"); three leaves room for a particle between
+# them. A longer spelling is refused by name rather than never matching.
+MAX_PHRASE_WORDS = 3
+
 # Arabic-script letters a recogniser or a keyboard writes for their Urdu forms,
 # which look the same and compare different: Arabic yeh, alef maksura, kaf, heh
 # and teh marbuta, each to the letter Urdu uses.
@@ -493,7 +503,11 @@ def normalize(word: str) -> str:
 
 @dataclass(frozen=True)
 class WordList:
-    """Normalised spellings, each to the entry it belongs to, and the files read."""
+    """Normalised spellings, each to the entry it belongs to, and the files read.
+
+    A phrase's key is its normalised words joined by one space, which no
+    normalised single word contains.
+    """
 
     spellings: Mapping[str, str]
     files: tuple[Path, ...]
@@ -507,8 +521,9 @@ def load_words(paths: Sequence[Path]) -> WordList:
 
     Raises:
         WordListError: a file that is not TOML, or an entry with no name, no
-            spellings, a key it does not know, or a spelling that is all
-            punctuation, named with its file.
+            spellings, a key it does not know, a spelling that is all
+            punctuation, or one of more than MAX_PHRASE_WORDS words, named with
+            its file.
     """
     spellings: dict[str, str] = {}
     for path in paths:
@@ -542,10 +557,18 @@ def load_words(paths: Sequence[Path]) -> WordList:
             if not found or not all(isinstance(x, str) for x in found):
                 raise WordListError(f"{where} ({name}) needs at least one spelling, all strings")
             for spelling in cast("list[str]", found):
-                key = normalize(spelling)
-                if not key:
+                parts = [part for part in map(normalize, spelling.split()) if part]
+                if not parts:
                     raise WordListError(f"{where} ({name}): {spelling!r} is all punctuation")
-                spellings.setdefault(key, f"{label}:{name}")
+                if len(parts) > MAX_PHRASE_WORDS:
+                    raise WordListError(
+                        f"{where} ({name}): {spelling!r} is {len(parts)} words; a "
+                        f"spelling is a word or a phrase of up to {MAX_PHRASE_WORDS}"
+                    )
+                spellings.setdefault(" ".join(parts), f"{label}:{name}")
+                # The same phrase written run together, as a recogniser also
+                # does, and as this spelling matched before phrases existed.
+                spellings.setdefault("".join(parts), f"{label}:{name}")
     return WordList(spellings, tuple(paths))
 
 
@@ -602,30 +625,63 @@ def _words(doc: Document) -> Iterator[tuple[int, int]]:
         yield start, last + 1
 
 
+def _sentences(doc: Document) -> Iterator[list[tuple[int, int]]]:
+    """Each paragraph's words, so a phrase never runs from one sentence into the next."""
+    group: list[tuple[int, int]] = []
+    for start, stop in _words(doc):
+        if group and any(isinstance(e, Paragraph) for e in doc.content[group[-1][1] : start]):
+            yield group
+            group = []
+        group.append((start, stop))
+    if group:
+        yield group
+
+
+def _written(doc: Document, start: int, stop: int) -> str:
+    return "".join(e.text for e in doc.content[start:stop] if isinstance(e, Item)).strip()
+
+
 def find(doc: Document, words: WordList) -> Found:
-    """Every word of `doc` a list spells, one word at a time, never one language at a time.
+    """Every word or phrase of `doc` a list spells, never one language at a time.
 
     One sentence routinely mixes Urdu and English, so every word is looked up in
-    every list.
+    every list. At each word the longest listed phrase starting there wins, and
+    its words are not looked at again: "bhen chod" is one match, not a match on
+    "bhen" and another on "chod". A word that is all punctuation is skipped
+    over, as punctuation inside a word is.
     """
     matches: list[Match] = []
     searched = 0
-    for start, stop in _words(doc):
-        searched += 1
-        pieces = [e for e in doc.content[start:stop] if isinstance(e, Item) and e.text]
-        written = "".join(piece.text for piece in pieces).strip()
-        entry = words.spellings.get(normalize(written))
-        if entry is not None:
-            matches.append(
-                Match(
-                    start=start,
-                    stop=stop,
-                    word=written,
-                    entry=entry,
-                    source_start=min(piece.source_start for piece in pieces),
-                    source_end=max(piece.source_end for piece in pieces),
+    for sentence in _sentences(doc):
+        searched += len(sentence)
+        keyed = [
+            (start, stop, key)
+            for start, stop in sentence
+            if (key := normalize(_written(doc, start, stop)))
+        ]
+        at = 0
+        while at < len(keyed):
+            for size in range(min(MAX_PHRASE_WORDS, len(keyed) - at), 0, -1):
+                run = keyed[at : at + size]
+                entry = words.spellings.get(" ".join(key for _, _, key in run))
+                if entry is None:
+                    continue
+                start, stop = run[0][0], run[-1][1]
+                pieces = [e for e in doc.content[start:stop] if isinstance(e, Item) and e.text]
+                matches.append(
+                    Match(
+                        start=start,
+                        stop=stop,
+                        word=_written(doc, start, stop),
+                        entry=entry,
+                        source_start=min(piece.source_start for piece in pieces),
+                        source_end=max(piece.source_end for piece in pieces),
+                    )
                 )
-            )
+                at += size
+                break
+            else:
+                at += 1
     return Found(tuple(matches), searched, words.files)
 
 
@@ -651,6 +707,18 @@ def flag(doc: Document, found: Found) -> Document:
 # 80 ms grid and whisper only infers its ends. A zero-length word (e == t) is
 # muted by its pad alone.
 PAD_S = 0.1
+
+# The longest a muted token is taken to last, in seconds (#212). Whisper infers a
+# word's end after decoding rather than measuring it (#77), so a word that closes
+# a segment can absorb the pause after it, and one flagged word would mute that
+# whole pause, speech after it included. Measured with scratch/token_lengths.py
+# on 3 Oct 2026 over 56 whisper transcripts in scratch/real_bench/runs/ (15 of
+# #148's public fixture, 41 of the owner's recordings), 127,942 tokens: median
+# 0.20 s, 99th percentile 1.38 s (fixture 1.06, owner's 1.40), longest 29.64 s,
+# 402 past 2 s and up to 26 of those in one file. 1.4 s is the 99th percentile
+# rounded up to the tenth; 1,105 tokens (0.9%) run past it. A token is also cut
+# where the next one starts, which on the same transcripts 85 tokens run past.
+MAX_WORD_S = 1.4
 
 # How often each engine leaves a swear word out of its transcript, once #152 has
 # measured it, as the sentence `dsj hatao` prints for that engine. Empty until
@@ -680,8 +748,30 @@ class RenderRefused(ValueError):
     """The document holds a change the render does not make, or another recording."""
 
 
+@dataclass(frozen=True)
+class Capped:
+    """A muted token whose end was not believed (#212): its times, and where its mute stops.
+
+    `muted_end` is `max_word_s` after the start, or the next token's start when
+    that is earlier, before padding.
+    """
+
+    source_start: float
+    source_end: float
+    muted_end: float
+
+
+def _next_start(content: Sequence[Entry], index: int) -> float | None:
+    """Where the first token after entry `index` that starts later than it starts."""
+    here = cast("Item", content[index]).source_start
+    for entry in content[index + 1 :]:
+        if isinstance(entry, Item) and entry.text and entry.source_start > here:
+            return entry.source_start
+    return None
+
+
 def spans_to_mute(
-    doc: Document, *, duration_s: float, pad_s: float = PAD_S
+    doc: Document, *, duration_s: float, pad_s: float = PAD_S, max_word_s: float = MAX_WORD_S
 ) -> list[tuple[float, float]]:
     """The stretches of the recording to silence: muted items, padded, merged, in order.
 
@@ -690,9 +780,20 @@ def spans_to_mute(
     A deleted or moved entry would be rendered as though it were not, which is
     the silent wrong answer, so it is refused instead.
 
+    A muted token is silenced for at most `max_word_s`, and never past the start
+    of the token after it: its end may be whisper's guess (#212). An item with no
+    text keeps its length, since it already ends where the next token starts.
+
     Raises:
         RenderRefused: more than one source, or entries out of order or missing.
     """
+    return _mute_plan(doc, duration_s=duration_s, pad_s=pad_s, max_word_s=max_word_s)[0]
+
+
+def _mute_plan(
+    doc: Document, *, duration_s: float, pad_s: float, max_word_s: float
+) -> tuple[list[tuple[float, float]], list[Capped]]:
+    """`spans_to_mute`'s spans, and every muted token it cut short to get them."""
     sources = {entry.source for entry in doc.content if isinstance(entry, Item)}
     if len(sources) > 1:
         raise RenderRefused(
@@ -701,6 +802,7 @@ def spans_to_mute(
     reached = 0.0
     previous = 0.0
     spans: list[tuple[float, float]] = []
+    capped: list[Capped] = []
     for index, entry in enumerate(doc.content):
         if not isinstance(entry, Item):
             continue
@@ -713,21 +815,31 @@ def spans_to_mute(
         reached = max(reached, entry.source_end)
         if not entry.muted:
             continue
+        stop = entry.source_end
+        if entry.text:
+            limit = entry.source_start + max_word_s
+            ahead = _next_start(doc.content, index)
+            if ahead is not None:
+                limit = min(limit, ahead)
+            if stop > limit + _TOUCH_S:
+                stop = limit
+                capped.append(Capped(entry.source_start, entry.source_end, round(stop, 3)))
         start = max(entry.source_start - pad_s, 0.0)
-        end = min(entry.source_end + pad_s, duration_s)
+        end = min(stop + pad_s, duration_s)
         if spans and start <= spans[-1][1]:
             spans[-1] = (spans[-1][0], max(spans[-1][1], end))
         else:
             spans.append((start, end))
-    return [(round(a, 3), round(b, 3)) for a, b in spans if b > a]
+    return [(round(a, 3), round(b, 3)) for a, b in spans if b > a], capped
 
 
 @dataclass(frozen=True)
 class Rendered:
-    """What a render did: the spans it silenced, and why its source tag is missing, if it is."""
+    """What a render did: spans silenced, why the source tag is missing, tokens cut short."""
 
     spans: list[tuple[float, float]]
     untagged: str | None
+    capped: tuple[Capped, ...] = ()
 
 
 def render(
@@ -760,7 +872,7 @@ def render(
             f"the document plays {sorted(map(str, recordings))}, not {media.resolve()}"
         )
     total = media_mod.probe(media).duration_s
-    spans = spans_to_mute(doc, duration_s=total)
+    spans, capped = _mute_plan(doc, duration_s=total, pad_s=PAD_S, max_word_s=MAX_WORD_S)
     media_mod.mute(
         media,
         spans,
@@ -768,4 +880,4 @@ def render(
         replace=replace,
         on_progress=(lambda done: on_progress(done, total)) if on_progress else None,
     )
-    return Rendered(spans, filetag.stamp_source(media, out))
+    return Rendered(spans, filetag.stamp_source(media, out), tuple(capped))
