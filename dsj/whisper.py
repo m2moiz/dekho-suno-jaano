@@ -73,6 +73,7 @@ __all__ = [
     "transcribe_whisper",
 ]
 
+import statistics
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -122,6 +123,14 @@ ANCHOR_OVERLAP_S = 6.0
 # instead (#140). Kept as a constant, and plumbed through, so the setting can
 # be measured again: scratch/whisper_sweep.py sets it from outside per run.
 HALLUCINATION_SILENCE_S: float | None = None
+
+# How long a word after a pause may last before its start is moved up to it
+# (#222): twice the median word length of its segment, the median taken as no
+# more than this. Both are mlx-whisper's own, from the clamp it applies to a word
+# beside a full stop, question mark or exclamation mark (add_word_timestamps in
+# mlx_whisper/timing.py, 0.4.3); `_pause_free_starts` applies it beside any
+# pause the aligner gave to the word after it, with or without punctuation.
+LONG_WORD_MEDIAN_CAP_S = 0.7
 
 # From a clone the hint cannot be a whole `uv sync` line: `uv sync` uninstalls
 # every extra it is not given, so `uv sync --extra whisper` alone would take
@@ -225,16 +234,23 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
     (#174): with only `e` rounded, a zero-length word whose shifted start
     carried float noise ended before it began. Rounding after the sort cannot
     reorder the words, because it never moves one start past another.
+
+    A word the aligner started in the pause before it is started at the word
+    instead (#222, `_pause_free_starts`), and never past the next word's start,
+    so that cannot reorder them either.
     """
-    out: list[dict[str, Any]] = []
-    for segment in segments:
-        words = sorted(
+    ordered = [
+        sorted(
             cast("list[dict[str, Any]]", segment.get("words") or []),
             key=lambda w: float(w["start"]),
         )
+        for segment in segments
+    ]
+    out: list[dict[str, Any]] = []
+    for segment, words, starts in zip(segments, ordered, _pause_free_starts(ordered), strict=True):
         tokens: list[dict[str, Any]] = []
-        for w in words:
-            t = round(float(w["start"]) + offset, 3)
+        for w, start in zip(words, starts, strict=True):
+            t = round(start + offset, 3)
             tokens.append(
                 {
                     "t": t,
@@ -251,6 +267,60 @@ def _sentences_from(segments: list[dict[str, Any]], offset: float) -> list[dict[
                 "tokens": with_char_offsets(tokens),
             }
         )
+    return out
+
+
+def _pause_free_starts(segments: list[list[dict[str, Any]]]) -> list[list[float]]:
+    """Each word's start, moved off the pause before it where the aligner put it there (#222).
+
+    `segments` holds the words of each segment of one whisper call, in order,
+    on the call's own clock, which starts at 0.
+
+    whisper times words after decoding, by aligning the written tokens to the
+    audio, and gives each word the frames from the previous word's end to its
+    own end: a word's start is the previous word's end. The pause between two
+    words goes to a full stop if one was written there, and mlx-whisper then
+    caps the word after it at LONG_WORD_MEDIAN_CAP_S's ceiling. With no
+    punctuation the pause goes to the word after it, whole, and nothing caps
+    it. `--language ur` writes almost no punctuation: 0.9% of tokens ended in a
+    mark over six `--language ur` transcripts of the owner's recordings, 24.8%
+    over two plain ones. On #152's synthetic English words, 1.5 s apart,
+    `--roman-urdu` started a word a median 1.56 s before it was said, plain
+    whisper 0.39 s, and `dsj hatao`, which caps a mute at MAX_WORD_S from the
+    start, muted the pause and stopped before the word. The prompt and the
+    anchored windows play no part: `--language ur` alone did the same, the
+    prompt alone did not, and 30, 60 and 120 s windows all did.
+
+    So a word whose start is the previous word's end, and which runs longer
+    than twice its segment's median word length (the median taken as at most
+    LONG_WORD_MEDIAN_CAP_S), starts that ceiling before its end: mlx-whisper's
+    own rule, applied where its punctuation test cannot see the pause. The
+    previous word can be the last of the segment before, since whisper also
+    writes a run of one-word segments, and the first word of the decode
+    follows its start, 0. Measured by scratch/bleep_recall/word_starts.py; the
+    numbers are on #222. A word with a gap before it was already placed after
+    the pause, and is left alone. The median is the segment's, not the
+    decode's: a loop's words can last hundredths of a second (221 words in
+    0.16 s on #148's fixture, `_owned`), and would pull a decode's median, and
+    the ceiling with it, down onto ordinary words.
+    """
+    out: list[list[float]] = []
+    previous = 0.0
+    for words in segments:
+        spoken = [float(w["end"]) - float(w["start"]) for w in words]
+        spoken = [length for length in spoken if length > 0]
+        longest = 2 * min(LONG_WORD_MEDIAN_CAP_S, statistics.median(spoken)) if spoken else 0.0
+        starts: list[float] = []
+        for i, w in enumerate(words):
+            start, end = float(w["start"]), float(w["end"])
+            # whisper rounds word times to the hundredth, so a start handed the
+            # previous end is equal to it; the tolerance is half that grain.
+            if spoken and abs(start - previous) < 0.005 and end - start > longest:
+                following = float(words[i + 1]["start"]) if i + 1 < len(words) else end
+                start = min(end - longest, following)
+            previous = end
+            starts.append(start)
+        out.append(starts)
     return out
 
 

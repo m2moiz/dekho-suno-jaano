@@ -217,6 +217,77 @@ def test_a_whisper_word_ending_before_it_starts_is_written_at_its_start() -> Non
     assert (token["t"], token["e"]) == (1.0, 1.0)
 
 
+# Three words said 1.5 s apart, where scratch/bleep_recall/make_audio.py put
+# them in en_samantha.wav, and the times `--roman-urdu` gave them on #152's
+# run: each word starts where the one before it ended, in the pause (#222).
+_SAID = [(1.0, 1.378), (2.878, 3.383), (4.883, 5.318)]
+_ALIGNED_INTO_PAUSES = [(0.0, 1.2), (1.2, 3.34), (3.34, 5.3)]
+
+
+def _covered(said: tuple[float, float], spans: list[tuple[float, float]]) -> float:
+    a, b = said
+    return sum(max(0.0, min(b, y) - max(a, x)) for x, y in spans) / (b - a)
+
+
+@pytest.mark.parametrize("segments", ["one", "one per word"])
+def test_a_word_whisper_starts_in_the_pause_before_it_is_muted_where_it_is_said(
+    tmp_path: Path, segments: str
+) -> None:
+    """The pause goes back to being a pause, so `dsj hatao` mutes the word (#222).
+
+    With no full stop for the aligner to give the pause to, whisper's start for
+    a word said after a pause is the previous word's end. hatao caps a mute at
+    MAX_WORD_S from the start, so it silenced 1.4 s of the pause and stopped
+    before the word: 0.36 s of the 0.505 s word muted, the rest audible.
+    whisper writes such words in one segment, or one segment each, as it did
+    at the end of every English set. The first word is not asserted on: whisper
+    ended it 0.18 s before it was said, a different miss plain whisper has too.
+    """
+    from dsj import hatao
+
+    words = [
+        (a, b, w)
+        for w, (a, b) in zip([" one", " two", " three"], _ALIGNED_INTO_PAUSES, strict=True)
+    ]
+    groups = [words] if segments == "one" else [[w] for w in words]
+    sentences = whisper_mod._sentences_from(  # pyright: ignore[reportPrivateUsage]
+        [_words_seg(g) for g in groups], 0.0
+    )
+    doc = hatao.from_transcript({"sentences": sentences}, tmp_path / "a.wav", duration_s=6.0)
+    items = [i for i, e in enumerate(doc.content) if isinstance(e, hatao.Item) and e.text]
+
+    for index, said in zip(items[1:], _SAID[1:], strict=True):
+        muted = hatao.mute(doc, index, index + 1)
+        spans = hatao.spans_to_mute(muted, duration_s=6.0)
+        assert _covered(said, spans) >= 0.9, (said, spans)
+
+
+def test_a_word_after_a_gap_or_in_fluent_speech_keeps_its_start() -> None:
+    """Only a long word handed the previous word's end moves; nothing else does (#222)."""
+    segment = {
+        "start": 0.0,
+        "end": 3.0,
+        "text": " a b c d.",
+        "words": [
+            {"word": " a", "start": 0.0, "end": 0.3, "probability": 0.9},
+            {"word": " b", "start": 0.3, "end": 0.6, "probability": 0.9},
+            # after a gap the aligner already placed: left where it is
+            {"word": " c", "start": 1.0, "end": 2.5, "probability": 0.9},
+            {"word": " d.", "start": 2.5, "end": 3.0, "probability": 0.9},
+        ],
+    }
+    [sentence] = whisper_mod._sentences_from([segment], 0.0)  # pyright: ignore[reportPrivateUsage]
+    assert [t["t"] for t in sentence["tokens"]] == [0.0, 0.3, 1.0, 2.5]
+
+
+def test_a_long_first_word_starts_at_its_ceiling_not_at_the_start_of_the_decode() -> None:
+    """The first word of a decode follows its start, 0, as later words follow the one before."""
+    segment = _words_seg([(0.0, 3.0, " late"), (3.0, 3.3, " a"), (3.3, 3.6, " b")])
+    [sentence] = whisper_mod._sentences_from([segment], 10.0)  # pyright: ignore[reportPrivateUsage]
+    # Median 0.3 s, so the ceiling is 0.6 s: 3.0 - 0.6 on the decode's clock, plus 10.
+    assert [t["t"] for t in sentence["tokens"]] == [12.4, 13.0, 13.3]
+
+
 def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> None:
     """Word times arrive as np.float64, which json.dumps refuses.
 
@@ -798,8 +869,13 @@ def test_anchored_progress_reaches_exactly_one_whatever_the_probe_said(
         frames.append((state, p.fraction, p.audio_total_s))
 
     transcribe(
-        fake_media, tmp_path / "out.json", engine="whisper", prompt="seed", anchor_s=10.0,
-        diarize=False, on_progress=capture,
+        fake_media,
+        tmp_path / "out.json",
+        engine="whisper",
+        prompt="seed",
+        anchor_s=10.0,
+        diarize=False,
+        on_progress=capture,
     )
 
     windows = [f for f in frames if f[0] == "running"][1:]
@@ -952,10 +1028,7 @@ _MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
 # the neighbour. Six distinct words are left.
 _READ = {
     "segments": [
-        _words_seg(
-            [(1.0, 1.4, " began.")]
-            + [(2.5 + i, 3.0 + i, f" w{i}") for i in range(6)]
-        ),
+        _words_seg([(1.0, 1.4, " began.")] + [(2.5 + i, 3.0 + i, f" w{i}") for i in range(6)]),
         _words_seg([(10.3, 11.0, " last"), (11.0, 11.5, " stop.")]),
     ]
 }
@@ -975,8 +1048,13 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
         states.append(state)
 
     payload = transcribe(
-        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
-        prompt=ROMAN_URDU_PROMPT, diarize=False, on_progress=capture,
+        fake_media,
+        tmp_path / "out.json",
+        engine="whisper",
+        language="ur",
+        prompt=ROMAN_URDU_PROMPT,
+        diarize=False,
+        on_progress=capture,
     )
 
     assert len(calls) == 2
@@ -1010,8 +1088,12 @@ def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN, first, _READ])
 
     payload = transcribe(
-        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
-        prompt=ROMAN_URDU_PROMPT, diarize=False,
+        fake_media,
+        tmp_path / "out.json",
+        engine="whisper",
+        language="ur",
+        prompt=ROMAN_URDU_PROMPT,
+        diarize=False,
     )
 
     assert len(calls) == 3
@@ -1090,12 +1172,14 @@ def test_retried_words_never_land_inside_a_neighbour(
     assert payload["unclear"] == []
     _assert_no_overlap(payload["sentences"])
     tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    # Each " seam." runs 2 to 3 s from the previous word's end, so it starts
+    # 1.4 s before its end, as _pause_free_starts starts a word given a pause (#222).
     assert tokens == [
         (7.0, " Before"),
-        (9.0, " seam."),
+        (10.6, " seam."),
         *[(12.0 + i * 0.5, f" v{i}") for i in range(8)],
         (16.0, " After"),
-        (18.0, " seam."),
+        (18.6, " seam."),
     ]
 
 
@@ -1184,17 +1268,26 @@ def test_the_seconds_two_windows_share_are_written_once(
         monkeypatch,
         samples=14 * whisper_mod.SAMPLE_RATE,
         results=[
-            {"segments": [
-                _words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two")]),
-                _words_seg([(5.0, 6.0, " shared"), (6.0, 7.0, " words"), (7.0, 8.0, " here")]),
-            ]},
+            {
+                "segments": [
+                    _words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two")]),
+                    _words_seg([(5.0, 6.0, " shared"), (6.0, 7.0, " words"), (7.0, 8.0, " here")]),
+                ]
+            },
             # Offset +4 s: local 0.6 is global 4.6.
-            {"segments": [
-                _words_seg([
-                    (0.6, 1.8, " Shared"), (1.8, 3.1, " Words"), (3.1, 4.1, " here"),
-                    (4.1, 6.0, " then"), (6.0, 9.0, " more."),
-                ]),
-            ]},
+            {
+                "segments": [
+                    _words_seg(
+                        [
+                            (0.6, 1.8, " Shared"),
+                            (1.8, 3.1, " Words"),
+                            (3.1, 4.1, " here"),
+                            (4.1, 6.0, " then"),
+                            (6.0, 9.0, " more."),
+                        ]
+                    ),
+                ]
+            },
         ],
     )
 
@@ -1202,8 +1295,15 @@ def test_the_seconds_two_windows_share_are_written_once(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
-        (1.0, " one"), (2.0, " two"), (5.0, " shared"), (6.0, " words"),
-        (7.1, " here"), (8.1, " then"), (10.0, " more."),
+        # " then" and " more." run 1.9 and 3 s from the previous word's end,
+        # so they start 1.4 s before their ends (#222, _pause_free_starts).
+        (1.0, " one"),
+        (2.0, " two"),
+        (5.0, " shared"),
+        (6.0, " words"),
+        (7.1, " here"),
+        (8.6, " then"),
+        (11.6, " more."),
     ]
 
 
@@ -1223,9 +1323,11 @@ def test_a_loop_timed_into_a_windows_last_second_is_not_written(
         samples=14 * whisper_mod.SAMPLE_RATE,
         results=[
             {"segments": [_words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two.")]), loop]},
-            {"segments": [
-                _words_seg([(4.0, 5.0, " The"), (5.0, 6.0, " next"), (6.0, 9.0, " window.")]),
-            ]},
+            {
+                "segments": [
+                    _words_seg([(4.0, 5.0, " The"), (5.0, 6.0, " next"), (6.0, 9.0, " window.")]),
+                ]
+            },
         ],
     )
 
@@ -1233,7 +1335,12 @@ def test_a_loop_timed_into_a_windows_last_second_is_not_written(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
-        (1.0, " one"), (2.0, " two."), (8.0, " The"), (9.0, " next"), (10.0, " window."),
+        # " window." runs 3 s from " next"'s end: 1.4 s before its end (#222).
+        (1.0, " one"),
+        (2.0, " two."),
+        (8.0, " The"),
+        (9.0, " next"),
+        (11.6, " window."),
     ]
 
 
@@ -1259,9 +1366,15 @@ def test_where_one_window_loops_over_the_shared_seconds_the_other_writes_them(
         second.insert(0, read)
     else:
         first.append(_words_seg([(4.5, 5.0, " early"), (8.5, 9.0, " late")]))
-        second.insert(0, _words_seg([(t - 4.0, e - 4.0, " na") for t, e in [
-            (4.2 + i * 0.6, 4.5 + i * 0.6) for i in range(9)
-        ]]))
+        second.insert(
+            0,
+            _words_seg(
+                [
+                    (t - 4.0, e - 4.0, " na")
+                    for t, e in [(4.2 + i * 0.6, 4.5 + i * 0.6) for i in range(9)]
+                ]
+            ),
+        )
     _stub_anchored(
         monkeypatch,
         samples=14 * whisper_mod.SAMPLE_RATE,
@@ -1272,5 +1385,8 @@ def test_where_one_window_loops_over_the_shared_seconds_the_other_writes_them(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
-        (1.0, " one"), (4.5, " early"), (8.5, " late"), (13.0, " last."),
+        (1.0, " one"),
+        (4.5, " early"),
+        (8.5, " late"),
+        (13.0, " last."),
     ]

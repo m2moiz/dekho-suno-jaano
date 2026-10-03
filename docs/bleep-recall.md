@@ -22,7 +22,8 @@ Three answers:
    of the spoken word for only 7 of them. The word's times in the transcript
    start about 1.6 s early, in the silence before it, and the 1.4 s cap on a
    muted word (`MAX_WORD_S`, #212) then cuts the mute off before the word is
-   said. The bleep log lists every one as muted. #222 tracks it.
+   said. The bleep log lists every one as muted. #222 tracks it, and has
+   since fixed it: read "After #222" below.
 
 ## The table
 
@@ -86,6 +87,32 @@ Muted spans that cover no spoken listed word at all: parakeet 0, whisper 3,
 whisper wrote an earlier listed word again; the fifth (`--roman-urdu`, mixed)
 starts the same way but reaches back 0.26 s into the last sentence's closing
 ordinary words.
+
+## After #222
+
+Rerun 3 Oct 2026 on the same audio with the fix from #222, which starts a word
+that whisper's aligner began in the pause before it at most 1.4 s before its end
+(`_pause_free_starts` in `dsj/whisper.py`). Only the whisper rows change;
+parakeet's are as above. English words alone:
+
+| engine | written as listed | `dsj hatao` mutes all (part), before | after |
+|---|---|---|---|
+| whisper | 177 of 195 | 151 (18) | 156 (19) |
+| whisper `--roman-urdu` | 182 before, 179 after | 7 (166) | 155 (23) |
+
+The written-down counts move by run-to-run variation in whisper's decoding, not
+by the fix, which changes no text. Most of the words still partly muted are
+words whisper ended before they were said, by more than the 0.1 s pad, under
+both settings; a few under `--roman-urdu` are a word's text timed onto its
+neighbour's sound. Whether it was the prompt, `--language ur` or the anchored
+windows that started the words in the pauses, and the commands, are on #222.
+
+```bash
+uv run python scratch/bleep_recall/score.py transcribe   # after moving the old whisper folders aside
+uv run python scratch/bleep_recall/score.py hatao
+uv run python scratch/bleep_recall/score.py table
+uv run python scratch/bleep_recall/word_starts.py table
+```
 
 ## What was spoken
 
