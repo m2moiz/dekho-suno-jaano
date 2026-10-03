@@ -407,9 +407,7 @@ class Jobs:
         try:
             with self._hold():
                 rendered = hatao.render(doc, media, render.out, on_progress=progress)
-                # Rendered.capped arrives with #212 (branch v0.4.0-a2); a
-                # render made before it has no capped words to report.
-                capped: tuple[Any, ...] = tuple(getattr(rendered, "capped", ()))
+                capped = rendered.capped
                 self._log(render, doc, media, transcript, rendered.spans, capped)
             if rendered.untagged:
                 render.notes.append(
@@ -420,7 +418,7 @@ class Jobs:
             if capped:
                 render.notes.append(
                     f"Capped {len(capped)} muted words whose transcript end ran past "
-                    f"{getattr(hatao, 'MAX_WORD_S', 0):g} s or into the next word; `capped` in "
+                    f"{hatao.MAX_WORD_S:g} s or into the next word; `capped` in "
                     f"{_log_for(render.out).name} lists them."
                 )
         except Exception as exc:
