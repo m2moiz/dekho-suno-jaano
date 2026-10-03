@@ -213,6 +213,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Render
+         * @description Render the page's edit list beside the recording with dsj.hatao.render, once queued.
+         *
+         *     Refused before anything is written when the list mutes nothing, cannot be
+         *     rendered, or the machine is busy with another run.
+         */
+        post: operations["render_api_transcripts__transcript_id__render_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/renders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Renders
+         * @description Every render this server has started, the first first.
+         */
+        get: operations["renders_api_renders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/renders/{render_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Render Media
+         * @description A finished render's file, so the page can play it beside the original (#215).
+         *
+         *     By the render's id, never a path (#112 rule 5), and only once it is done.
+         */
+        get: operations["render_media_api_renders__render_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/transcripts/{transcript_id}/edits": {
         parameters: {
             query?: never;
@@ -522,6 +587,33 @@ export interface components {
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
         };
+        /**
+         * RenderJob
+         * @description A bleep render started from the page (#215), as the worker last left it.
+         */
+        RenderJob: {
+            /** Id */
+            id: number;
+            /** Transcript Id */
+            transcript_id: number;
+            /** Recording Id */
+            recording_id: number;
+            /** Started At */
+            started_at: string;
+            state: components["schemas"]["RenderState"];
+            /** Fraction */
+            fraction: number;
+            /** Output */
+            output: string;
+            /** Spans */
+            spans: number;
+            /** Error */
+            error: string | null;
+            /** Notes */
+            notes: string[];
+        };
+        /** @enum {string} */
+        RenderState: "starting" | "rendering" | "done" | "failed";
         /**
          * TranscribeRequest
          * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
@@ -857,6 +949,100 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Job"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    render_api_transcripts__transcript_id__render_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    renders_api_renders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderJob"][];
+                };
+            };
+        };
+    };
+    render_media_api_renders__render_id__media_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                render_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/*": unknown;
+                    "video/*": unknown;
+                };
+            };
+            /** @description a range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

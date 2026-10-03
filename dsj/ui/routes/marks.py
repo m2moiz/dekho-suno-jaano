@@ -10,7 +10,7 @@ terminal cannot disagree.
 
 from __future__ import annotations
 
-__all__ = ["router"]
+__all__ = ["entries", "router"]
 
 import math
 
@@ -85,6 +85,11 @@ def _entry(wire: EditEntry) -> hatao.Entry:
     return hatao.Item(wire.source, wire.sourceStart, wire.length, wire.text, wire.muted)
 
 
+def entries(update: EditsUpdate) -> tuple[hatao.Entry, ...]:
+    """The page's entries as dsj.hatao's, `confidence` left behind: it is not in the file."""
+    return tuple(_entry(entry) for entry in update.content)
+
+
 @router.get("/transcripts/{transcript_id}/edits")
 def read_edits(transcript_id: str) -> Edits:
     """The transcript's edit list: as last saved, or as the transcript made it.
@@ -99,8 +104,7 @@ def read_edits(transcript_id: str) -> Edits:
 @router.put("/transcripts/{transcript_id}/edits")
 def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
-    content = tuple(_entry(entry) for entry in update.content)
-    return _wire(edits.save_edits(_id(transcript_id), content))
+    return _wire(edits.save_edits(_id(transcript_id), entries(update)))
 
 
 @router.post("/transcripts/{transcript_id}/matches")
@@ -111,9 +115,7 @@ def find_matches(transcript_id: str, update: EditsUpdate) -> Matches:
     (#83) is matched as retyped. Nothing is saved.
     """
     opened = edits.open_edits(_id(transcript_id))
-    doc = hatao.validate(
-        hatao.Document(opened.doc.sources, tuple(_entry(entry) for entry in update.content))
-    )
+    doc = hatao.validate(hatao.Document(opened.doc.sources, entries(update)))
     found = hatao.find(doc, hatao.load_words(hatao.word_lists()))
     engine = edits.engine_of(_id(transcript_id))
     return Matches(

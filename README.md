@@ -601,6 +601,13 @@ own code), and **Hear** plays one match with a second either side and stops.
 A word typed into the box is added to your own `words.toml`, the file `dsj
 hatao` reads too, and what the next pass finds of it is muted.
 
+**Render** writes the bleeped copy as a job, with the render `dsj hatao` runs:
+beside the recording as `<name>.bleeped.<ext>` (then `.bleeped-2`, never over
+an earlier one), with the same `.bleeps.json` log and `.source.txt` note, and
+a link and a player for it in the page. **Render alone** does the same with
+only one match muted. A render waits for the machine like a transcription
+does: one run at a time, from the app or the terminal.
+
 It follows the Mac's light or dark Appearance, live, until you pick Light or
 Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
 the browser's per-port storage, survives the new port each launch gets.

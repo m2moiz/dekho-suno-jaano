@@ -8,6 +8,8 @@ import { fromThrown, showError } from "@/features/errors/appError";
 import type { PlayerControls } from "@/features/player/Player";
 import { type Content, type Editor, itemsIn } from "@/lib/editOps";
 import { addWord, atLabel, findMatches, isMuted, type Match, type Matches } from "./matches";
+import { alone, type RenderJob, startRender, useRender } from "./render";
+import { RenderStatus } from "./RenderStatus";
 
 // How much of the recording an audition plays either side of a match, in
 // seconds: enough to hear the words around the cut, which is what a clipped
@@ -35,6 +37,13 @@ export function BleepPanel({ transcriptId, editor, content, edit, renderable, pa
   const [found, setFound] = useState<Matches | null>(null);
   const [looked, setLooked] = useState(0);
   const [note, setNote] = useState<string | null>(null);
+  const [started, setStarted] = useState<RenderJob | null>(null);
+  const job = useRender(started);
+  const busy = job !== null && job.state !== "done" && job.state !== "failed";
+  const render = (list: Content) =>
+    startRender(transcriptId, list).then(setStarted, (thrown: unknown) =>
+      showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/render`)),
+    );
 
   // Looked for again when the words change (a word retyped, #83) or a word
   // is added to the list; a mute changes neither, and keeps the same reading.
@@ -122,6 +131,15 @@ export function BleepPanel({ transcriptId, editor, content, edit, renderable, pa
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={busy}
+                  title="Render the recording with only this word muted"
+                  onClick={() => void render(alone(content, m))}
+                >
+                  Render alone
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   className="w-24"
                   onClick={() =>
                     editor.applyEdit(
@@ -138,6 +156,23 @@ export function BleepPanel({ transcriptId, editor, content, edit, renderable, pa
           })}
         </ul>
       )}
+      <div className="mt-3 flex items-center gap-3">
+        <Button
+          size="sm"
+          disabled={busy || renderable.spans === null || renderable.spans.length === 0}
+          onClick={() => void render(content)}
+        >
+          Render
+        </Button>
+        <span className="text-muted-foreground">
+          {renderable.spans === null
+            ? "This list cannot be rendered."
+            : renderable.spans.length === 0
+              ? "Nothing is muted yet."
+              : `Writes a copy beside the recording with ${renderable.spans.length === 1 ? "1 span" : `${renderable.spans.length} spans`} silenced; the recording is not changed.`}
+        </span>
+      </div>
+      {job !== null && <RenderStatus job={job} />}
       <form onSubmit={add} className="mt-3 flex items-center gap-2">
         <Input name="word" aria-label="A word to add to your list" placeholder="Add a word to your list" className="max-w-64" />
         <Button type="submit" variant="outline" size="sm">

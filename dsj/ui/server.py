@@ -103,9 +103,10 @@ PAGE_HEADER = "x-dsj-page"
 # are everything else, and are served to any loopback request (#112 rule 2).
 _GUARDED = ("/api", "/media")
 
-# The one route whose requests come from a media element, which sends no
-# headers of its own: GET or HEAD of a recording's file (dsj/ui/routes/media.py).
-_MEDIA = re.compile(r"/api/recording/[^/]+/media")
+# The routes whose requests come from a media element, which sends no headers
+# of its own: GET or HEAD of a recording's file (dsj/ui/routes/media.py), and
+# of a finished bleep render's (#215, dsj/ui/routes/jobs.py).
+_MEDIA = re.compile(r"/api/(?:recording|renders)/[^/]+/media")
 
 # How long a second `dsj ui` waits for the first to write where it listens. The
 # first writes it straight after binding, so this only covers two launched in

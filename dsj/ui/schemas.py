@@ -31,6 +31,8 @@ __all__ = [
     "Matches",
     "ParagraphEntry",
     "Recording",
+    "RenderJob",
+    "RenderState",
     "TranscribeRequest",
     "Transcript",
     "WordAdded",
@@ -51,6 +53,9 @@ type EngineName = Literal["parakeet", "whisper", "sherpa"]
 type JobState = Literal[
     "starting", "extracting", "running", "retrying", "diarizing", "saving", "done", "failed"
 ]
+
+# A render from the page (#215, dsj/ui/jobs.py Render.view): queued, writing, over.
+type RenderState = Literal["starting", "rendering", "done", "failed"]
 
 
 class Transcript(BaseModel):
@@ -233,3 +238,21 @@ class WordAdded(BaseModel):
 
     entry: str
     added: bool
+
+
+class RenderJob(BaseModel):
+    """A bleep render started from the page (#215), as the worker last left it."""
+
+    id: int
+    transcript_id: int
+    recording_id: int
+    started_at: str
+    state: RenderState
+    fraction: float
+    # Where the bleeped file goes: beside the recording, never over anything.
+    output: str
+    # How many stretches of the recording it silences.
+    spans: int
+    error: str | None
+    # What it could not do, though it finished.
+    notes: list[str]

@@ -1,4 +1,4 @@
-"""Transcriptions started from the page (#113), run in this process, one at a time.
+"""Transcriptions (#113) and bleep renders (#215) from the page, run in this process, one at a time.
 
 The server imports dsj and calls `dsj.suno.transcribe()` itself (#57 section 16):
 no subprocess, so a run's failure is an exception this process sees, and its
@@ -9,6 +9,12 @@ refuses to start beside a terminal run, and a terminal run refuses to start
 beside a job, each naming the other's pid. Every job also runs on one worker
 thread that lives as long as the server, so a model mlx loaded for one job is
 only ever used on the thread that loaded it.
+
+A render is the terminal's: `dsj.hatao.render`, the function `dsj hatao`
+calls, on the edit list the page sends, writing beside the recording as `dsj
+hatao -o` would, with the same `.bleeps.json` log and `.source.txt` sidecar
+(#121). It takes the same run lock, so a render and a transcription never
+share the machine.
 
 Plain Python, no fastapi: dsj/ui/errors.py maps NotStarted to a status, and
 everything under dsj.ui but the server must import without the `ui` extra.
@@ -22,7 +28,9 @@ __all__ = [
     "Job",
     "Jobs",
     "NotStarted",
+    "Render",
     "engine_choices",
+    "render_path",
     "transcript_path",
 ]
 
@@ -43,10 +51,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from dsj import runlock, suno
+from dsj import hatao, runlock, suno
 from dsj.asr import ENGINES, EngineUnavailable, get_engine
+from dsj.atomic import atomic_write_text
+from dsj.filetag import source_sidecar_for
 from dsj.parakeet import DEFAULT_MODEL as PARAKEET_MODEL
 from dsj.sherpa import DEFAULT_MODEL as SHERPA_MODEL
+from dsj.ui import edits
 from dsj.ui.schemas import TranscribeRequest
 from dsj.ui.store import Library, library_path
 from dsj.whisper import DEFAULT_WHISPER_MODEL
@@ -166,6 +177,65 @@ class Job:
         }
 
 
+def render_path(media: Path) -> Path:
+    """Where a render from the page goes: beside its recording, never over anything.
+
+    `<stem>.bleeped<suffix>`, or `.bleeped-2`, `-3` and on, the first whose
+    file, `.bleeps.json` log and `.source.txt` sidecar are all free: a second
+    render after more review keeps the first, as a terminal run without
+    `--overwrite` does.
+    """
+    n = 1
+    while True:
+        tag = "bleeped" if n == 1 else f"bleeped-{n}"
+        out = media.with_name(f"{media.stem}.{tag}{media.suffix}")
+        if not any(p.exists() for p in (out, _log_for(out), source_sidecar_for(out))):
+            return out
+        n += 1
+
+
+def _log_for(out: Path) -> Path:
+    """The bleep log beside a render: `dsj hatao`'s `<stem>.bleeps.json`."""
+    return out.with_name(f"{out.stem}.bleeps.json")
+
+
+@dataclass
+class Render:
+    """A bleep render started from the page (#215), and what has become of it."""
+
+    id: int
+    transcript_id: int
+    recording_id: int
+    started_at: str
+    out: Path
+    # How many stretches it silences, known before it starts.
+    spans: int
+    # Written by the worker as ffmpeg goes: seconds written, and of how many.
+    done_s: float = 0.0
+    total_s: float = 0.0
+    # Set by the worker when the render is over, and only then.
+    outcome: str | None = None
+    error: str | None = None
+    # What it could not do, though it finished: the tag (#121), words capped (#212).
+    notes: list[str] = field(default_factory=list[str])
+
+    def view(self) -> dict[str, Any]:
+        """This render as the page reads it."""
+        state = self.outcome or ("rendering" if self.total_s > 0 else "starting")
+        return {
+            "id": self.id,
+            "transcript_id": self.transcript_id,
+            "recording_id": self.recording_id,
+            "started_at": self.started_at,
+            "state": state,
+            "fraction": min(self.done_s / self.total_s, 1.0) if self.total_s > 0 else 0.0,
+            "output": str(self.out),
+            "spans": self.spans,
+            "error": self.error,
+            "notes": list(self.notes),
+        }
+
+
 class _Notes(logging.StreamHandler[TextIO]):
     """dsj.suno's log on stderr, as `dsj suno` shows it, and its warnings on the job.
 
@@ -193,7 +263,9 @@ class Jobs:
         """`hold` keeps the server up while a run is going (Heartbeat.hold)."""
         self._hold = hold
         self._jobs: dict[int, Job] = {}
-        self._queue: queue.SimpleQueue[tuple[Job, dict[str, Any], int]] = queue.SimpleQueue()
+        self._renders: dict[int, Render] = {}
+        # Each task runs one job, transcription or render, on the one worker thread.
+        self._queue: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._worker: threading.Thread | None = None
         self._start_lock = threading.Lock()
         # Status files only this server reads; nothing in them outlives a run.
@@ -259,11 +331,138 @@ class Jobs:
                 status_path=status_path,
             )
             self._jobs[job_id] = job
-            self._queue.put((job, arguments | {"out": out, "status_path": status_path}, held))
-            if self._worker is None:
-                self._worker = threading.Thread(target=self._work, name="dsj-ui-jobs", daemon=True)
-                self._worker.start()
+            run_arguments = arguments | {"out": out, "status_path": status_path}
+            self._put(lambda: self._run(job, run_arguments, held))
         return job
+
+    def _put(self, task: Callable[[], None]) -> None:
+        """Queue `task` for the worker, starting the worker the first time. Under _start_lock."""
+        self._queue.put(task)
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._work, name="dsj-ui-jobs", daemon=True)
+            self._worker.start()
+
+    def renders(self) -> list[Render]:
+        """Every render, the first started first."""
+        return [self._renders[k] for k in sorted(self._renders)]
+
+    def render(self, render_id: int) -> Render | None:
+        """The render with this id, or None."""
+        return self._renders.get(render_id)
+
+    def start_render(self, transcript_id: int, content: tuple[hatao.Entry, ...]) -> Render:
+        """Render the page's edit list of a transcript beside its recording, or refuse first.
+
+        The list is the page's own, as it is on screen: a review, or one match
+        alone (#84), is a list with just those words muted.
+
+        Raises:
+            dsj.ui.edits.NoSuchTranscript: no such transcript.
+            dsj.hatao.InvalidDocument: the list is broken, named.
+            dsj.hatao.RenderRefused: the list holds a cut or a move, which a render does not make.
+            NotStarted: the recording is gone, or nothing in the list is muted.
+            dsj.runlock.AlreadyRunning: a transcription or a render holds the machine.
+        """
+        opened = edits.open_edits(transcript_id)
+        doc = hatao.validate(hatao.Document(opened.doc.sources, content))
+        media = Path(doc.sources[edits.SOURCE])
+        if not media.is_file():
+            raise NotStarted(
+                f"{media} is not there any more, so it cannot be rendered. Put the file back "
+                f"where it was, then render again."
+            )
+        duration = opened.duration_s if opened.duration_s is not None else float("inf")
+        spans = hatao.spans_to_mute(doc, duration_s=duration)
+        if not spans:
+            # dsj hatao's exit 3: a render that mutes nothing must not pass for a bleeped file.
+            raise NotStarted(
+                "Nothing in this list is muted, so a render would only copy the recording."
+            )
+        with Library.open() as library:
+            found = library.transcript(transcript_id)
+        assert found is not None  # open_edits found it a moment ago
+        out = render_path(media)
+        with self._start_lock:
+            held = runlock.acquire({"pid": os.getpid(), "out": str(out), "media": str(media)})
+            render = Render(
+                id=len(self._renders) + 1,
+                transcript_id=transcript_id,
+                recording_id=found.recording_id,
+                started_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                out=out,
+                spans=len(spans),
+            )
+            self._renders[render.id] = render
+            self._put(lambda: self._render(render, doc, media, held, found.json_path))
+        return render
+
+    def _render(
+        self, render: Render, doc: hatao.Document, media: Path, held: int, transcript: Path
+    ) -> None:
+        def progress(done: float, total: float) -> None:
+            render.total_s = total
+            render.done_s = done
+
+        error: str | None = None
+        try:
+            with self._hold():
+                rendered = hatao.render(doc, media, render.out, on_progress=progress)
+                # Rendered.capped arrives with #212 (branch v0.4.0-a2); a
+                # render made before it has no capped words to report.
+                capped: tuple[Any, ...] = tuple(getattr(rendered, "capped", ()))
+                self._log(render, doc, media, transcript, rendered.spans, capped)
+            if rendered.untagged:
+                render.notes.append(
+                    f"The source tag was not written onto {render.out.name}, so only "
+                    f"{source_sidecar_for(render.out).name} names its recording: "
+                    f"{rendered.untagged}"
+                )
+            if capped:
+                render.notes.append(
+                    f"Capped {len(capped)} muted words whose transcript end ran past "
+                    f"{getattr(hatao, 'MAX_WORD_S', 0):g} s or into the next word; `capped` in "
+                    f"{_log_for(render.out).name} lists them."
+                )
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            traceback.print_exception(exc, file=sys.stderr)
+        finally:
+            os.close(held)
+        render.error = error
+        render.outcome = "done" if error is None else "failed"
+
+    @staticmethod
+    def _log(
+        render: Render,
+        doc: hatao.Document,
+        media: Path,
+        transcript: Path,
+        spans: list[tuple[float, float]],
+        capped: tuple[Any, ...],
+    ) -> None:
+        """`dsj hatao`'s bleep log beside the render: every muted word, its times, the spans."""
+        muted = [
+            {"word": e.text.strip(), "start": round(e.source_start, 3),
+             "end": round(e.source_end, 3)}
+            for e in doc.content
+            if isinstance(e, hatao.Item) and e.muted and e.text.strip()
+        ]
+        log: dict[str, Any] = {
+            "media": str(media.resolve()),
+            "transcript": str(transcript),
+            "output": str(render.out.resolve()),
+            "from": "dsj ui",
+            "pad_s": hatao.PAD_S,
+            "muted": muted,
+            "spans": [[a, b] for a, b in spans],
+        }
+        if capped:
+            log["capped"] = [
+                {"start": round(c.source_start, 3), "end": round(c.source_end, 3),
+                 "muted_to": c.muted_end}
+                for c in capped
+            ]
+        atomic_write_text(_log_for(render.out), json.dumps(log, ensure_ascii=False, indent=1))
 
     @staticmethod
     def _arguments(media: Path, request: TranscribeRequest) -> dict[str, Any]:
@@ -289,8 +488,7 @@ class Jobs:
     def _work(self) -> None:
         """Run each queued job in turn, for as long as the server lives."""
         while True:
-            job, arguments, held = self._queue.get()
-            self._run(job, arguments, held)
+            self._queue.get()()
 
     def _run(self, job: Job, arguments: dict[str, Any], held: int) -> None:
         notes = _Notes(job)

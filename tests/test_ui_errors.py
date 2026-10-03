@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from dsj.asr import EngineUnavailable
 from dsj.dekho import MarkError
 from dsj.diarize import DiarizationUnavailable
-from dsj.hatao import InvalidDocument, TranscriptUnusable, WordListError
+from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordListError
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream, probe
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
@@ -93,6 +93,7 @@ def build(cls: type[BaseException]) -> BaseException:
         (TranscriptUnusable, 422),
         (InvalidDocument, 422),
         (WordListError, 422),
+        (RenderRefused, 422),
         (NoSuchTranscript, 404),
         (AlreadyRunning, 409),
         (PickerBusy, 409),
@@ -119,7 +120,7 @@ def test_the_table_above_is_the_whole_table() -> None:
         EngineUnavailable, WhisperUnavailable, DiarizationUnavailable, FFmpegNotFound,
         UIUnavailable, NoAudioStream, NoVideoStream, MarkError, NotATranscript,
         NotTheSameRecording, NotStarted, AlreadyRunning, MediaError, NoFilePicker, PickerBusy,
-        TranscriptUnusable, InvalidDocument, NoSuchTranscript, WordListError,
+        TranscriptUnusable, InvalidDocument, NoSuchTranscript, WordListError, RenderRefused,
     }
     assert set(STATUS) == tested
 
