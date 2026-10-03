@@ -192,8 +192,8 @@ punishes. The scripts are in `scratch/accuracy/`.
 3. **The window stays at 120 s.** 30 s is 4 to 5 points better on the mixed recording
    and 6 points worse on Urdu, and on the owner's recordings it lost words (#100).
 4. **English:** `--roman-urdu` and `--language ur` both loop on English, `--roman-urdu`
-   for 140 to 284 s of the 30 minutes. parakeet skipped stretches of 10 to 46 s of the
-   call's speech, which is most of its 10%.
+   for 140 to 284 s of the 30 minutes. parakeet skipped stretches of 11 to 46 s of the
+   call's speech without marking them, which is most of its 10% (#228).
 
 The owner's own corrected 10 minutes (#182) is the check on his voice.
 
