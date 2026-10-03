@@ -869,13 +869,8 @@ def test_anchored_progress_reaches_exactly_one_whatever_the_probe_said(
         frames.append((state, p.fraction, p.audio_total_s))
 
     transcribe(
-        fake_media,
-        tmp_path / "out.json",
-        engine="whisper",
-        prompt="seed",
-        anchor_s=10.0,
-        diarize=False,
-        on_progress=capture,
+        fake_media, tmp_path / "out.json", engine="whisper", prompt="seed", anchor_s=10.0,
+        diarize=False, on_progress=capture,
     )
 
     windows = [f for f in frames if f[0] == "running"][1:]
@@ -1028,7 +1023,10 @@ _MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
 # the neighbour. Six distinct words are left.
 _READ = {
     "segments": [
-        _words_seg([(1.0, 1.4, " began.")] + [(2.5 + i, 3.0 + i, f" w{i}") for i in range(6)]),
+        _words_seg(
+            [(1.0, 1.4, " began.")]
+            + [(2.5 + i, 3.0 + i, f" w{i}") for i in range(6)]
+        ),
         _words_seg([(10.3, 11.0, " last"), (11.0, 11.5, " stop.")]),
     ]
 }
@@ -1048,13 +1046,8 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
         states.append(state)
 
     payload = transcribe(
-        fake_media,
-        tmp_path / "out.json",
-        engine="whisper",
-        language="ur",
-        prompt=ROMAN_URDU_PROMPT,
-        diarize=False,
-        on_progress=capture,
+        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
+        prompt=ROMAN_URDU_PROMPT, diarize=False, on_progress=capture,
     )
 
     assert len(calls) == 2
@@ -1088,12 +1081,8 @@ def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN, first, _READ])
 
     payload = transcribe(
-        fake_media,
-        tmp_path / "out.json",
-        engine="whisper",
-        language="ur",
-        prompt=ROMAN_URDU_PROMPT,
-        diarize=False,
+        fake_media, tmp_path / "out.json", engine="whisper", language="ur",
+        prompt=ROMAN_URDU_PROMPT, diarize=False,
     )
 
     assert len(calls) == 3
@@ -1268,26 +1257,17 @@ def test_the_seconds_two_windows_share_are_written_once(
         monkeypatch,
         samples=14 * whisper_mod.SAMPLE_RATE,
         results=[
-            {
-                "segments": [
-                    _words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two")]),
-                    _words_seg([(5.0, 6.0, " shared"), (6.0, 7.0, " words"), (7.0, 8.0, " here")]),
-                ]
-            },
+            {"segments": [
+                _words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two")]),
+                _words_seg([(5.0, 6.0, " shared"), (6.0, 7.0, " words"), (7.0, 8.0, " here")]),
+            ]},
             # Offset +4 s: local 0.6 is global 4.6.
-            {
-                "segments": [
-                    _words_seg(
-                        [
-                            (0.6, 1.8, " Shared"),
-                            (1.8, 3.1, " Words"),
-                            (3.1, 4.1, " here"),
-                            (4.1, 6.0, " then"),
-                            (6.0, 9.0, " more."),
-                        ]
-                    ),
-                ]
-            },
+            {"segments": [
+                _words_seg([
+                    (0.6, 1.8, " Shared"), (1.8, 3.1, " Words"), (3.1, 4.1, " here"),
+                    (4.1, 6.0, " then"), (6.0, 9.0, " more."),
+                ]),
+            ]},
         ],
     )
 
@@ -1297,13 +1277,8 @@ def test_the_seconds_two_windows_share_are_written_once(
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
         # " then" and " more." run 1.9 and 3 s from the previous word's end,
         # so they start 1.4 s before their ends (#222, _pause_free_starts).
-        (1.0, " one"),
-        (2.0, " two"),
-        (5.0, " shared"),
-        (6.0, " words"),
-        (7.1, " here"),
-        (8.6, " then"),
-        (11.6, " more."),
+        (1.0, " one"), (2.0, " two"), (5.0, " shared"), (6.0, " words"),
+        (7.1, " here"), (8.6, " then"), (11.6, " more."),
     ]
 
 
@@ -1323,11 +1298,9 @@ def test_a_loop_timed_into_a_windows_last_second_is_not_written(
         samples=14 * whisper_mod.SAMPLE_RATE,
         results=[
             {"segments": [_words_seg([(1.0, 2.0, " one"), (2.0, 3.0, " two.")]), loop]},
-            {
-                "segments": [
-                    _words_seg([(4.0, 5.0, " The"), (5.0, 6.0, " next"), (6.0, 9.0, " window.")]),
-                ]
-            },
+            {"segments": [
+                _words_seg([(4.0, 5.0, " The"), (5.0, 6.0, " next"), (6.0, 9.0, " window.")]),
+            ]},
         ],
     )
 
@@ -1336,11 +1309,7 @@ def test_a_loop_timed_into_a_windows_last_second_is_not_written(
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
         # " window." runs 3 s from " next"'s end: 1.4 s before its end (#222).
-        (1.0, " one"),
-        (2.0, " two."),
-        (8.0, " The"),
-        (9.0, " next"),
-        (11.6, " window."),
+        (1.0, " one"), (2.0, " two."), (8.0, " The"), (9.0, " next"), (11.6, " window."),
     ]
 
 
@@ -1366,15 +1335,9 @@ def test_where_one_window_loops_over_the_shared_seconds_the_other_writes_them(
         second.insert(0, read)
     else:
         first.append(_words_seg([(4.5, 5.0, " early"), (8.5, 9.0, " late")]))
-        second.insert(
-            0,
-            _words_seg(
-                [
-                    (t - 4.0, e - 4.0, " na")
-                    for t, e in [(4.2 + i * 0.6, 4.5 + i * 0.6) for i in range(9)]
-                ]
-            ),
-        )
+        second.insert(0, _words_seg([(t - 4.0, e - 4.0, " na") for t, e in [
+            (4.2 + i * 0.6, 4.5 + i * 0.6) for i in range(9)
+        ]]))
     _stub_anchored(
         monkeypatch,
         samples=14 * whisper_mod.SAMPLE_RATE,
@@ -1385,8 +1348,5 @@ def test_where_one_window_loops_over_the_shared_seconds_the_other_writes_them(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
-        (1.0, " one"),
-        (4.5, " early"),
-        (8.5, " late"),
-        (13.0, " last."),
+        (1.0, " one"), (4.5, " early"), (8.5, " late"), (13.0, " last."),
     ]
