@@ -6,7 +6,10 @@
 # `roman`, and the Urdu-script forms under `script`. dsj matches these lists
 # exactly, after folding case, punctuation and the Arabic-script letter
 # variants (ي/ی, ك/ک, ه/ہ); it does not match by edit distance (dsj/hatao.py
-# says why).
+# says why). Spellings seen 5 or more times in the public Roman Urdu tweets of
+# community-datasets/roman_urdu_hate_speech were added on 3 Oct 2026 (#214,
+# scratch/wordlist_crosscheck.py), with a few an engine wrote for a listed word
+# spoken by a synthetic voice (#152); a fluent reader still rules on the rest.
 #
 # Left out on purpose because their ordinary meaning is common: kutta, kutti
 # (dog), suar (pig), ullu (owl), chod alone (a recogniser writes it for chhod,
@@ -22,66 +25,68 @@
 [[entry]]
 name = "madarchod"
 roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod", "madarchodd",
-         "madarchodo", "madar chod", "mader chod", "maadar chod"]
+         "madarchodo", "madrchod", "madar chod", "mader chod", "maadar chod"]
 script = ["مادرچود", "مادر چود"]
 
 [[entry]]
 name = "behenchod"
 roman = ["behenchod", "bhenchod", "benchod", "bhanchod", "behnchod", "bhainchod",
          "bainchod", "bhencho", "bencho", "bhenchodd", "behanchod", "behen chod",
-         "bhen chod", "bahen chod", "behn chod", "bhain chod"]
+         "bahanchod", "bhenchodo", "bhen chod", "bahen chod", "behn chod", "bhain chod"]
 script = ["بہنچود", "بھنچود", "بہن چود", "بھن چود"]
 
 [[entry]]
 name = "chutiya"
 roman = ["chutiya", "chutia", "chootiya", "chootia", "chutiye", "chutiyay", "chootiye",
-         "chutiyapa", "choot", "chut"]
+         "chutiyapa", "chutiyo", "chutya", "choot", "chut"]
 script = ["چوتیا", "چوتیے", "چوتیاپا", "چوت"]
 
 [[entry]]
 name = "gandu"
-roman = ["gandu", "gaandu", "gandoo", "gaand", "gaandmasti"]
+roman = ["gandu", "gaandu", "gandoo", "gando", "gaand", "gaandmasti"]
 script = ["گانڈو", "گانڈ"]
 
 [[entry]]
 name = "lund"
-roman = ["lund", "lunnd", "lauda", "lawda", "loda", "lavda", "laude", "lawde", "lauday",
-         "lodu", "lauray", "loray"]
+roman = ["lund", "lunnd", "lauda", "lawda", "loda", "lavda", "laude", "lawde", "lavde",
+         "lauday", "lodu", "lauray", "loray"]
 script = ["لنڈ", "لوڑا", "لوڑے", "لوڑو", "لوڈا", "لوڈے"]
 
 [[entry]]
 name = "bhosdi"
 roman = ["bhosdi", "bhosdike", "bhosadike", "bhosdiwala", "bhosdiwale", "bhosda", "bhosri",
-         "bhosriwala", "bhosrike", "bhosdi ke", "bhosri ke", "bhosdi wala", "bhosdi wale",
-         "bhosri wala"]
+         "bhosriwala", "bhosrike", "bhosra", "bhosari", "bhosdi ke", "bhosri ke", "bhosdi wala",
+         "bhosdi wale", "bhosri wala"]
 script = ["بھوسڑی", "بھوسڑا", "بھوسڑیکے", "بھوسڑی کے"]
 
 [[entry]]
 name = "randi"
-roman = ["randi", "raandi", "rundi", "randwa", "randibaz", "randibaaz", "randi baz",
-         "randi baaz"]
+roman = ["randi", "raandi", "randdi", "rundi", "randiya", "randiyan", "randiyo", "randiyon",
+         "randion", "randwa", "randibaz", "randibaaz", "randi baz", "randi baaz"]
 script = ["رنڈی", "رنڈوا", "رنڈیباز", "رنڈی باز"]
 
 [[entry]]
 name = "harami"
-roman = ["harami", "haraami", "haramzada", "haraamzada", "haramzadi", "haramzade",
-         "haramzaday", "haramkhor", "haram zada", "haram zadi", "haram zade", "haram khor"]
-script = ["حرامی", "حرامزادہ", "حرامزادی", "حرامزادے", "حرامخور", "حرام زادہ", "حرام زادی",
-          "حرام زادے", "حرام خور"]
+roman = ["harami", "haraami", "harrami", "hrami", "haramzada", "haraamzada", "haramzadi",
+         "haramzade", "haramzaday", "haramzad", "haramkhor", "haramkhoor", "haram zada",
+         "haram zadi", "haram zade", "haram khor"]
+script = ["حرامی", "حرامزادہ", "حرامزاد", "حرامزادی", "حرامزادے", "حرامخور", "حرام زادہ",
+          "حرام زادی", "حرام زادے", "حرام خور"]
 
 [[entry]]
 name = "bharwa"
-roman = ["bharwa", "bhadwa", "bharwe", "bhadwe", "bharway", "bhadway", "bharva", "bhadva"]
+roman = ["bharwa", "bhadwa", "bharwe", "bhadwe", "bhadve", "bharway", "bhadway", "bharva",
+         "bhadva", "bharwi", "bhadwi"]
 script = ["بھڑوا", "بھڑوے"]
 
 [[entry]]
 name = "kanjar"
-roman = ["kanjar", "kanjri", "kanjari", "kanjer"]
+roman = ["kanjar", "kanjri", "kanjari", "kanjeri", "kanjer"]
 script = ["کنجر", "کنجری"]
 
 [[entry]]
 name = "jhant"
-roman = ["jhant", "jhaant", "jhantu", "jhaantu"]
+roman = ["jhant", "jhaant", "jhaat", "jhantu", "jhaantu", "jhatu"]
 script = ["جھانٹ", "جھانٹو"]
 
 [[entry]]

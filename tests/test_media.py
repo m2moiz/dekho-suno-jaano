@@ -384,14 +384,30 @@ def test_mute_silences_exactly_the_spans_of_a_wav_and_nothing_else(
     original, muted = _samples(ready_wav), _samples(out)
     assert len(muted) == len(original)
     silent = np.flatnonzero(muted != original)
-    # Every sample of each span is silent, and at most one 5 ms frame more.
+    # Every sample of each span is silent, and only the fades either side change.
     for a, b in ((0.5, 0.75), (1.2, 1.3)):
         assert not muted[int(a * 16000) : int(b * 16000)].any()
-    frame = int(media.MUTE_FRAME_S * 16000)
-    inside = ((silent >= 0.5 * 16000 - frame) & (silent < 0.75 * 16000 + frame)) | (
-        (silent >= 1.2 * 16000 - frame) & (silent < 1.3 * 16000 + frame)
+    fade = int(media.MUTE_FADE_S * 16000)
+    inside = ((silent >= 0.5 * 16000 - fade) & (silent < 0.75 * 16000 + fade)) | (
+        (silent >= 1.2 * 16000 - fade) & (silent < 1.3 * 16000 + fade)
     )
     assert inside.all(), "a sample outside every span changed"
+
+
+def test_mute_fades_into_and_out_of_the_silence_rather_than_cutting(
+    ready_wav: Path, tmp_path: Path
+) -> None:
+    """A sound dropped to 0 in one sample is a click at the mute's edge (#216).
+
+    The sine's own steepest step between two samples is the most any sample of
+    the render may move by. A cut at a 440 Hz sine's crest steps by its whole
+    height, about five times that.
+    """
+    original = _samples(ready_wav)
+    out = media.mute(ready_wav, [(0.5, 0.75), (1.2, 1.3)], tmp_path / "clean.wav")
+    muted = _samples(out)
+    own = float(np.abs(np.diff(original)).max())
+    assert float(np.abs(np.diff(muted)).max()) <= 1.25 * own
 
 
 def test_mute_keeps_the_picture_and_the_length_of_a_movie(
@@ -421,13 +437,20 @@ def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
         str(late),
     )
     out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.mov")
-    quiet = np.flatnonzero(np.abs(_samples(out)) < 1e-4)
-    # The longest quiet run: a sine crosses zero by itself, a sample at a time.
+    # The loudest sample of each 5 ms, two cycles of the sine: its height, where
+    # one sample alone would cross zero by itself.
+    level = np.abs(_samples(out))
+    height = level[: len(level) // 80 * 80].reshape(-1, 80).max(axis=1)
+    quiet = np.flatnonzero(height < 0.5 * height.max())
     runs = np.split(quiet, np.flatnonzero(np.diff(quiet) != 1) + 1)
     longest = max(runs, key=len)
-    # AAC's own delay moves the edges a few ms either way; the offset was 479 ms.
-    assert longest[0] / 16000 == pytest.approx(1.0, abs=0.03)
-    assert longest[-1] / 16000 == pytest.approx(1.5, abs=0.03)
+    # Below half height is the middle of each fade onward, which the AAC
+    # encoder's ringing around a fade does not move, as it does the first
+    # sample under 1e-4. AAC's own delay moves the edges a few ms either way
+    # (the render's sound starts one 1024-sample frame before the input's); the
+    # offset was 479 ms.
+    assert longest[0] * 0.005 == pytest.approx(1.0, abs=0.03)
+    assert (longest[-1] + 1) * 0.005 == pytest.approx(1.5, abs=0.03)
 
 
 def test_mute_reports_progress_in_seconds_written(ready_wav: Path, tmp_path: Path) -> None:
