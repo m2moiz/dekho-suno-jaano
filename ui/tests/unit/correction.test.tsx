@@ -162,7 +162,11 @@ describe("the Correct button", () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
     act(() => select("the the", "the the"));
-    fireEvent.click(screen.getByRole("button", { name: "Correct…" }));
+    // Enabled once the page's effects have read the selection: a click
+    // before that, in the frame after the toolbar appears, does nothing.
+    const correct = screen.getByRole("button", { name: "Correct…" }) as HTMLButtonElement;
+    await vi.waitFor(() => expect(correct.disabled).toBe(false));
+    fireEvent.click(correct);
     const field = await screen.findByRole("textbox", { name: "What was said" });
     expect((field as HTMLInputElement).value).toBe("the the");
     fireEvent.change(field, { target: { value: "the" } });

@@ -201,6 +201,21 @@ describe("TranscriptPage, editing", () => {
     });
   });
 
+  /**
+   * Select `word` and wait until Mute takes it, as a person waits for an
+   * enabled button. findByRole returns once the toolbar is in the page, which
+   * can be before React has run the effects that listen for the selection:
+   * a click in that gap, less than a frame, found Mute still disabled and did
+   * nothing (3 of 30 runs on 2026-10-03; every run when the click is made in
+   * the commit itself).
+   */
+  async function selectReady(word: string, button = "Mute"): Promise<HTMLButtonElement> {
+    act(() => selectWord(word));
+    const found = screen.getByRole("button", { name: button }) as HTMLButtonElement;
+    await vi.waitFor(() => expect(found.disabled).toBe(false));
+    return found;
+  }
+
   function selectWord(word: string): void {
     for (const p of document.querySelectorAll("article p")) {
       const text = p.firstChild as Text;
@@ -221,8 +236,7 @@ describe("TranscriptPage, editing", () => {
   it("mutes the selected word, saves it, and Cmd+Z and Cmd+Shift+Z take it back and forth", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
-    act(() => selectWord("there"));
-    fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+    fireEvent.click(await selectReady("there"));
     expect(painted(registry, "dsj-muted")).toEqual(["there."]);
     await vi.waitFor(() => expect(saved).toHaveLength(1));
     const first = saved[0] as Content;
@@ -244,8 +258,7 @@ describe("TranscriptPage, editing", () => {
   it("leaves Cmd+Z to a text field being typed in", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
-    act(() => selectWord("Hello"));
-    fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+    fireEvent.click(await selectReady("Hello"));
     const field = document.createElement("input");
     document.body.append(field);
     act(() => {
@@ -253,6 +266,33 @@ describe("TranscriptPage, editing", () => {
     });
     expect(painted(registry, "dsj-muted")).toEqual(["Hello"]);
     field.remove();
+  });
+
+  it("offers no editing at all until the edit list has arrived", async () => {
+    // A mute made before the list arrived would be lost when it landed. The
+    // page never offers one: it draws nothing editable until the list is in.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
+    fetchMock.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/transcripts/7/edits" && request.method === "GET") await held;
+      return answer(request);
+    });
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some(([r]) => new URL(r.url).pathname === "/api/transcripts/7")).toBe(true),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.queryByRole("toolbar", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mute" })).toBeNull();
+    expect(document.querySelectorAll("article p")).toHaveLength(0);
+    release();
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    expect(painted(registry, "dsj-muted")).toEqual(["there."]);
   });
 
   it("says that edits are kept and their undo history is not", async () => {
