@@ -125,6 +125,11 @@ any other whisper run reports 0% and then nothing until transcription ends:
 dsj suno voice-note.m4a -o transcript.json --roman-urdu
 ```
 
+`--roman-urdu` is for Urdu and English mixed in one sentence. For speech that is mostly
+Urdu, `--engine whisper --language ur` makes about half the errors (21 to 23% of words
+against 41 to 43% on a public Urdu set), written in Urdu script. Measured per mode in
+[references/engines.md](references/engines.md#which-mode-by-error-rate).
+
 Engine choice, the install bundles, and the extra step `--engine sherpa` needs are in
 [references/engines.md](references/engines.md).
 
