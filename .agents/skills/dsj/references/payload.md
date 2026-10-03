@@ -75,6 +75,14 @@ measured. To know what was said in a span listed here, listen to it. On the five
 the rule was measured on, every sentence it matched was a loop. It runs under every
 engine; on a parakeet transcript of a 17-minute English call it matched nothing.
 
+whisper can also split a loop into sentences, one word each: on a synthetic test file it
+wrote one word as 13 one-word sentences. So five or more consecutive sentences with the
+same words are a loop too when, taken together, they make more than six words: seven
+one-word sentences, or five of two words. The whole run is one entry here, from its first
+sentence's start to its last one's end, with every word of it counted. A hand-checked
+transcript of 14 minutes of real speech never repeats a sentence and never says one word
+more than four times in a row. A split loop is not decoded again.
+
 **No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
 than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
 public fixture. The level is read from the input file decoded to mono float, where ffmpeg

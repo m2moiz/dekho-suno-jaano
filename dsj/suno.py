@@ -314,6 +314,56 @@ def is_loop(text: str) -> bool:
     return len(words) > 6 and len(set(words)) <= max(2, len(words) / 3)
 
 
+# A loop whisper split across sentences (#223): on #152's synthetic mixed.wav,
+# plain whisper wrote one word as 13 one-word sentences, which is_loop, judging
+# one sentence at a time, never caught. So LOOP_RUN_MIN or more consecutive
+# sentences with the same words are also a loop when, taken together, is_loop
+# calls them one: more than six words, which for one-word sentences means seven
+# of them. Measured 3 Oct 2026 by scratch/loop_runs.py over the 57 transcripts
+# in scratch/real_bench/runs/ (#148's public fixture and the owner's
+# recordings): #148's hand-checked reference of the fixture, 2,883 words of
+# real speech, never repeats a sentence and repeats a word back to back at most
+# 4 times, so 5 is one past anything it holds. At 5 the rule takes 71 distinct
+# runs out of 38 of the 57 transcripts. 51 of them no other decode of the same
+# recording repeats 5 times near the same seconds: a loop comes and goes
+# between runs (#100), a speaker's own words do not. The other 20 are 5 to 31
+# sentences long, beyond anything in the reference, and the script lists them
+# for a person to listen to. At 3 the rule would also take a short phrase said
+# 3 or 4 times over, some at a speaking rate the numbers cannot tell from speech.
+LOOP_RUN_MIN = 5
+
+
+def _loop_runs(sentences: list[Sentence]) -> list[tuple[int, int]]:
+    """Each split loop in `sentences`, as the indexes of its first and last sentence (#223).
+
+    A split loop is LOOP_RUN_MIN or more consecutive sentences with the same
+    words, compared as is_loop compares them, whose words together is_loop
+    calls a loop. A sentence with no words at all, which whisper writes as a run
+    of exclamation marks inside such a loop, neither breaks a run nor counts
+    toward it, and goes with the run when it lies inside one.
+    """
+    runs: list[tuple[int, int]] = []
+    current: tuple[str, ...] = ()
+    first = last = count = 0
+
+    def close() -> None:
+        if count >= LOOP_RUN_MIN and is_loop(" ".join(current * count)):
+            runs.append((first, last))
+
+    for i, s in enumerate(sentences):
+        words = tuple(w.lower() for w in _WORD.findall(str(s["text"])))
+        if not words:
+            continue
+        if words == current:
+            count += 1
+            last = i
+            continue
+        close()
+        current, first, last, count = words, i, i, 1
+    close()
+    return runs
+
+
 def _without_loops(transcription: Transcription) -> tuple[Transcription, list[dict[str, Any]]]:
     """`transcription` with its repetition loops taken out, and where they were.
 
@@ -333,10 +383,31 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
     `unclear` runs earliest first too, and `text` is rebuilt from what is left.
     Under parakeet and sherpa the rule catches nothing, measured on the English
     call above, and the transcription passes through untouched.
+
+    A loop split into consecutive sentences (_loop_runs) leaves the same way,
+    the whole run as one entry from its first sentence's start to its last
+    one's end, with every word of the run counted (#223).
     """
     kept: list[Sentence] = []
     unclear: list[dict[str, Any]] = []
-    for s in transcription.sentences:
+    sentences = transcription.sentences
+    runs = dict(_loop_runs(sentences))
+    skip_to = -1
+    for i, s in enumerate(sentences):
+        if i <= skip_to:
+            continue
+        if i in runs:
+            skip_to = runs[i]
+            run = sentences[i : skip_to + 1]
+            unclear.append(
+                {
+                    "start": s["start"],
+                    "end": max(cast("float", r["end"]) for r in run),
+                    "reason": LOOP_REASON,
+                    "words": sum(len(_WORD.findall(str(r["text"]))) for r in run),
+                }
+            )
+            continue
         text = str(s["text"])
         if is_loop(text):
             unclear.append(

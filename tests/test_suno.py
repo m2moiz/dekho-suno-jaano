@@ -40,6 +40,7 @@ from dsj.suno import (
     NO_SPEECH_REASON,
     OVERLAP_S,
     Progress,
+    _without_loops,  # pyright: ignore[reportPrivateUsage]
     _without_overlaps,  # pyright: ignore[reportPrivateUsage]
     is_loop,
     silences,
@@ -1489,6 +1490,76 @@ def test_a_loop_leaves_the_sentences_and_is_recorded_as_unclear(
     assert payload["text"] == "We looked at it. Then we left."
     assert payload["unclear"] == [{"start": 4.0, "end": 6.6, "reason": LOOP_REASON, "words": 9}]
     assert LOOP_REASON == "repetition loop"
+
+
+def _said(start: float, text: str, length: float = 0.4) -> dict[str, Any]:
+    """One sentence of `text` from `start`, its words spread over `length` seconds."""
+    pieces = text.split(" ")[1:] if text.startswith(" ") else [text]
+    step = length / max(len(pieces), 1)
+    tokens = [
+        {"t": round(start + i * step, 3), "w": f" {w}", "e": round(start + (i + 1) * step, 3)}
+        for i, w in enumerate(pieces)
+    ]
+    return {"start": start, "end": round(start + length, 3), "text": text,
+            "tokens": with_char_offsets(tokens)}
+
+
+def test_a_loop_split_into_one_word_sentences_is_taken_out_as_one_span() -> None:
+    """#223's shape: one word as 13 one-word sentences, wordless ones among them.
+
+    Plain whisper wrote that over 58.5 to 74.4 s of #152's mixed.wav, and
+    is_loop, judging one sentence at a time, kept all of it. The whole run
+    leaves as one `unclear` span with its 13 words; the speech either side stays.
+    """
+    loop = [
+        " Na.", " Na!", " Na.", " Na.", " Na.", " !!!", " !!!", " Na.", " Na!!",
+        " Na.", " Na.", " Na.", " Na!", " Na.", " Na.",
+    ]
+    sentences = [
+        _said(55.0, " We looked at it."),
+        *[_said(58.5 + i, text) for i, text in enumerate(loop)],
+        _said(75.0, " Then we left."),
+    ]
+
+    kept, unclear = _without_loops(Transcription(text="", sentences=sentences))
+
+    assert [s["text"] for s in kept.sentences] == [" We looked at it.", " Then we left."]
+    assert unclear == [{"start": 58.5, "end": 72.9, "reason": LOOP_REASON, "words": 13}]
+
+
+@pytest.mark.parametrize(
+    ("phrase", "times", "loop"),
+    [
+        # #148's hand-checked reference repeats a word back to back at most 4
+        # times: under five sentences is never a split loop.
+        (" Haan bilkul.", 4, False),
+        # Five or more, and more than six words together, as is_loop counts.
+        (" Haan bilkul.", 5, True),
+        (" No.", 6, False),
+        (" No.", 7, True),
+    ],
+)
+def test_a_split_loop_needs_five_sentences_and_more_than_six_words(
+    phrase: str, times: int, loop: bool
+) -> None:
+    """The cutoff scratch/loop_runs.py measured, at each of its edges (#223)."""
+    sentences = [_said(float(i), phrase) for i in range(times)]
+
+    kept, unclear = _without_loops(Transcription(text="", sentences=sentences))
+
+    assert (len(unclear) == 1) is loop
+    assert len(kept.sentences) == (0 if loop else times)
+
+
+def test_sentences_repeating_a_phrase_with_others_between_them_are_not_a_split_loop() -> None:
+    """A run is consecutive sentences: a different one between them ends it (#223)."""
+    sentences = [
+        _said(float(i), " Okay." if i % 2 else " Haan ji haan.") for i in range(12)
+    ]
+
+    _, unclear = _without_loops(Transcription(text="", sentences=sentences))
+
+    assert unclear == []
 
 
 def test_a_transcript_with_no_loop_says_so_with_an_empty_list(
