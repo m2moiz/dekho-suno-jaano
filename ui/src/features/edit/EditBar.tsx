@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { atLabel } from "@/features/bleep/matches";
@@ -123,13 +123,17 @@ type Props = {
   edit: EditReading;
   selected: Selected | null;
   saving: SaveState;
+  /** Open the timing strip for one word (#85). */
+  onTiming: (word: number) => void;
+  /** Shown under the buttons, in the bar: the timing strip while it is open. */
+  children?: ReactNode;
 };
 
 /**
  * Undo, Redo, and what can be done to the words selected: above the
  * transcript, and in reach as it scrolls.
  */
-export function EditBar({ editor, content, edit, selected, saving }: Props) {
+export function EditBar({ editor, content, edit, selected, saving, onTiming, children }: Props) {
   const [correcting, setCorrecting] = useState<{ start: number; stop: number } | null>(null);
   const undo = editor.undoLabel();
   const redo = editor.redoLabel();
@@ -205,6 +209,18 @@ export function EditBar({ editor, content, edit, selected, saving }: Props) {
       >
         Correct…
       </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={selected === null || selected.first !== selected.last}
+        onMouseDown={keepSelection}
+        title="Drag the selected word's edges where the recogniser put them wrong"
+        onClick={() => {
+          if (selected !== null && selected.first === selected.last) onTiming(selected.first);
+        }}
+      >
+        Timing…
+      </Button>
       {correcting !== null && (
         <CorrectDialog
           heard={textOf(content, correcting.start, correcting.stop)}
@@ -221,6 +237,7 @@ export function EditBar({ editor, content, edit, selected, saving }: Props) {
       <span className="ml-auto text-sm text-muted-foreground" role="status">
         {SAVE_TEXT[saving]}
       </span>
+      {children}
       <p className="basis-full text-xs text-muted-foreground">
         Edits are saved as you make them. Undo goes back up to {HISTORY_LIMIT.toLocaleString("en")} steps
         while this page is open; closing or reloading it keeps the edits and forgets their undo.

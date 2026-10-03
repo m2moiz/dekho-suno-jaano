@@ -577,7 +577,12 @@ A transcript with word end times (v0.2.0 on) can be edited in the app: select
 words and mute them, or retype them with **Correct…** when the recogniser
 misheard. A correction keeps the same stretch of the recording, so no word
 around it moves; the new words share it in proportion to their length, lose
-their unsure tint, and the library lists the transcript as edited. An edit changes the transcript's edit list, the same file
+their unsure tint, and the library lists the transcript as edited. When a word's
+edge is in the wrong place, which matters most for whisper, whose word ends are
+inferred, select the word and press **Timing…**: drag either edge over the
+waveform, or focus it and use the arrow keys. The word next to it gives up the
+time the edge moves into, and never overlaps; a whole drag is one undo step.
+An edit changes the transcript's edit list, the same file
 `dsj hatao` walks, kept beside the library in `edits/`; the recording and the
 transcript JSON are never written to. Every edit is saved as you make it.
 Cmd+Z undoes and Cmd+Shift+Z redoes, up to 1,000 steps, stepping only through

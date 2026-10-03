@@ -4,6 +4,7 @@ import { api } from "@/api/client";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
 import { EditBar, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
 import { type Editable, loadEditable, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
+import { TimingStrip } from "@/features/edit/TimingStrip";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { fileName } from "@/features/library/describe";
@@ -113,11 +114,32 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const selected = useSelection(edit, article);
   const renderable = useLatest(editable.renderable);
   const controls = useRef<PlayerControls | null>(null);
+  // The word whose edges are being dragged (#85), while the strip is open.
+  const [timing, setTiming] = useState<number | null>(null);
   useUndoKeys(editor);
   useMutedPaint(edit, content, article);
   return (
     <Page opened={opened} reading={edit.reading} article={article} muteSpans={renderable.spans} controls={controls}>
-      <EditBar editor={editor} content={content} edit={edit} selected={selected} saving={saving} />
+      <EditBar
+        editor={editor}
+        content={content}
+        edit={edit}
+        selected={selected}
+        saving={saving}
+        onTiming={setTiming}
+      >
+        {timing !== null && timing < edit.first.length && (
+          <TimingStrip
+            editor={editor}
+            content={content}
+            edit={edit}
+            word={timing}
+            recordingId={opened.recording.id}
+            controls={controls}
+            onClose={() => setTiming(null)}
+          />
+        )}
+      </EditBar>
       <BleepPanel
         transcriptId={transcriptId}
         editor={editor}

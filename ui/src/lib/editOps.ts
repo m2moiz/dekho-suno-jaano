@@ -47,8 +47,14 @@ export type DismissOp = { kind: "dismiss"; entries: number[] };
  */
 export type CorrectOp = { kind: "correct"; start: number; stop: number; entries: Entry[] };
 
+/**
+ * Put `entries` in place of entries [start, stop): a word's edge dragged
+ * (#85), its neighbours and the pauses between them re-timed to match.
+ */
+export type RetimeOp = { kind: "retime"; start: number; stop: number; entries: Entry[] };
+
 // Every kind of edit there is. A new kind joins this union and `KINDS` below.
-export type EditOp = MuteOp | FlagOp | DismissOp | CorrectOp;
+export type EditOp = MuteOp | FlagOp | DismissOp | CorrectOp | RetimeOp;
 
 /** What every kind of edit must say: how to do it, how to undo it, and what to call it. */
 export type EditKind<O extends EditOp> = {
@@ -93,12 +99,7 @@ const KINDS: Kinds = {
     describe: () => "dismiss",
   },
   correct: {
-    apply: (content, op) => {
-      if (!(0 <= op.start && op.start <= op.stop && op.stop <= content.length)) {
-        throw new RangeError(`entries [${op.start}, ${op.stop}) are not inside a list of ${content.length}`);
-      }
-      return [...content.slice(0, op.start), ...op.entries, ...content.slice(op.stop)];
-    },
+    apply: (content, op) => splice(content, op.start, op.stop, op.entries),
     invert: (before, op) => ({
       kind: "correct",
       start: op.start,
@@ -107,7 +108,25 @@ const KINDS: Kinds = {
     }),
     describe: () => "correction",
   },
+  retime: {
+    apply: (content, op) => splice(content, op.start, op.stop, op.entries),
+    invert: (before, op) => ({
+      kind: "retime",
+      start: op.start,
+      stop: op.start + op.entries.length,
+      entries: before.slice(op.start, op.stop),
+    }),
+    describe: () => "timing",
+  },
 };
+
+/** `content` with entries [start, stop) replaced by `entries`. */
+function splice(content: Content, start: number, stop: number, entries: Entry[]): Content {
+  if (!(0 <= start && start <= stop && stop <= content.length)) {
+    throw new RangeError(`entries [${start}, ${stop}) are not inside a list of ${content.length}`);
+  }
+  return [...content.slice(0, start), ...entries, ...content.slice(stop)];
+}
 
 /** The mute that puts each of `entries` back as it is in `before`. */
 function mutedAsBefore(before: Content, entries: number[]): MuteOp {
