@@ -8,7 +8,15 @@ const fetchMock = vi.hoisted(() => {
   return mock;
 });
 
-import { MuteGate, spanReached } from "../../src/features/bleep/liveMute";
+import {
+  fades,
+  fadesInWebAudio,
+  gainAt,
+  MUTE_FADE_S,
+  MuteGate,
+  type Route,
+  spanReached,
+} from "../../src/features/bleep/liveMute";
 import { atLabel } from "../../src/features/bleep/matches";
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
@@ -28,14 +36,20 @@ describe("spanReached", () => {
   });
 });
 
-describe("MuteGate", () => {
+describe("MuteGate in WebKit, which switches muted on each frame", () => {
   function media() {
     return { currentTime: 0, paused: false, playbackRate: 1, muted: false } as unknown as HTMLMediaElement;
   }
 
+  it("is how WebKit mutes, and only WebKit", () => {
+    expect(fadesInWebAudio("Apple Computer, Inc.")).toBe(false);
+    expect(fadesInWebAudio("Google Inc.")).toBe(true);
+    expect(fadesInWebAudio("")).toBe(true);
+  });
+
   it("mutes from the frame before a span and unmutes once past it", () => {
     const element = media();
-    const gate = new MuteGate(element);
+    const gate = new MuteGate(element, null);
     gate.setSpans([[1, 2]]);
     gate.update(0.9);
     expect(element.muted).toBe(false);
@@ -51,7 +65,7 @@ describe("MuteGate", () => {
   it("leaves a person's own mute alone, and never undoes it", () => {
     const element = media();
     element.muted = true;
-    const gate = new MuteGate(element);
+    const gate = new MuteGate(element, null);
     gate.setSpans([[1, 2]]);
     gate.update(1.5);
     gate.update(2.5);
@@ -60,7 +74,7 @@ describe("MuteGate", () => {
 
   it("gives the sound back when its spans go, and when it is put away", () => {
     const element = media();
-    const gate = new MuteGate(element);
+    const gate = new MuteGate(element, null);
     gate.setSpans([[0, 2]]);
     expect(element.muted).toBe(true);
     gate.setSpans([]);
@@ -68,6 +82,201 @@ describe("MuteGate", () => {
     gate.setSpans([[0, 2]]);
     gate.dispose();
     expect(element.muted).toBe(false);
+  });
+});
+
+describe("gainAt", () => {
+  it("is the render's raised cosine: 1 a fade away, 0.5 halfway, 0 across the span", () => {
+    const spans = [[1, 2]] as const;
+    const half = MUTE_FADE_S / 2;
+    expect(gainAt(spans, 0.9)).toBe(1);
+    expect(gainAt(spans, 1 - MUTE_FADE_S)).toBe(1);
+    expect(gainAt(spans, 1 - half)).toBeCloseTo(0.5, 9);
+    // dsj/media.py `_silence` at a quarter of the fade: (1 - cos(pi * 0.75)) / 2.
+    expect(gainAt(spans, 1 - 0.75 * MUTE_FADE_S)).toBeCloseTo((1 - Math.cos(Math.PI * 0.75)) / 2, 9);
+    expect(gainAt(spans, 1)).toBe(0);
+    expect(gainAt(spans, 1.5)).toBe(0);
+    expect(gainAt(spans, 2)).toBe(0);
+    expect(gainAt(spans, 2 + half)).toBeCloseTo(0.5, 9);
+    expect(gainAt(spans, 2 + MUTE_FADE_S)).toBe(1);
+  });
+
+  it("joins fades that meet, and multiplies them as a render does", () => {
+    // The fade back after the first span overlaps the fade out before the next.
+    expect(fades([[1, 2], [2.004, 3]])).toEqual([
+      [1 - MUTE_FADE_S, 1],
+      [2.004 - MUTE_FADE_S, 2 + MUTE_FADE_S],
+      [3, 3 + MUTE_FADE_S],
+    ]);
+    expect(gainAt([[1, 2], [2.004, 3]], 2.002)).toBeCloseTo(
+      ((1 - Math.cos(Math.PI * 0.4)) / 2) * ((1 - Math.cos(Math.PI * 0.4)) / 2),
+      9,
+    );
+  });
+});
+
+describe("MuteGate through Web Audio", () => {
+  type Call = [string, ...unknown[]];
+
+  /** A media element and a Web Audio route that write down what is asked of them. */
+  function rig(currentTime = 0.9, paused = false) {
+    const element = { currentTime, paused, playbackRate: 1, muted: false, isConnected: true };
+    const calls: Call[] = [];
+    const clock = { currentTime: 10, state: "running" as AudioContextState };
+    let made = 0;
+    let released = 0;
+    const route: Route = {
+      context: { ...clock, get currentTime() { return clock.currentTime; }, resume: () => Promise.resolve() },
+      gain: {
+        cancelScheduledValues: (at: number) => (calls.push(["cancel", at]), undefined as unknown as AudioParam),
+        setValueAtTime: (value: number, at: number) => (calls.push(["set", value, at]), undefined as unknown as AudioParam),
+        setValueCurveAtTime: (values: Iterable<number>, at: number, length: number) => (
+          calls.push(["curve", Array.from(values), at, length]), undefined as unknown as AudioParam
+        ),
+      },
+      release: () => {
+        released += 1;
+      },
+    };
+    const gate = new MuteGate(element as unknown as HTMLMediaElement, () => {
+      made += 1;
+      return route;
+    });
+    return { element, calls, clock, gate, made: () => made, released: () => released };
+  }
+
+  function curves(calls: Call[]) {
+    return calls.filter((c) => c[0] === "curve").map(([, values, at, length]) => ({
+      values: values as number[],
+      at: at as number,
+      length: length as number,
+    }));
+  }
+
+  it("fades out over the 5 ms before a span and back in over the 5 ms after it, on the audio clock", () => {
+    const { calls, gate } = rig(0.9);
+    gate.setSpans([[1, 2]]);
+    // Now on the audio clock is 10 s, and 0.9 s of the recording.
+    expect(calls.slice(0, 2)).toEqual([
+      ["cancel", 10],
+      ["set", 1, 10],
+    ]);
+    const [out, back] = curves(calls);
+    expect(out?.at).toBeCloseTo(10 + (1 - MUTE_FADE_S - 0.9), 9);
+    expect(out?.length).toBeCloseTo(MUTE_FADE_S, 9);
+    expect(out?.values[0]).toBe(1);
+    expect(out?.values[16]).toBeCloseTo(0.5, 6);
+    expect(out?.values.at(-1)).toBe(0);
+    expect(back?.at).toBeCloseTo(10 + (2 - 0.9), 9);
+    expect(back?.length).toBeCloseTo(MUTE_FADE_S, 9);
+    expect(back?.values[0]).toBe(0);
+    expect(back?.values.at(-1)).toBe(1);
+    expect(curves(calls)).toHaveLength(2);
+  });
+
+  it("schedules nothing again while both clocks agree, and starts again from a seek", () => {
+    const { calls, clock, element, gate } = rig(0.9);
+    gate.setSpans([[1, 2]]);
+    calls.length = 0;
+    clock.currentTime = 10.5;
+    element.currentTime = 1.401;
+    gate.update(element.currentTime);
+    expect(calls).toEqual([]);
+    // A seek back: what was scheduled goes, and the fade out is due again.
+    clock.currentTime = 10.6;
+    element.currentTime = 0.5;
+    gate.update(element.currentTime);
+    expect(calls.slice(0, 2)).toEqual([
+      ["cancel", 10.6],
+      ["set", 1, 10.6],
+    ]);
+    expect(curves(calls)[0]?.at).toBeCloseTo(10.6 + (1 - MUTE_FADE_S - 0.5), 9);
+  });
+
+  it("moves the schedule by the median of eight readings that stay out, and not by one", () => {
+    const { calls, clock, element, gate } = rig(0.5);
+    gate.setSpans([[1, 2]]);
+    calls.length = 0;
+    // The recording's clock reads 5 ms further on than the schedule says, frame after frame,
+    // as after a start whose last stalled frame set the schedule.
+    for (let i = 1; i <= 7; i++) {
+      clock.currentTime = 10 + i / 60;
+      element.currentTime = 0.5 + i / 60 + 0.005;
+      gate.update(element.currentTime);
+    }
+    expect(calls).toEqual([]);
+    clock.currentTime = 10 + 8 / 60;
+    element.currentTime = 0.5 + 8 / 60 + 0.005;
+    gate.update(element.currentTime);
+    expect(calls.slice(0, 2)).toEqual([
+      ["cancel", 10 + 8 / 60],
+      ["set", 1, 10 + 8 / 60],
+    ]);
+    // The fade out comes 5 ms sooner on the audio clock than first scheduled.
+    expect(curves(calls)[0]?.at).toBeCloseTo(10 + (1 - MUTE_FADE_S - 0.5) - 0.005, 9);
+  });
+
+  it("starts again at once when the recording's clock jumps", () => {
+    const { calls, clock, element, gate } = rig(0.5);
+    gate.setSpans([[1, 2]]);
+    calls.length = 0;
+    // A stall of two frames on the audio clock, none on the recording's: noise, as yet.
+    clock.currentTime = 10 + 2 / 60;
+    gate.update(element.currentTime);
+    expect(calls).toEqual([]);
+    clock.currentTime = 10.1;
+    gate.update(element.currentTime);
+    expect(calls.slice(0, 2)).toEqual([
+      ["cancel", 10.1],
+      ["set", 1, 10.1],
+    ]);
+    expect(curves(calls)[0]?.at).toBeCloseTo(10.1 + (1 - MUTE_FADE_S - 0.5), 9);
+  });
+
+  it("plays a fade twice as fast at 2x", () => {
+    const { calls, element, gate } = rig(0.9);
+    element.playbackRate = 2;
+    gate.setSpans([[1, 2]]);
+    const [out] = curves(calls);
+    expect(out?.at).toBeCloseTo(10 + (1 - MUTE_FADE_S - 0.9) / 2, 9);
+    expect(out?.length).toBeCloseTo(MUTE_FADE_S / 2, 9);
+  });
+
+  it("starting halfway through a fade, goes on from where the fade is", () => {
+    const { calls, gate } = rig(1 - MUTE_FADE_S / 2);
+    gate.setSpans([[1, 2]]);
+    expect(calls.some((c) => c[0] === "set")).toBe(false);
+    const [out] = curves(calls);
+    expect(out?.at).toBe(10);
+    expect(out?.length).toBeCloseTo(MUTE_FADE_S / 2, 9);
+    expect(out?.values[0]).toBeCloseTo(0.5, 6);
+    expect(out?.values.at(-1)).toBe(0);
+  });
+
+  it("takes no sound into Web Audio until a span is played over", () => {
+    const paused = rig(0.9, true);
+    paused.gate.setSpans([[1, 2]]);
+    expect(paused.made()).toBe(0);
+    const nothing = rig(0.9);
+    nothing.gate.setSpans([]);
+    expect(nothing.made()).toBe(0);
+  });
+
+  it("gives the sound back when put away, and lets go of an element that left the page", () => {
+    const { calls, clock, gate, released } = rig(1.5);
+    gate.setSpans([[1, 2]]);
+    clock.currentTime = 11;
+    gate.dispose();
+    expect(calls.slice(-2)).toEqual([
+      ["cancel", 11],
+      ["set", 1, 11],
+    ]);
+    expect(released()).toBe(0);
+    const gone = rig(1.5);
+    gone.gate.setSpans([[1, 2]]);
+    gone.element.isConnected = false;
+    gone.gate.dispose();
+    expect(gone.released()).toBe(1);
   });
 });
 

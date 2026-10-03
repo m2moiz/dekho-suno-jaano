@@ -11,6 +11,7 @@ The fixtures are seconds long and a few kilobytes; no binary is committed.
 from __future__ import annotations
 
 import gc
+import re
 import shutil
 import subprocess
 import warnings
@@ -408,6 +409,14 @@ def test_mute_fades_into_and_out_of_the_silence_rather_than_cutting(
     muted = _samples(out)
     own = float(np.abs(np.diff(original)).max())
     assert float(np.abs(np.diff(muted)).max()) <= 1.25 * own
+
+
+def test_the_apps_preview_fades_as_long_as_a_render() -> None:
+    """The app's live preview of a bleep fades with the render's own length (#225)."""
+    preview = Path(__file__).parents[1] / "ui/src/features/bleep/liveMute.ts"
+    found = re.search(r"^export const MUTE_FADE_S = ([0-9.]+);$", preview.read_text(), re.MULTILINE)
+    assert found, f"{preview} no longer declares MUTE_FADE_S"
+    assert float(found[1]) == media.MUTE_FADE_S
 
 
 def test_mute_keeps_the_picture_and_the_length_of_a_movie(
