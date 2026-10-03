@@ -1,5 +1,8 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
 
+import { MuteGate } from "@/features/bleep/liveMute";
+import type { Span } from "@/features/edit/editing";
+
 import { Button } from "@/components/ui/button";
 import { fromThrown, showError } from "@/features/errors/appError";
 import { durationLabel } from "@/features/library/describe";
@@ -51,11 +54,21 @@ const MEDIA_ERRORS: Record<number, string> = {
   4: "the browser cannot play this kind of file",
 };
 
+/** What the page can ask of the player, beyond a click on a word. */
+export type PlayerControls = {
+  /** Play from `from` and stop at `to`, both in seconds: audition one span (#84). */
+  hear: (from: number, to: number) => void;
+};
+
 type Props = {
   recording: RecordingRow;
   reading: Reading;
   /** The transcript's <article>, whose paragraphs the playhead paints. */
   article: RefObject<HTMLElement | null>;
+  /** Spans to play silent, as a render of the edit list would (#84). */
+  muteSpans?: readonly Span[] | null;
+  /** Filled in with this player's controls while it is mounted. */
+  controls?: RefObject<PlayerControls | null>;
 };
 
 /**
@@ -67,7 +80,7 @@ type Props = {
  * the words and the waveform move together (#80); anything else in an <audio>,
  * with no empty picture box.
  */
-export function Player({ recording, reading, article }: Props) {
+export function Player({ recording, reading, article, muteSpans = null, controls }: Props) {
   const media = useRef<HTMLMediaElement>(null);
   // A file this browser will not open plays from a copy of its sound instead,
   // which the server makes once and keeps (#110).
@@ -82,16 +95,42 @@ export function Player({ recording, reading, article }: Props) {
   // Views that move with the playhead's frame: the waveform's cursor (#61).
   const [frames] = useState(() => new Set<(seconds: number) => void>());
 
+  // Where an audition stops, in seconds, while one plays (#84).
+  const stopAt = useRef<number | null>(null);
+
   /** Hear `seconds`: the one seek a word, the waveform and anything later share. */
   const seek = (seconds: number) => {
     const element = media.current;
     if (element === null) return;
+    // Any seek ends an audition; `hear` sets its stop again after its own.
+    stopAt.current = null;
     element.currentTime = seconds;
     playhead.current?.follow();
     play(element);
   };
   const seekRef = useRef(seek);
   seekRef.current = seek;
+  // The live mute (#84), one per media element, with the spans it follows.
+  const gate = useRef<MuteGate | null>(null);
+  const spans = useRef<readonly Span[]>(muteSpans ?? []);
+
+  useEffect(() => {
+    spans.current = muteSpans ?? [];
+    gate.current?.setSpans(spans.current);
+  }, [muteSpans]);
+
+  useEffect(() => {
+    if (controls === undefined) return;
+    controls.current = {
+      hear: (from, to) => {
+        seekRef.current(from);
+        stopAt.current = to;
+      },
+    };
+    return () => {
+      controls.current = null;
+    };
+  }, [controls]);
 
   useEffect(() => {
     const element = media.current;
@@ -101,12 +140,21 @@ export function Player({ recording, reading, article }: Props) {
     for (const p of root.querySelectorAll<HTMLElement>("p[data-turn]")) {
       if (p.firstChild instanceof Text) texts[Number(p.dataset["turn"])] = p.firstChild;
     }
+    const mute = new MuteGate(element);
+    mute.setSpans(spans.current);
+    gate.current = mute;
     const head = new Playhead({
       media: element,
       reading,
       texts,
       onFollowing: setFollowing,
       onFrame: (seconds) => {
+        mute.update(seconds);
+        // An audition ends where it was asked to, on the frame that reaches it.
+        if (stopAt.current !== null && seconds >= stopAt.current) {
+          stopAt.current = null;
+          element.pause();
+        }
         for (const frame of frames) frame(seconds);
       },
     });
@@ -116,6 +164,7 @@ export function Player({ recording, reading, article }: Props) {
     if (!element.paused) head.start();
 
     const started = () => {
+      mute.update(element.currentTime);
       head.start();
       setPlaying(true);
     };
@@ -129,8 +178,12 @@ export function Player({ recording, reading, article }: Props) {
       if (element instanceof HTMLVideoElement) setNoPicture(element.videoWidth === 0);
     };
     const seeked = () => {
+      mute.update(element.currentTime);
       if (element.paused) head.paint();
     };
+    // Frames stop in a hidden tab and the sound does not: the element's own
+    // clock, a few times a second, keeps the mute in step there.
+    const ticked = () => mute.update(element.currentTime);
     const failed = () => {
       const code = element.error?.code ?? 0;
       if (code === NOT_SUPPORTED && !soundOnly) {
@@ -165,6 +218,7 @@ export function Player({ recording, reading, article }: Props) {
     element.addEventListener("pause", stopped);
     element.addEventListener("ended", stopped);
     element.addEventListener("seeked", seeked);
+    element.addEventListener("timeupdate", ticked);
     element.addEventListener("error", failed);
     element.addEventListener("loadedmetadata", loaded);
     root.addEventListener("click", click);
@@ -176,6 +230,7 @@ export function Player({ recording, reading, article }: Props) {
       element.removeEventListener("pause", stopped);
       element.removeEventListener("ended", stopped);
       element.removeEventListener("seeked", seeked);
+      element.removeEventListener("timeupdate", ticked);
       element.removeEventListener("error", failed);
       element.removeEventListener("loadedmetadata", loaded);
       root.removeEventListener("click", click);
@@ -184,6 +239,8 @@ export function Player({ recording, reading, article }: Props) {
       window.removeEventListener("keydown", key);
       head.dispose();
       playhead.current = null;
+      mute.dispose();
+      gate.current = null;
     };
   }, [reading, article, recording.id, frames, soundOnly]);
 

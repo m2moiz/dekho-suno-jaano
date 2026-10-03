@@ -29,9 +29,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const library = path.join(scratch, "library.db");
   // Read by the specs that put a transcript in it (seed.ts), as DSJ_UI_URL is.
   process.env["DSJ_LIBRARY"] = library;
+  // The user's own bleep list (#64), which the app writes to when a word is
+  // added (#84): the owner's is in dsj's data folder, and a test never writes it.
+  const words = path.join(scratch, "words.toml");
+  process.env["DSJ_WORDS"] = words;
   const server = spawn("uv", ["run", "dsj", "ui", "--print-url"], {
     cwd: REPO,
-    env: { ...process.env, DSJ_LIBRARY: library },
+    env: { ...process.env, DSJ_LIBRARY: library, DSJ_WORDS: words },
     stdio: ["ignore", "pipe", "inherit"],
   });
   const url = await firstLine(server);

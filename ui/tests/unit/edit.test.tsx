@@ -180,12 +180,21 @@ describe("TranscriptPage, editing", () => {
       if (path === "/api/recordings") return Response.json([RECORDING]);
       if (path === "/api/transcripts/7") return Response.json(TRANSCRIPT);
       if (path === "/api/transcripts/7/edits" && request.method === "GET") {
-        return Response.json({ content: CONTENT, pad_s: 0.1, edited_at: null });
+        return Response.json({ content: CONTENT, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
       }
       if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
         const body = (await request.json()) as { content: Content };
         saved.push(body.content);
-        return Response.json({ content: body.content, pad_s: 0.1, edited_at: "2026-10-03T00:00:00+00:00" });
+        return Response.json({
+          content: body.content,
+          pad_s: 0.1,
+          edited_at: "2026-10-03T00:00:00+00:00",
+          spans: [],
+          unrenderable: null,
+        });
+      }
+      if (path === "/api/transcripts/7/matches") {
+        return Response.json({ matches: [], words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: unmeasured" });
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
       return Response.json({ detail: "Not Found" }, { status: 404 });

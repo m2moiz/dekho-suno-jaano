@@ -241,6 +241,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find Matches
+         * @description Every word of the page's edit list a word list spells, by dsj.hatao.find itself.
+         *
+         *     The page sends its list as it is now, so a word it has just retyped
+         *     (#83) is matched as retyped. Nothing is saved.
+         */
+        post: operations["find_matches_api_transcripts__transcript_id__matches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/words": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Word
+         * @description Add a spelling to the user's own word list, the one `dsj hatao` reads too.
+         *
+         *     A spelling some list already has is not written again; its entry is the answer.
+         */
+        post: operations["add_word_api_words_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -300,6 +345,13 @@ export interface components {
             pad_s: number;
             /** Edited At */
             edited_at: string | null;
+            /** Spans */
+            spans: [
+                number,
+                number
+            ][] | null;
+            /** Unrenderable */
+            unrenderable: string | null;
         };
         /**
          * EditsUpdate
@@ -395,6 +447,38 @@ export interface components {
         };
         /** @enum {string} */
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
+        /**
+         * Match
+         * @description One word, or phrase, a word list matched (dsj.hatao.Match).
+         */
+        Match: {
+            /** Start */
+            start: number;
+            /** Stop */
+            stop: number;
+            /** Word */
+            word: string;
+            /** Entry */
+            entry: string;
+            /** Start S */
+            start_s: number;
+            /** End S */
+            end_s: number;
+        };
+        /**
+         * Matches
+         * @description What one pass of the word lists over an edit list found, and what it searched.
+         */
+        Matches: {
+            /** Matches */
+            matches: components["schemas"]["Match"][];
+            /** Words Searched */
+            words_searched: number;
+            /** Lists */
+            lists: string[];
+            /** Recall */
+            recall: string;
+        };
         /**
          * ParagraphEntry
          * @description Opens a run of words: who said them and in which language (dsj.hatao.Paragraph).
@@ -506,6 +590,24 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * WordAdded
+         * @description The entry the spelling matches as, and whether the request added it.
+         */
+        WordAdded: {
+            /** Entry */
+            entry: string;
+            /** Added */
+            added: boolean;
+        };
+        /**
+         * WordRequest
+         * @description A spelling to add to the user's own word list (#64's user file).
+         */
+        WordRequest: {
+            /** Word */
+            word: string;
         };
     };
     responses: never;
@@ -818,6 +920,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    find_matches_api_transcripts__transcript_id__matches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Matches"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_word_api_words_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WordAdded"];
                 };
             };
             /** @description Validation Error */

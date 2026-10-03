@@ -35,8 +35,14 @@ export type Content = readonly Entry[];
  */
 export type MuteOp = { kind: "mute"; entries: number[]; muted: boolean[] };
 
+/** Mute every match a word list found, as one step (#84): what `dsj hatao` mutes. */
+export type FlagOp = { kind: "flag"; entries: number[] };
+
+/** Give one match its audio back (#84). Its word stays in the list, matched and dismissed. */
+export type DismissOp = { kind: "dismiss"; entries: number[] };
+
 // Every kind of edit there is. A new kind joins this union and `KINDS` below.
-export type EditOp = MuteOp;
+export type EditOp = MuteOp | FlagOp | DismissOp;
 
 /** What every kind of edit must say: how to do it, how to undo it, and what to call it. */
 export type EditKind<O extends EditOp> = {
@@ -64,20 +70,35 @@ function setMuted(content: Content, entries: number[], muted: boolean[]): Conten
 const KINDS: Kinds = {
   mute: {
     apply: (content, op) => setMuted(content, op.entries, op.muted),
-    invert: (before, op) => ({
-      kind: "mute",
-      entries: op.entries,
-      muted: op.entries.map((index) => {
-        const entry = before[index];
-        return entry?.kind === "item" && entry.muted;
-      }),
-    }),
+    invert: (before, op) => mutedAsBefore(before, op.entries),
     describe: (op) => {
       const on = op.muted.filter(Boolean).length;
       return on === op.muted.length ? "mute" : on === 0 ? "unmute" : "mute and unmute";
     },
   },
+  flag: {
+    apply: (content, op) => setMuted(content, op.entries, op.entries.map(() => true)),
+    invert: (before, op) => mutedAsBefore(before, op.entries),
+    describe: () => "mute the matches",
+  },
+  dismiss: {
+    apply: (content, op) => setMuted(content, op.entries, op.entries.map(() => false)),
+    invert: (before, op) => mutedAsBefore(before, op.entries),
+    describe: () => "dismiss",
+  },
 };
+
+/** The mute that puts each of `entries` back as it is in `before`. */
+function mutedAsBefore(before: Content, entries: number[]): MuteOp {
+  return {
+    kind: "mute",
+    entries,
+    muted: entries.map((index) => {
+      const entry = before[index];
+      return entry?.kind === "item" && entry.muted;
+    }),
+  };
+}
 
 function run(content: Content, op: EditOp): Content {
   // One kind's functions, for that kind's op: TypeScript cannot follow the
@@ -95,10 +116,16 @@ export function describe(op: EditOp): string {
   return (KINDS[op.kind] as EditKind<EditOp>).describe(op);
 }
 
-/** A mute or unmute of every item in entries [start, stop), as one edit. */
-export function muteRange(content: Content, start: number, stop: number, muted: boolean): MuteOp {
+/** The items among entries [start, stop). */
+export function itemsIn(content: Content, start: number, stop: number): number[] {
   const entries: number[] = [];
   for (let i = start; i < stop; i += 1) if (content[i]?.kind === "item") entries.push(i);
+  return entries;
+}
+
+/** A mute or unmute of every item in entries [start, stop), as one edit. */
+export function muteRange(content: Content, start: number, stop: number, muted: boolean): MuteOp {
+  const entries = itemsIn(content, start, stop);
   return { kind: "mute", entries, muted: entries.map(() => muted) };
 }
 

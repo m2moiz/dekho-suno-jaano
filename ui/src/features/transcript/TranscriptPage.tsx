@@ -1,13 +1,14 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { BleepPanel } from "@/features/bleep/BleepPanel";
 import { EditBar, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
-import { type Editable, loadEditable, useContent, useSave } from "@/features/edit/editing";
+import { type Editable, loadEditable, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
-import { Player } from "@/features/player/Player";
+import { Player, type PlayerControls } from "@/features/player/Player";
 import { parseTranscript, read, type Reading, type TranscriptDoc } from "./document";
 import { TranscriptView } from "./TranscriptView";
 import { UnsureToggle } from "./UnsureToggle";
@@ -108,13 +109,24 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
     return next;
   }, [content, opened.doc.speakers]);
   const article = useRef<HTMLElement>(null);
-  const saving = useSave(transcriptId, editor);
+  const saving = useSave(transcriptId, editable);
   const selected = useSelection(edit, article);
+  const renderable = useLatest(editable.renderable);
+  const controls = useRef<PlayerControls | null>(null);
   useUndoKeys(editor);
   useMutedPaint(edit, content, article);
   return (
-    <Page opened={opened} reading={edit.reading} article={article}>
+    <Page opened={opened} reading={edit.reading} article={article} muteSpans={renderable.spans} controls={controls}>
       <EditBar editor={editor} content={content} edit={edit} selected={selected} saving={saving} />
+      <BleepPanel
+        transcriptId={transcriptId}
+        editor={editor}
+        content={content}
+        edit={edit}
+        renderable={renderable}
+        padS={editable.padS}
+        controls={controls}
+      />
     </Page>
   );
 }
@@ -124,9 +136,11 @@ type PageProps = {
   reading: Reading;
   article: RefObject<HTMLElement | null>;
   children?: ReactNode;
+  muteSpans?: readonly Span[] | null;
+  controls?: RefObject<PlayerControls | null>;
 };
 
-function Page({ opened, reading, article, children }: PageProps) {
+function Page({ opened, reading, article, children, muteSpans, controls }: PageProps) {
   const { recording, doc } = opened;
   return (
     <>
@@ -145,7 +159,13 @@ function Page({ opened, reading, article, children }: PageProps) {
           <span className="font-mono break-all">{recording.path}</span>
         </p>
       ) : (
-        <Player recording={recording} reading={reading} article={article} />
+        <Player
+          recording={recording}
+          reading={reading}
+          article={article}
+          muteSpans={muteSpans ?? null}
+          {...(controls === undefined ? {} : { controls })}
+        />
       )}
     </>
   );

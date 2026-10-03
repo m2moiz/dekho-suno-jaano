@@ -22,7 +22,15 @@ Plain Python, no fastapi: the routes are dsj/ui/routes/marks.py.
 
 from __future__ import annotations
 
-__all__ = ["SOURCE", "NoSuchTranscript", "Opened", "edits_path", "open_edits", "save_edits"]
+__all__ = [
+    "SOURCE",
+    "NoSuchTranscript",
+    "Opened",
+    "edits_path",
+    "engine_of",
+    "open_edits",
+    "save_edits",
+]
 
 import hashlib
 import json
@@ -52,6 +60,8 @@ class Opened:
     # Each entry's confidence as the page tints it (#62), None for paragraphs,
     # pauses and words with none: see `_confidences`.
     confidence: list[float | None]
+    # The recording's length as the library knows it, or None when unknown.
+    duration_s: float | None
 
 
 def edits_path(json_path: Path) -> Path:
@@ -144,7 +154,7 @@ def open_edits(transcript_id: int) -> Opened:
             payload, row.media, duration_s=row.duration_s, language=row.language
         )
         edited_at = None
-    return Opened(doc, edited_at, _confidences(payload, doc))
+    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s)
 
 
 def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
@@ -160,4 +170,18 @@ def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
     path = edits_path(row.json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     hatao.save(doc, path)
-    return Opened(doc, _edited_at(path), _confidences(payload, doc))
+    return Opened(doc, _edited_at(path), _confidences(payload, doc), row.duration_s)
+
+
+def engine_of(transcript_id: int) -> str:
+    """The engine that wrote the transcript, as `dsj hatao` names it in its recall line.
+
+    The library's record of the run first, then the file's own `engine`, then its model id.
+    """
+    row = _row(transcript_id)
+    with Library.open() as library:
+        found = library.transcript(transcript_id)
+    if found is not None and found.engine:
+        return found.engine
+    payload = _payload(row, transcript_id)
+    return str(payload.get("engine") or payload.get("model") or "this engine")

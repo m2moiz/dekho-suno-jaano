@@ -123,6 +123,7 @@ whitelist.import_recording  # dsj/ui/routes/recording.py, the same: @router.post
 # attribute (#113).
 whitelist.default_model  # dsj/ui/jobs.py EngineChoice, dsj/ui/schemas.py Engine
 whitelist.read_edits  # dsj/ui/routes/marks.py, the same: @router.get registers it
+whitelist.find_matches  # dsj/ui/routes/marks.py, the same: @router.post registers it
 
 # The page's half of the wire format (#155): pydantic reads every field of these
 # models when FastAPI serializes or parses a request, and `just api` generates
@@ -149,3 +150,6 @@ whitelist.eta_s  # dsj/ui/schemas.py Job
 whitelist.stalled_s  # dsj/ui/schemas.py Job
 whitelist.error  # dsj/ui/schemas.py Job
 whitelist.notes  # dsj/ui/schemas.py Job
+whitelist.start_s  # dsj/ui/schemas.py Match
+whitelist.end_s  # dsj/ui/schemas.py Match
+whitelist.recall  # dsj/ui/schemas.py Matches

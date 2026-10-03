@@ -27,10 +27,14 @@ __all__ = [
     "ItemEntry",
     "Job",
     "JobState",
+    "Match",
+    "Matches",
     "ParagraphEntry",
     "Recording",
     "TranscribeRequest",
     "Transcript",
+    "WordAdded",
+    "WordRequest",
 ]
 
 from typing import Annotated, Literal
@@ -173,14 +177,57 @@ class Edits(BaseModel):
     """A transcript's edit list as the page edits it, and what it needs beside it."""
 
     content: list[EditEntry]
-    # How far a mute reaches past each side of a word, in seconds (dsj.hatao.PAD_S),
-    # so what the page plays muted is what a render mutes (#84).
+    # How far a mute reaches past each side of a word, in seconds (dsj.hatao.PAD_S).
     pad_s: float
     # When the list was last saved, or None while it is as the transcript made it.
     edited_at: str | None
+    # The stretches of the recording a render of this list silences, in
+    # seconds, worked out by dsj.hatao.spans_to_mute itself, so what the page
+    # plays muted is what a render mutes (#84). None when the list cannot be
+    # rendered, and `unrenderable` says why.
+    spans: list[tuple[float, float]] | None
+    unrenderable: str | None
 
 
 class EditsUpdate(BaseModel):
     """The page's whole edit list, to save in place of the one before."""
 
     content: list[EditEntry]
+
+
+class Match(BaseModel):
+    """One word, or phrase, a word list matched (dsj.hatao.Match)."""
+
+    # Its entries in the edit list, [start, stop).
+    start: int
+    stop: int
+    # As the transcript writes it.
+    word: str
+    # The list entry that matched it: `<list>:<name>`, the list `user` for the user's own.
+    entry: str
+    start_s: float
+    end_s: float
+
+
+class Matches(BaseModel):
+    """What one pass of the word lists over an edit list found, and what it searched."""
+
+    matches: list[Match]
+    words_searched: int
+    # Each list searched, by name: a shipped list's language, or `user`.
+    lists: list[str]
+    # The sentence `dsj hatao` prints about what the engine may have left out (#152).
+    recall: str
+
+
+class WordRequest(BaseModel):
+    """A spelling to add to the user's own word list (#64's user file)."""
+
+    word: str
+
+
+class WordAdded(BaseModel):
+    """The entry the spelling matches as, and whether the request added it."""
+
+    entry: str
+    added: bool

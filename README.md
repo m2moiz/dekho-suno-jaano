@@ -583,6 +583,16 @@ survive closing or reloading the page:** the edits do, their history does not.
 An older transcript, or a `parho` import, reads as before and says why it
 cannot be edited.
 
+Above the transcript, **Words to bleep** lists every word the word lists match
+(the same lists and matcher `dsj hatao` uses), each with its time and the entry
+that matched it; when nothing matches it says how many words it searched.
+**Mute all** mutes them, **Dismiss** gives one its sound back, and each is an
+undo step. Pressing play mutes every muted word live, over exactly the
+stretches a render would silence (the server works them out with the render's
+own code), and **Hear** plays one match with a second either side and stops.
+A word typed into the box is added to your own `words.toml`, the file `dsj
+hatao` reads too, and what the next pass finds of it is muted.
+
 It follows the Mac's light or dark Appearance, live, until you pick Light or
 Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
 the browser's per-port storage, survives the new port each launch gets.

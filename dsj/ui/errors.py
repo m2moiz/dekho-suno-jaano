@@ -24,7 +24,7 @@ __all__ = ["STATUS", "describe", "status_of"]
 from dsj.asr import EngineUnavailable
 from dsj.dekho import MarkError
 from dsj.diarize import DiarizationUnavailable
-from dsj.hatao import InvalidDocument, TranscriptUnusable
+from dsj.hatao import InvalidDocument, TranscriptUnusable, WordListError
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
@@ -55,6 +55,8 @@ STATUS: dict[type[Exception], int] = {
     # list is refused whole, the entry named (#63, #66).
     TranscriptUnusable: 422,
     InvalidDocument: 422,
+    # A spelling with no letters, or a user word list that is broken, named (#84).
+    WordListError: 422,
     # No such transcript, or its file is gone: the routes' own 404, said by name.
     NoSuchTranscript: 404,
     # Gone from where the library last saw it (#113).

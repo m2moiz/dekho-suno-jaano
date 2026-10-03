@@ -19,6 +19,11 @@ const WORD_START = 0.57;
 export interface Token {
   t: number;
   w: string;
+  // Its end and confidence, as `dsj suno` writes every token since v0.2.0, so
+  // the page opens it to edit (#66) and the frame checks measure that page,
+  // live mute included (#84), not the read-only one.
+  e: number;
+  c: number;
 }
 
 export interface Sentence {
@@ -101,7 +106,13 @@ export function syntheticTranscript(): Transcript {
     for (let k = 0; k < length; k += 1) {
       const syllable = pick(rand, ONSETS) + pick(rand, VOWELS) + pick(rand, CODAS);
       const opensWord = k === 0 || rand() < WORD_START;
-      tokens.push({ t: +(index * SECONDS_PER_TOKEN).toFixed(2), w: opensWord ? ` ${syllable}` : syllable });
+      tokens.push({
+        t: +(index * SECONDS_PER_TOKEN).toFixed(2),
+        w: opensWord ? ` ${syllable}` : syllable,
+        // Each piece runs to the next one's start: speech with no pauses.
+        e: +((index + 1) * SECONDS_PER_TOKEN).toFixed(2),
+        c: 0.95,
+      });
       index += 1;
     }
     const start = tokens[0]?.t ?? 0;

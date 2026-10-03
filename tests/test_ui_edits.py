@@ -186,3 +186,113 @@ def test_a_rebuilt_library_finds_the_same_list(seeded: dict[str, Any]) -> None:
     with Library.open() as library:
         rebuilt = library.adopt([seeded["json"]]).transcripts[0]
     assert page().get(f"/api/transcripts/{rebuilt}/edits").json()["content"][1]["muted"] is True
+
+
+# -- the words to bleep (#84) ---------------------------------------------------
+
+
+def user_list(*names: str) -> None:
+    """The user's own list (conftest's DSJ_WORDS) holding each of `names`, Roman spelling."""
+    hatao.user_words_path().write_text(
+        "".join(f'[[entry]]\nname = "{n}"\nroman = ["{n}"]\n' for n in names)
+    )
+
+
+def test_matches_come_from_dsj_hatao_find_with_their_entry_and_times(
+    seeded: dict[str, Any],
+) -> None:
+    user_list("there")
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    content = client.get(f"{route}/edits").json()["content"]
+    body = client.post(f"{route}/matches", json={"content": content}).json()
+    assert [(m["word"], m["entry"], m["start_s"], m["end_s"]) for m in body["matches"]] == [
+        ("there.", "user:there", 0.56, 0.88)
+    ]
+    match = body["matches"][0]
+    assert [e.get("text") for e in content[match["start"]:match["stop"]]] == [" there", "."]
+    assert body["words_searched"] == 3
+    assert body["lists"] == [*hatao.SHIPPED_LISTS, "user"]
+    assert "unmeasured" in body["recall"]
+
+
+def test_a_word_retyped_on_the_page_is_matched_as_retyped(seeded: dict[str, Any]) -> None:
+    user_list("fine")
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    content = client.get(f"{route}/edits").json()["content"]
+    fine = next(i for i, e in enumerate(content) if e.get("text") == " Fine")
+    hello = next(i for i, e in enumerate(content) if e.get("text") == " Hello")
+    content[hello]["text"] = " Fine"
+    body = client.post(f"{route}/matches", json={"content": content}).json()
+    assert [m["start"] for m in body["matches"]] == [hello, fine]
+
+
+def test_no_match_is_an_empty_list_with_the_count_searched(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    content = client.get(f"{route}/edits").json()["content"]
+    body = client.post(f"{route}/matches", json={"content": content}).json()
+    assert body["matches"] == []
+    assert body["words_searched"] == 3
+
+
+def test_a_word_added_from_the_app_goes_in_the_user_file_and_matches_next_pass(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    reply = client.post("/api/words", json={"word": " Hello "})
+    assert reply.json() == {"entry": "user:Hello", "added": True}
+    # The file dsj hatao reads, in #64's own format.
+    lists = hatao.load_words(hatao.word_lists())
+    assert lists.spellings["hello"] == "user:Hello"
+    assert 'roman = ["Hello"]' in hatao.user_words_path().read_text()
+    content = client.get(f"{route}/edits").json()["content"]
+    matched = client.post(f"{route}/matches", json={"content": content}).json()["matches"]
+    assert [m["entry"] for m in matched] == ["user:Hello"]
+    # Asked again, it is not written twice.
+    assert client.post("/api/words", json={"word": "hello"}).json() == {
+        "entry": "user:Hello", "added": False,
+    }
+    assert hatao.user_words_path().read_text().count("[[entry]]") == 1
+
+
+def test_a_word_in_its_own_script_is_filed_as_script_and_punctuation_is_refused() -> None:
+    client = page()
+    assert client.post("/api/words", json={"word": "یار"}).json()["added"] is True
+    assert 'script = ["یار"]' in hatao.user_words_path().read_text()
+    refused = client.post("/api/words", json={"word": "..."})
+    assert refused.status_code == 422
+    assert refused.json()["error"] == "WordListError"
+
+
+def test_a_user_list_already_broken_is_named_and_left_as_it_was() -> None:
+    hatao.user_words_path().write_text("[[entry]]\nname = 3\n")
+    reply = page().post("/api/words", json={"word": "bravo"})
+    assert reply.status_code == 422
+    assert hatao.user_words_path().read_text() == "[[entry]]\nname = 3\n"
+
+
+def test_the_spans_a_render_would_mute_come_with_every_list(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    opened = client.get(route).json()
+    assert opened["spans"] == []
+    content = opened["content"]
+    there = next(i for i, e in enumerate(content) if e.get("text") == " there")
+    content[there]["muted"] = True
+    saved = client.put(route, json={"content": content}).json()
+    # hatao.spans_to_mute's own answer: the word, padded PAD_S each side.
+    assert saved["spans"] == [[0.46, 0.9]]
+    assert saved["unrenderable"] is None
+
+
+def test_a_list_a_render_would_refuse_says_why(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    content = client.get(route).json()["content"]
+    content[2], content[3] = content[3], content[2]
+    saved = client.put(route, json={"content": content}).json()
+    assert saved["spans"] is None
+    assert "deleted or moved" in saved["unrenderable"]

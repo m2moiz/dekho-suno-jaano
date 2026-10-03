@@ -8,7 +8,51 @@ import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/app
 import { type Content, Editor } from "@/lib/editOps";
 import { devCheck } from "@/lib/linter";
 
-export type Editable = { editor: Editor; padS: number };
+/** A stretch of the recording to silence, in seconds: [start, end). */
+export type Span = readonly [number, number];
+
+/** What a render of the list as last saved would silence, or why it cannot be rendered. */
+export type Renderable = { spans: readonly Span[] | null; unrenderable: string | null };
+
+/** One value that changes, and the listeners told when it does: React reads it through useLatest. */
+export class Latest<T> {
+  private listeners = new Set<() => void>();
+  private current: T;
+  constructor(current: T) {
+    this.current = current;
+  }
+  get value(): T {
+    return this.current;
+  }
+  set(next: T): void {
+    this.current = next;
+    for (const listener of this.listeners) listener();
+  }
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+}
+
+export function useLatest<T>(latest: Latest<T>): T {
+  return useSyncExternalStore(latest.subscribe, () => latest.value);
+}
+
+/** The server's spans, each a [start, end] pair in its JSON. */
+function spansOf(raw: number[][] | null): Span[] | null {
+  return raw === null ? null : raw.map(([start = 0, end = 0]) => [start, end] as const);
+}
+
+export type Editable = {
+  editor: Editor;
+  padS: number;
+  /**
+   * The spans dsj.hatao.spans_to_mute gives the list as last saved (#84),
+   * from the server's reply to each save: the page never works them out
+   * itself, so its preview mutes what a render mutes.
+   */
+  renderable: Latest<Renderable>;
+};
 
 /**
  * The transcript's edit list, or the server's reason it has none. Either way
@@ -22,7 +66,11 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
   });
   if (data !== undefined) {
     // Checked after every edit in development builds (#86).
-    return { editor: new Editor(data.content, { check: devCheck(data.content) }), padS: data.pad_s };
+    return {
+      editor: new Editor(data.content, { check: devCheck(data.content) }),
+      padS: data.pad_s,
+      renderable: new Latest<Renderable>({ spans: spansOf(data.spans), unrenderable: data.unrenderable }),
+    };
   }
   const detail = fromBody(error, response, route);
   // No word end times is a fact about the file, said under the title. Any
@@ -43,7 +91,7 @@ export type SaveState = "saved" | "saving" | "failed";
  * each time, so a burst of edits is never saved out of order. A drag (#85)
  * is saved once, when it ends.
  */
-export function useSave(transcriptId: number, editor: Editor): SaveState {
+export function useSave(transcriptId: number, { editor, renderable }: Editable): SaveState {
   const [state, setState] = useState<SaveState>("saved");
   const pending = useRef(false);
   useEffect(() => {
@@ -57,12 +105,13 @@ export function useSave(transcriptId: number, editor: Editor): SaveState {
         const content = editor.content;
         setState("saving");
         try {
-          const { error, response } = await api.PUT("/api/transcripts/{transcript_id}/edits", {
+          const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/edits", {
             params: { path: { transcript_id: String(transcriptId) } },
             body: { content: [...content] },
           });
-          if (!response.ok) throw new ApiError(fromBody(error, response, route));
+          if (data === undefined) throw new ApiError(fromBody(error, response, route));
           sent = content;
+          if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
         } catch (thrown) {
           flying = false;
           pending.current = false;
@@ -92,6 +141,6 @@ export function useSave(transcriptId: number, editor: Editor): SaveState {
       unsubscribe();
       window.removeEventListener("beforeunload", leaving);
     };
-  }, [transcriptId, editor]);
+  }, [transcriptId, editor, renderable]);
   return state;
 }

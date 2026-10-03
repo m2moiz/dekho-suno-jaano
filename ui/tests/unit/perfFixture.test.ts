@@ -29,6 +29,10 @@ describe("the synthetic perf fixture", () => {
     for (const token of tokens) expect(token.w).toMatch(/^ ?[a-z]{2,3}$/);
   });
 
+  it("gives every token an end no earlier than its start, so the page opens it to edit", () => {
+    for (const token of tokens) expect(token.e).toBeGreaterThanOrEqual(token.t);
+  });
+
   it("keeps a sentence's text equal to its tokens joined, as dsj writes it", () => {
     for (const sentence of transcript.sentences) {
       expect(sentence.text).toBe(sentence.tokens.map((token) => token.w).join(""));
