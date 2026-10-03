@@ -11,6 +11,7 @@ The fixtures are seconds long and a few kilobytes; no binary is committed.
 from __future__ import annotations
 
 import gc
+import re
 import shutil
 import subprocess
 import warnings
@@ -410,6 +411,14 @@ def test_mute_fades_into_and_out_of_the_silence_rather_than_cutting(
     assert float(np.abs(np.diff(muted)).max()) <= 1.25 * own
 
 
+def test_the_apps_preview_fades_as_long_as_a_render() -> None:
+    """The app's live preview of a bleep fades with the render's own length (#225)."""
+    preview = Path(__file__).parents[1] / "ui/src/features/bleep/liveMute.ts"
+    found = re.search(r"^export const MUTE_FADE_S = ([0-9.]+);$", preview.read_text(), re.MULTILINE)
+    assert found, f"{preview} no longer declares MUTE_FADE_S"
+    assert float(found[1]) == media.MUTE_FADE_S
+
+
 def test_mute_keeps_the_picture_and_the_length_of_a_movie(
     video_with_audio: Path, tmp_path: Path
 ) -> None:
@@ -425,32 +434,51 @@ def test_mute_keeps_the_picture_and_the_length_of_a_movie(
     )
 
 
+def _audio_start(path: Path) -> float:
+    """`ffprobe -show_entries stream=start_time` of the first sound stream."""
+    return float(
+        subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=start_time", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    )
+
+
+@pytest.mark.parametrize("codec", ["aac", "pcm_s16le"])
 def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
-    tmp_path: Path,
+    tmp_path: Path, codec: str
 ) -> None:
-    """A transcript's clock starts at the first sample; the filter's at the file's start."""
+    """A transcript's clock starts at the first sample; the filter's at the file's start.
+
+    The render's sound starts where the input's did, to the millisecond, so the
+    silence lands at the transcript's times in the render's own clock too
+    (#224). AAC's encoder used to start the render's sound one 1024-sample frame
+    (21 ms) early, so every mute sat 21 ms late in it.
+    """
     late = tmp_path / "late.mov"
     _ffmpeg(
         "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
-        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=3:sample_rate=48000",
-        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+        "-itsoffset", "0.479", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=3:sample_rate=48000",
+        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", codec,
         str(late),
     )
     out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.mov")
-    # The loudest sample of each 5 ms, two cycles of the sine: its height, where
-    # one sample alone would cross zero by itself.
+    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=0.001)
+    # The loudest sample of each 1.5 ms block at 16 kHz, which always holds a
+    # crest of the 440 Hz sine (one every 1.14 ms): its height.
     level = np.abs(_samples(out))
-    height = level[: len(level) // 80 * 80].reshape(-1, 80).max(axis=1)
+    height = level[: len(level) // 24 * 24].reshape(-1, 24).max(axis=1)
     quiet = np.flatnonzero(height < 0.5 * height.max())
     runs = np.split(quiet, np.flatnonzero(np.diff(quiet) != 1) + 1)
     longest = max(runs, key=len)
     # Below half height is the middle of each fade onward, which the AAC
-    # encoder's ringing around a fade does not move, as it does the first
-    # sample under 1e-4. AAC's own delay moves the edges a few ms either way
-    # (the render's sound starts one 1024-sample frame before the input's); the
-    # offset was 479 ms.
-    assert longest[0] * 0.005 == pytest.approx(1.0, abs=0.03)
-    assert (longest[-1] + 1) * 0.005 == pytest.approx(1.5, abs=0.03)
+    # encoder's ringing around a fade does not move, as it does the first sample
+    # under 1e-4. The middle of each fade is half of MUTE_FADE_S outside the span.
+    half = media.MUTE_FADE_S / 2
+    assert longest[0] * 0.0015 == pytest.approx(1.0 - half, abs=0.005)
+    assert (longest[-1] + 1) * 0.0015 == pytest.approx(1.5 + half, abs=0.005)
 
 
 def test_mute_reports_progress_in_seconds_written(ready_wav: Path, tmp_path: Path) -> None:
