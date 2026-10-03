@@ -574,7 +574,10 @@ running, and a transcription started from the page outlives the window. Run
 second copy.
 
 A transcript with word end times (v0.2.0 on) can be edited in the app: select
-words and mute them. An edit changes the transcript's edit list, the same file
+words and mute them, or retype them with **Correct…** when the recogniser
+misheard. A correction keeps the same stretch of the recording, so no word
+around it moves; the new words share it in proportion to their length, lose
+their unsure tint, and the library lists the transcript as edited. An edit changes the transcript's edit list, the same file
 `dsj hatao` walks, kept beside the library in `edits/`; the recording and the
 transcript JSON are never written to. Every edit is saved as you make it.
 Cmd+Z undoes and Cmd+Shift+Z redoes, up to 1,000 steps, stepping only through

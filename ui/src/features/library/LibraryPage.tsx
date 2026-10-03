@@ -186,6 +186,8 @@ function Transcript({ recording, t }: { recording: number; t: TranscriptRow }) {
     ...(t.language === null ? [] : [t.language]),
     speakersLabel(t),
     marksLabel(t),
+    // Corrected by hand in the app (#83): the edit list changed, never the file.
+    ...(t.last_edited_at === null ? [] : [`edited ${whenLabel(t.last_edited_at)}`]),
   ];
   // The whole line opens the transcript (#58): its date and model are what tell
   // one transcript of a recording from another. A block, so the whole row

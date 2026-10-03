@@ -296,3 +296,42 @@ def test_a_list_a_render_would_refuse_says_why(seeded: dict[str, Any]) -> None:
     saved = client.put(route, json={"content": content}).json()
     assert saved["spans"] is None
     assert "deleted or moved" in saved["unrenderable"]
+
+
+# -- corrected by hand (#83) ------------------------------------------------------
+
+
+def test_saving_an_edit_marks_the_transcript_edited_in_the_library(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    listed = client.get("/api/recordings").json()[0]["transcripts"][0]
+    assert listed["last_edited_at"] is None
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    content = client.get(route).json()["content"]
+    content[2]["text"] = " Hullo"
+    saved = client.put(route, json={"content": content}).json()
+    listed = client.get("/api/recordings").json()[0]["transcripts"][0]
+    assert listed["last_edited_at"] == saved["edited_at"]
+    # The transcript's own file is never written.
+    assert json.loads(seeded["json"].read_text()) == seeded["payload"]
+
+
+def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
+    seeded: dict[str, Any],
+) -> None:
+    import sqlite3
+
+    with sqlite3.connect(library_path()) as con:
+        con.execute("ALTER TABLE transcripts DROP COLUMN last_edited_at")
+        con.execute("PRAGMA user_version = 2")
+    with Library.open() as library:
+        found = library.transcript(seeded["id"])
+        assert found is not None
+        assert found.last_edited_at is None
+        library.mark_edited(seeded["id"], "2026-10-03T00:00:00+00:00")
+        again = library.transcript(seeded["id"])
+    assert again is not None
+    assert again.last_edited_at == "2026-10-03T00:00:00+00:00"
+    with sqlite3.connect(library_path()) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3

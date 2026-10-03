@@ -67,6 +67,8 @@ class Transcript(BaseModel):
     speaker_count: int | None
     mark_count: int | None
     language: str | None
+    # When an edit to it was last saved from the app (#83), else None.
+    last_edited_at: str | None
 
 
 class Recording(BaseModel):

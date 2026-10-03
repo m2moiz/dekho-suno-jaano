@@ -1,8 +1,11 @@
 import { type RefObject, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { atLabel } from "@/features/bleep/matches";
 import { unsureHighlight as wordsHighlight } from "@/features/transcript/confidence";
 import { type Content, type Editor, HISTORY_LIMIT, muteRange } from "@/lib/editOps";
+import { correction, textOf } from "./correct";
+import { CorrectDialog } from "./CorrectDialog";
 import type { EditReading } from "./readContent";
 import { type Selected, selectedWords } from "./selection";
 import type { SaveState } from "./editing";
@@ -97,6 +100,18 @@ const SAVE_TEXT: Record<SaveState, string> = {
   failed: "Not saved",
 };
 
+/** Where entries [start, stop) begin and end in the recording, in seconds. */
+function spanOf(content: Content, { start, stop }: { start: number; stop: number }): { from: number; to: number } {
+  let from = Number.POSITIVE_INFINITY;
+  let to = 0;
+  for (const entry of content.slice(start, stop)) {
+    if (entry.kind !== "item") continue;
+    from = Math.min(from, entry.sourceStart);
+    to = Math.max(to, entry.sourceStart + entry.length);
+  }
+  return { from: Number.isFinite(from) ? from : 0, to };
+}
+
 /** A press on a button that acts on the selection must not clear it first. */
 function keepSelection(event: { preventDefault: () => void }): void {
   event.preventDefault();
@@ -115,6 +130,7 @@ type Props = {
  * transcript, and in reach as it scrolls.
  */
 export function EditBar({ editor, content, edit, selected, saving }: Props) {
+  const [correcting, setCorrecting] = useState<{ start: number; stop: number } | null>(null);
   const undo = editor.undoLabel();
   const redo = editor.redoLabel();
   const range =
@@ -122,6 +138,9 @@ export function EditBar({ editor, content, edit, selected, saving }: Props) {
       ? null
       : { start: edit.first[selected.first] ?? 0, stop: edit.stop[selected.last] ?? 0 };
   const words = selected === null ? 0 : selected.last - selected.first + 1;
+  // A correction stays inside one paragraph of the reader: one speaker's turn.
+  const { turn } = edit.reading.words;
+  const oneTurn = selected !== null && turn[selected.first] === turn[selected.last];
   return (
     <div
       role="toolbar"
@@ -170,6 +189,35 @@ export function EditBar({ editor, content, edit, selected, saving }: Props) {
       >
         Unmute
       </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={range === null || !oneTurn}
+        onMouseDown={keepSelection}
+        title={
+          range !== null && !oneTurn
+            ? "A correction stays inside one speaker's paragraph"
+            : "Retype the selected words; they keep their stretch of the recording"
+        }
+        onClick={() => {
+          if (range !== null && oneTurn) setCorrecting(range);
+        }}
+      >
+        Correct…
+      </Button>
+      {correcting !== null && (
+        <CorrectDialog
+          heard={textOf(content, correcting.start, correcting.stop)}
+          from={atLabel(spanOf(content, correcting).from)}
+          to={atLabel(spanOf(content, correcting).to)}
+          onClose={() => setCorrecting(null)}
+          onSave={(text) => {
+            editor.applyEdit(correction(content, correcting.start, correcting.stop, text));
+            setCorrecting(null);
+            window.getSelection()?.removeAllRanges();
+          }}
+        />
+      )}
       <span className="ml-auto text-sm text-muted-foreground" role="status">
         {SAVE_TEXT[saving]}
       </span>

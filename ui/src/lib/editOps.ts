@@ -41,8 +41,14 @@ export type FlagOp = { kind: "flag"; entries: number[] };
 /** Give one match its audio back (#84). Its word stays in the list, matched and dismissed. */
 export type DismissOp = { kind: "dismiss"; entries: number[] };
 
+/**
+ * Put `entries` in place of entries [start, stop): a stretch of words retyped
+ * (#83). The entries carry their own times, so nothing around them moves.
+ */
+export type CorrectOp = { kind: "correct"; start: number; stop: number; entries: Entry[] };
+
 // Every kind of edit there is. A new kind joins this union and `KINDS` below.
-export type EditOp = MuteOp | FlagOp | DismissOp;
+export type EditOp = MuteOp | FlagOp | DismissOp | CorrectOp;
 
 /** What every kind of edit must say: how to do it, how to undo it, and what to call it. */
 export type EditKind<O extends EditOp> = {
@@ -85,6 +91,21 @@ const KINDS: Kinds = {
     apply: (content, op) => setMuted(content, op.entries, op.entries.map(() => false)),
     invert: (before, op) => mutedAsBefore(before, op.entries),
     describe: () => "dismiss",
+  },
+  correct: {
+    apply: (content, op) => {
+      if (!(0 <= op.start && op.start <= op.stop && op.stop <= content.length)) {
+        throw new RangeError(`entries [${op.start}, ${op.stop}) are not inside a list of ${content.length}`);
+      }
+      return [...content.slice(0, op.start), ...op.entries, ...content.slice(op.stop)];
+    },
+    invert: (before, op) => ({
+      kind: "correct",
+      start: op.start,
+      stop: op.start + op.entries.length,
+      entries: before.slice(op.start, op.stop),
+    }),
+    describe: () => "correction",
   },
 };
 

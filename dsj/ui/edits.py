@@ -170,7 +170,11 @@ def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
     path = edits_path(row.json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     hatao.save(doc, path)
-    return Opened(doc, _edited_at(path), _confidences(payload, doc), row.duration_s)
+    edited_at = _edited_at(path)
+    # So the library list can say this transcript was corrected by hand (#83).
+    with Library.open() as library:
+        library.mark_edited(transcript_id, edited_at)
+    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s)
 
 
 def engine_of(transcript_id: int) -> str:

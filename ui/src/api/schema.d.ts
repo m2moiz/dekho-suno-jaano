@@ -577,6 +577,8 @@ export interface components {
             mark_count: number | null;
             /** Language */
             language: string | null;
+            /** Last Edited At */
+            last_edited_at: string | null;
         };
         /** ValidationError */
         ValidationError: {
