@@ -10,7 +10,7 @@ import type { RecordingRow } from "@/features/library/types";
 import { sessionToken } from "@/features/session/session";
 import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
-import { Playhead } from "./playhead";
+import { PLAYER_HEIGHT, Playhead } from "./playhead";
 import { SpeedControl } from "./SpeedControl";
 import { readVideoShown, saveVideoShown } from "./video";
 import { Waveform } from "./Waveform";
@@ -46,10 +46,6 @@ function play(element: HTMLMediaElement): void {
 // Keys that scroll the page. Pressing one means the reader wants to look
 // somewhere else, so the view stops following the playhead.
 const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "]);
-
-// The custom property on <html> that holds the player bar's height, read by
-// the page's scroll padding in index.css (#230).
-export const PLAYER_HEIGHT = "--dsj-player-height";
 
 const MEDIA_ERRORS: Record<number, string> = {
   1: "loading was stopped",

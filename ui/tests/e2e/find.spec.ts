@@ -4,10 +4,8 @@
 // the bar does in both engines, as far as #230 measured. The recording is made
 // here by ffmpeg, never one of the owner's (#127 trap 9).
 import { expect, type Page, test } from "@playwright/test";
-import { spawnSync } from "node:child_process";
-import path from "node:path";
 
-import { readerUrl, scratchDir, seed } from "./seed.ts";
+import { readerUrl, scratchDir, screenRecording, seed } from "./seed.ts";
 
 // Not in TypeScript's DOM types: it was never standardised, but chromium and
 // WebKit both ship it.
@@ -15,23 +13,6 @@ declare global {
   interface Window {
     find(text: string): boolean;
   }
-}
-
-/** 4 s of ffmpeg's test card at 640x360, #230's shape, with a tone: h264 and AAC in a .mov. */
-function screenRecording(dir: string): string {
-  const file = path.join(dir, "screen.mov");
-  const run = spawnSync(
-    "ffmpeg",
-    [
-      "-y", "-loglevel", "error",
-      "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25:duration=4",
-      "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", file,
-    ],
-    { encoding: "utf8" },
-  );
-  if (run.status !== 0) throw new Error(`ffmpeg could not write ${file}: ${run.stderr}`);
-  return file;
 }
 
 // The one word to find, in sentence FOUND of SENTENCES: near the end, as in
@@ -97,7 +78,7 @@ for (const viewport of [
     page,
   }) => {
     const dir = scratchDir();
-    const seeded = seed(transcript(screenRecording(dir)), dir);
+    const seeded = seed(transcript(screenRecording(dir, 4)), dir);
     await page.setViewportSize(viewport);
     await page.goto(readerUrl(seeded));
     await expect(page.locator("article p")).not.toHaveCount(0);

@@ -78,7 +78,7 @@
     /* The sticky player covers the bottom of the window, more than half of it
        below about 1512x870 with a picture showing, so what the browser scrolls
        into view (a Cmd+F match, #230) centres above it. The player writes its
-       own height here while it is on the page (Player.tsx, PLAYER_HEIGHT). */
+       own height here while it is on the page (PLAYER_HEIGHT in playhead.ts). */
     scroll-padding-bottom: var(--dsj-player-height, 0px);
     }
 }

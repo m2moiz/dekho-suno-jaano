@@ -10,7 +10,8 @@ vi.hoisted(() => {
 
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import type { RecordingRow } from "../../src/features/library/types";
-import { PLAYER_HEIGHT, Player } from "../../src/features/player/Player";
+import { Player } from "../../src/features/player/Player";
+import { PLAYER_HEIGHT } from "../../src/features/player/playhead";
 import { COOKIE, readVideoShown, saveVideoShown } from "../../src/features/player/video";
 import { read } from "../../src/features/transcript/document";
 import { installHighlights } from "./highlights";
