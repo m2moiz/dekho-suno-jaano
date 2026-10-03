@@ -82,7 +82,7 @@ describe("UnsureToggle", () => {
     );
   }
 
-  const SHAKY = [sentence(0, [[" one", 0.95], [" two", 0.2], [" three", 0.3]])];
+  const SHAKY = [sentence(0, [[" one", 0.95], [" two", 0.2], [" three", 0.25]])];
 
   it("is off until switched on, then paints every unsure word, and clears when switched off", () => {
     mount(WHISPER, SHAKY);

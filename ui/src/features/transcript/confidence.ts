@@ -2,30 +2,34 @@
 // holding one range per word: no element per word, so the text stays plain.
 //
 // `c` means a different thing under each engine (payload.md, "Every engine
-// writes e and c"), so the cut-off is per engine. Measured 2026-10-02 with
-// scratch/confidence_cutoff.py, numbers only:
+// writes e and c"), so the cut-off is per engine. Measured 3 Oct 2026 (#62)
+// with scratch/accuracy/score.py against three public hand-checked
+// references (#148's mixed Urdu-English podcast, 34 min of UrduSpeech's Urdu
+// set, 30 min of an Earnings-22 call; #184 has the datasets): a word is wrong
+// when the alignment does not pair it with the same reference word. Numbers
+// are per mode, pooled over two runs, "tinted" being the share of words under
+// the cut-off and "wrong" the share of those that are wrong.
 //
-// - whisper: 0.5. Scored against the public Urdu-English fixture's
-//   hand-checked transcript (scratch/urdu_cs, #148; whisper-large-v3-turbo run
-//   scratch/real_bench/runs/m33-turbo-ur): 346 of 1,158 words wrong (30%).
-//   Words under 0.5 are 9% of all words, and 62% of them are wrong, twice the
-//   base rate; 0.7 flags 17% at 67%, 0.3 flags 4% at 62%. 0.5 is where about a
-//   tenth of the page lights up and most of what lights up is wrong.
-// - parakeet: 0.9. Its `c` (one minus the normalised entropy) is compressed
-//   near 1: on a 6-minute real English parakeet transcript (935 words) no word
-//   is under 0.7, 4 are under 0.8 and 85 (9.1%) under 0.9. So 0.9 flags the
-//   same tenth as whisper's 0.5. No ground truth exists for it yet, so whether
-//   those are the wrong words is NOT measured.
-// - sherpa: 0.5, borrowed from whisper and not measured: sherpa's `c` is the
-//   probability of the emitted token, the same kind of number as whisper's.
-//
-// #62 asked for this on a real 74-minute transcript; none with `c` exists yet.
+// - whisper: 0.3. Under --roman-urdu (the owner's mode, 120 or 30 s windows)
+//   on the mixed and the Urdu sets 20 to 35% of words are wrong; 0.3 tints 13
+//   to 18% of them and 53 to 55% of what it tints is wrong, about twice the
+//   base rate. 0.5, the earlier value (set from one
+//   --language ur run), tints 26 to 41% under --roman-urdu and under half of
+//   that is wrong, so a third of the page lit up and most of it right. Under
+//   --language ur on Urdu 0.3 tints 2% (40% wrong); on the English call every
+//   whisper mode tints 1 to 3% (24 to 49% wrong, against 3 to 5% overall).
+// - parakeet: 0.9, now measured. On the English call 4% of its words are
+//   wrong; 0.9 tints 3% and a third of those are wrong, eight times the base
+//   rate, catching a quarter of all wrong words. 0.95 tints 15% at 15%.
+// - sherpa: 0.5, borrowed from whisper's earlier value and not measured:
+//   sherpa's `c` is the probability of the emitted token, the same kind of
+//   number as whisper's, but no sherpa run was scored.
 
 import type { Reading } from "./document";
 
 export const UNSURE = "dsj-unsure";
 
-export const CUTOFFS = { whisper: 0.5, parakeet: 0.9, sherpa: 0.5 } as const;
+export const CUTOFFS = { whisper: 0.3, parakeet: 0.9, sherpa: 0.5 } as const;
 
 /**
  * The cut-off for the engine a transcript's `model` names, or null when it
