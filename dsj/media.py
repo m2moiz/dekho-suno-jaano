@@ -560,6 +560,45 @@ def _encoding(media: Path) -> _Encoding:
     )
 
 
+def _priming(enc: _Encoding, suffix: str) -> int:
+    """How many samples of its own the encoder writes before the sound, in this container.
+
+    A lossy encoder starts with a frame of its own (its priming), timed before
+    the first sample it was given. A sound that starts at 0 has that frame
+    hidden by an edit list, but a .mov or .mp4 whose sound starts later plays
+    it, so the render's sound starts that much earlier than the input's (#224).
+    Rather than knowing every encoder, this encodes a tenth of a second of
+    silence that starts 1 s in and reads where it starts: measured on 3 Oct
+    2026 at 48 kHz, 0.978667 s for AAC in a .mov or .mp4 (1024 samples), 0.976979
+    s for MP3 in a .mov (1105), and 1.0 s for AAC in a .mkv, which keeps the
+    start itself (0).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = Path(tmp) / f"priming{suffix}"
+        proc = subprocess.run(
+            [
+                _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-itsoffset", "1", "-t", "0.1",
+                "-f", "lavfi", "-i", f"anullsrc=r={enc.sample_rate}:cl=mono",
+                "-c:a", enc.codec_name, str(sample),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            raise MediaError(
+                f"ffmpeg could not encode {enc.codec_name} into a {suffix} file:\n"
+                f"{proc.stderr.strip()}"
+            )
+        start = subprocess.run(
+            [
+                _tool("ffprobe"), "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=start_time", "-of", "csv=p=0", str(sample),
+            ],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    return max(0, round((1.0 - float(start)) * enc.sample_rate))
+
+
 def _silence(a: float, b: float, frame_s: float) -> str:
     """One ffmpeg filter: silence from `a` to `b`, in the filter's clock, faded at both ends.
 
@@ -592,7 +631,10 @@ def mute(
     re-encoded with its own codec and bit rate, because a filter cannot run on
     encoded audio; a lossy codec therefore loses a little outside the spans too,
     and a wav comes out the same sample for sample outside the spans and their
-    fades. The picture, when there is one, is copied untouched
+    fades. When a lossy sound starts after the picture, its first few
+    milliseconds (the encoder's priming, `_priming`) give way to the encoder's
+    own, so the render's sound starts where the input's did (#224). The picture,
+    when there is one, is copied untouched
     (`-c:v copy`). The container is the input's: `out` must have its suffix.
 
     Written beside `out` under a temporary name and renamed at the end, so an
@@ -621,17 +663,22 @@ def mute(
         raise MediaError(f"cannot write {out}: the directory {out.parent} does not exist.")
 
     enc = _encoding(media)
-    frame = max(1, round(enc.sample_rate * MUTE_FRAME_S))
-    audio_filter = (
-        ",".join([
-            f"asetnsamples=n={frame}:p=0",
-            *(_silence(a + enc.offset_s, b + enc.offset_s, frame / enc.sample_rate)
-              for a, b in spans),
-        ])
-        if spans
-        else "anull"
-    )
     lossy = not (enc.codec_name.startswith("pcm_") or enc.codec_name in _LOSSLESS)
+    # The input's first samples are dropped for as long as the encoder's priming,
+    # whose frame then starts where the input's sound did, and every later
+    # sample keeps its time (#224). Without it the render's sound starts that
+    # much earlier, so in the render's own clock each mute lands as much late.
+    # A sound that starts at 0 needs nothing: the container hides the priming.
+    skip = _priming(enc, out.suffix) if lossy and enc.offset_s > 0 else 0
+    frame = max(1, round(enc.sample_rate * MUTE_FRAME_S))
+    steps = [f"atrim=start_sample={skip}"] if skip else []
+    if spans:
+        steps.append(f"asetnsamples=n={frame}:p=0")
+        steps.extend(
+            _silence(a + enc.offset_s, b + enc.offset_s, frame / enc.sample_rate)
+            for a, b in spans
+        )
+    audio_filter = ",".join(steps) or "anull"
     rate = ["-b:a", str(enc.bit_rate)] if lossy and enc.bit_rate else []
     # The suffix stays last, because ffmpeg picks the container from it.
     tmp = out.with_name(f".{out.stem}.{os.getpid()}.tmp{out.suffix}")
