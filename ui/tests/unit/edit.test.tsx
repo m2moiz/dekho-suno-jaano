@@ -28,7 +28,7 @@ function paragraph(speaker: string | null = null): Entry {
 const CONTENT: Content = [
   paragraph("SPEAKER_00"),
   item(0, 0.2, ""),
-  item(0.2, 0.3, " Hello"),
+  item(0.2, 0.36, " Hello"),
   item(0.56, 0.24, " there", { confidence: 0.4 }),
   item(0.8, 0.08, "."),
   item(0.88, 0.32, ""),

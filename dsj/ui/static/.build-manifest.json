@@ -1,5 +1,5 @@
 {
-  "sha256": "16ab86d203f8f7e2264b24138516daefcc8f745649425596cccf4ce69232812e",
-  "inputs": 58,
+  "sha256": "a5cd7747275695b7fe1ab7e1640d5e84601b88afa49d26b51025a71b6c4bfe8c",
+  "inputs": 59,
   "from": "the files under ui/ that scratch/ui_manifest.py hashes"
 }

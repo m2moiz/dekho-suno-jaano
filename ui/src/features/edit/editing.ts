@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { type Content, Editor } from "@/lib/editOps";
+import { devCheck } from "@/lib/linter";
 
 export type Editable = { editor: Editor; padS: number };
 
@@ -19,7 +20,10 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
   const { data, error, response } = await api.GET("/api/transcripts/{transcript_id}/edits", {
     params: { path: { transcript_id: String(transcriptId) } },
   });
-  if (data !== undefined) return { editor: new Editor(data.content), padS: data.pad_s };
+  if (data !== undefined) {
+    // Checked after every edit in development builds (#86).
+    return { editor: new Editor(data.content, { check: devCheck(data.content) }), padS: data.pad_s };
+  }
   const detail = fromBody(error, response, route);
   // No word end times is a fact about the file, said under the title. Any
   // other refusal (a saved list that is broken, say) is a failure, shown.
