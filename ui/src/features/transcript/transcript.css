@@ -49,3 +49,12 @@
   background-color: light-dark(oklch(0.92 0.06 25), oklch(0.38 0.09 25));
   color: var(--foreground);
 }
+
+/* Words muted in the edit list (#66, #84): struck through and dimmed, so a
+ * muted word reads as gone while staying in the text to undo. Below the
+ * playhead, which paints over it while it is being said. */
+::highlight(dsj-muted) {
+  color: var(--muted-foreground);
+  text-decoration: line-through 2px;
+  background-color: light-dark(oklch(0.93 0.01 260), oklch(0.3 0.01 260));
+}

@@ -37,7 +37,11 @@ test("with CSS.highlights, the same page renders the transcript and no dialog", 
   const asked = await openTranscript(page);
 
   await expect(page.getByRole("article", { name: "Transcript" }).locator("p")).toHaveText(TEXT);
-  expect(asked).toHaveLength(1);
+  // The transcript, and its edit list (#66).
+  expect(asked.map((url) => new URL(url).pathname.replace(/\d+/, "N")).sort()).toEqual([
+    "/api/transcripts/N",
+    "/api/transcripts/N/edits",
+  ]);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 

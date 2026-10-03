@@ -1,0 +1,95 @@
+# Urdu words `dsj hatao` mutes by default (#64).
+#
+# Hand-written in this repo: public lists for Roman Urdu are thin to absent
+# (#44). Urdu written in Latin letters has no fixed spelling, so each entry
+# lists the spellings a recogniser has been seen to choose between, under
+# `roman`, and the Urdu-script forms under `script`. dsj matches these lists
+# exactly, after folding case, punctuation and the Arabic-script letter
+# variants (ي/ی, ك/ک, ه/ہ); it does not match by edit distance (dsj/hatao.py
+# says why).
+#
+# Left out on purpose because their ordinary meaning is common: kutta, kutti
+# (dog), suar (pig), ullu (owl), chod alone (a recogniser writes it for chhod,
+# "leave"), gand alone (dirt, smell). A spelling may be a phrase of up to
+# three words (#213), matched against that many words in a row in one
+# sentence, because these insults are often written as two: "bhen chod" as
+# well as "bhenchod". The cost: a recogniser that writes chhod as "chod" turns
+# "behen, chhod do" said in one breath into a match. "pen chod" is left out
+# for that reason, since "pen chhod do" is ordinary speech. Add your own words
+# to your user file (`dsj hatao --help` names it), never here: an update
+# replaces this file.
+
+[[entry]]
+name = "madarchod"
+roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod", "madarchodd",
+         "madarchodo", "madar chod", "mader chod", "maadar chod"]
+script = ["مادرچود", "مادر چود"]
+
+[[entry]]
+name = "behenchod"
+roman = ["behenchod", "bhenchod", "benchod", "bhanchod", "behnchod", "bhainchod",
+         "bainchod", "bhencho", "bencho", "bhenchodd", "behanchod", "behen chod",
+         "bhen chod", "bahen chod", "behn chod", "bhain chod"]
+script = ["بہنچود", "بھنچود", "بہن چود", "بھن چود"]
+
+[[entry]]
+name = "chutiya"
+roman = ["chutiya", "chutia", "chootiya", "chootia", "chutiye", "chutiyay", "chootiye",
+         "chutiyapa", "choot", "chut"]
+script = ["چوتیا", "چوتیے", "چوتیاپا", "چوت"]
+
+[[entry]]
+name = "gandu"
+roman = ["gandu", "gaandu", "gandoo", "gaand", "gaandmasti"]
+script = ["گانڈو", "گانڈ"]
+
+[[entry]]
+name = "lund"
+roman = ["lund", "lunnd", "lauda", "lawda", "loda", "lavda", "laude", "lawde", "lauday",
+         "lodu", "lauray", "loray"]
+script = ["لنڈ", "لوڑا", "لوڑے", "لوڑو", "لوڈا", "لوڈے"]
+
+[[entry]]
+name = "bhosdi"
+roman = ["bhosdi", "bhosdike", "bhosadike", "bhosdiwala", "bhosdiwale", "bhosda", "bhosri",
+         "bhosriwala", "bhosrike", "bhosdi ke", "bhosri ke", "bhosdi wala", "bhosdi wale",
+         "bhosri wala"]
+script = ["بھوسڑی", "بھوسڑا", "بھوسڑیکے", "بھوسڑی کے"]
+
+[[entry]]
+name = "randi"
+roman = ["randi", "raandi", "rundi", "randwa", "randibaz", "randibaaz", "randi baz",
+         "randi baaz"]
+script = ["رنڈی", "رنڈوا", "رنڈیباز", "رنڈی باز"]
+
+[[entry]]
+name = "harami"
+roman = ["harami", "haraami", "haramzada", "haraamzada", "haramzadi", "haramzade",
+         "haramzaday", "haramkhor", "haram zada", "haram zadi", "haram zade", "haram khor"]
+script = ["حرامی", "حرامزادہ", "حرامزادی", "حرامزادے", "حرامخور", "حرام زادہ", "حرام زادی",
+          "حرام زادے", "حرام خور"]
+
+[[entry]]
+name = "bharwa"
+roman = ["bharwa", "bhadwa", "bharwe", "bhadwe", "bharway", "bhadway", "bharva", "bhadva"]
+script = ["بھڑوا", "بھڑوے"]
+
+[[entry]]
+name = "kanjar"
+roman = ["kanjar", "kanjri", "kanjari", "kanjer"]
+script = ["کنجر", "کنجری"]
+
+[[entry]]
+name = "jhant"
+roman = ["jhant", "jhaant", "jhantu", "jhaantu"]
+script = ["جھانٹ", "جھانٹو"]
+
+[[entry]]
+name = "chodu"
+roman = ["chodu", "choddu"]
+script = ["چودو"]
+
+[[entry]]
+name = "kameena"
+roman = ["kamina", "kameena", "kamine", "kameene", "kameeni", "kaminay", "kameenay"]
+script = ["کمینہ", "کمینے", "کمینی"]

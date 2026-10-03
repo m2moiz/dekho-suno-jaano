@@ -24,9 +24,11 @@ __all__ = ["STATUS", "describe", "status_of"]
 from dsj.asr import EngineUnavailable
 from dsj.dekho import MarkError
 from dsj.diarize import DiarizationUnavailable
+from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordListError
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
+from dsj.ui.edits import NoSuchTranscript
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
 from dsj.ui.store import NotATranscript, NotTheSameRecording
@@ -49,6 +51,16 @@ STATUS: dict[type[Exception], int] = {
     MarkError: 422,
     NotATranscript: 422,
     NotTheSameRecording: 422,
+    # A transcript with no word ends cannot become an edit list, and a broken
+    # list is refused whole, the entry named (#63, #66).
+    TranscriptUnusable: 422,
+    InvalidDocument: 422,
+    # A list holding a cut or a move, which a render does not make (#215).
+    RenderRefused: 422,
+    # A spelling with no letters, or a user word list that is broken, named (#84).
+    WordListError: 422,
+    # No such transcript, or its file is gone: the routes' own 404, said by name.
+    NoSuchTranscript: 404,
     # Gone from where the library last saw it (#113).
     NotStarted: 422,
     # Another transcription holds the machine; the request was fine, the moment was not.

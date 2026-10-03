@@ -213,6 +213,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Render
+         * @description Render the page's edit list beside the recording with dsj.hatao.render, once queued.
+         *
+         *     Refused before anything is written when the list mutes nothing, cannot be
+         *     rendered, or the machine is busy with another run.
+         */
+        post: operations["render_api_transcripts__transcript_id__render_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/renders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Renders
+         * @description Every render this server has started, the first first.
+         */
+        get: operations["renders_api_renders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/renders/{render_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Render Media
+         * @description A finished render's file, so the page can play it beside the original (#215).
+         *
+         *     By the render's id, never a path (#112 rule 5), and only once it is done.
+         */
+        get: operations["render_media_api_renders__render_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Edits
+         * @description The transcript's edit list: as last saved, or as the transcript made it.
+         *
+         *     A transcript without word end times (before v0.2.0, or a `dsj parho`
+         *     import) has none, and is answered 422 with the reason: it still reads,
+         *     but cannot be edited without guessing where each word stops.
+         */
+        get: operations["read_edits_api_transcripts__transcript_id__edits_get"];
+        /**
+         * Save Edits
+         * @description Save the page's edit list in place of the last one, or refuse it whole, naming the entry.
+         */
+        put: operations["save_edits_api_transcripts__transcript_id__edits_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find Matches
+         * @description Every word of the page's edit list a word list spells, by dsj.hatao.find itself.
+         *
+         *     The page sends its list as it is now, so a word it has just retyped
+         *     (#83) is matched as retyped. Nothing is saved.
+         */
+        post: operations["find_matches_api_transcripts__transcript_id__matches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/words": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Word
+         * @description Add a spelling to the user's own word list, the one `dsj hatao` reads too.
+         *
+         *     A spelling some list already has is not written again; its entry is the answer.
+         */
+        post: operations["add_word_api_words_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -260,6 +398,34 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        EditEntry: components["schemas"]["ParagraphEntry"] | components["schemas"]["ItemEntry"];
+        /**
+         * Edits
+         * @description A transcript's edit list as the page edits it, and what it needs beside it.
+         */
+        Edits: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+            /** Pad S */
+            pad_s: number;
+            /** Edited At */
+            edited_at: string | null;
+            /** Spans */
+            spans: [
+                number,
+                number
+            ][] | null;
+            /** Unrenderable */
+            unrenderable: string | null;
+        };
+        /**
+         * EditsUpdate
+         * @description The page's whole edit list, to save in place of the one before.
+         */
+        EditsUpdate: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+        };
         /**
          * Engine
          * @description One engine the picker offers, and whether it can run on this machine.
@@ -277,6 +443,32 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ItemEntry
+         * @description A stretch of one source's audio and the text said in it (dsj.hatao.Item).
+         *
+         *     The keys are the file's own, `sourceStart` included, so the page writes the
+         *     format `dsj hatao` reads.
+         */
+        ItemEntry: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "item";
+            /** Source */
+            source: string;
+            /** Sourcestart */
+            sourceStart: number;
+            /** Length */
+            length: number;
+            /** Text */
+            text: string;
+            /** Muted */
+            muted: boolean;
+            /** Confidence */
+            confidence: number | null;
         };
         /**
          * Job
@@ -321,6 +513,53 @@ export interface components {
         /** @enum {string} */
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
         /**
+         * Match
+         * @description One word, or phrase, a word list matched (dsj.hatao.Match).
+         */
+        Match: {
+            /** Start */
+            start: number;
+            /** Stop */
+            stop: number;
+            /** Word */
+            word: string;
+            /** Entry */
+            entry: string;
+            /** Start S */
+            start_s: number;
+            /** End S */
+            end_s: number;
+        };
+        /**
+         * Matches
+         * @description What one pass of the word lists over an edit list found, and what it searched.
+         */
+        Matches: {
+            /** Matches */
+            matches: components["schemas"]["Match"][];
+            /** Words Searched */
+            words_searched: number;
+            /** Lists */
+            lists: string[];
+            /** Recall */
+            recall: string;
+        };
+        /**
+         * ParagraphEntry
+         * @description Opens a run of words: who said them and in which language (dsj.hatao.Paragraph).
+         */
+        ParagraphEntry: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "paragraph";
+            /** Speaker */
+            speaker: string | null;
+            /** Language */
+            language: string | null;
+        };
+        /**
          * Recording
          * @description One recording, wherever it was last seen, with every transcript of it.
          */
@@ -348,6 +587,33 @@ export interface components {
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
         };
+        /**
+         * RenderJob
+         * @description A bleep render started from the page (#215), as the worker last left it.
+         */
+        RenderJob: {
+            /** Id */
+            id: number;
+            /** Transcript Id */
+            transcript_id: number;
+            /** Recording Id */
+            recording_id: number;
+            /** Started At */
+            started_at: string;
+            state: components["schemas"]["RenderState"];
+            /** Fraction */
+            fraction: number;
+            /** Output */
+            output: string;
+            /** Spans */
+            spans: number;
+            /** Error */
+            error: string | null;
+            /** Notes */
+            notes: string[];
+        };
+        /** @enum {string} */
+        RenderState: "starting" | "rendering" | "done" | "failed";
         /**
          * TranscribeRequest
          * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
@@ -403,6 +669,8 @@ export interface components {
             mark_count: number | null;
             /** Language */
             language: string | null;
+            /** Last Edited At */
+            last_edited_at: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -416,6 +684,24 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * WordAdded
+         * @description The entry the spelling matches as, and whether the request added it.
+         */
+        WordAdded: {
+            /** Entry */
+            entry: string;
+            /** Added */
+            added: boolean;
+        };
+        /**
+         * WordRequest
+         * @description A spelling to add to the user's own word list (#64's user file).
+         */
+        WordRequest: {
+            /** Word */
+            word: string;
         };
     };
     responses: never;
@@ -662,6 +948,234 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    render_api_transcripts__transcript_id__render_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    renders_api_renders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderJob"][];
+                };
+            };
+        };
+    };
+    render_media_api_renders__render_id__media_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                render_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/*": unknown;
+                    "video/*": unknown;
+                };
+            };
+            /** @description a range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_edits_api_transcripts__transcript_id__edits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_edits_api_transcripts__transcript_id__edits_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    find_matches_api_transcripts__transcript_id__matches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Matches"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_word_api_words_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WordAdded"];
                 };
             };
             /** @description Validation Error */

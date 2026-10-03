@@ -59,12 +59,34 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
   await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
   await expect.poll(() => page.evaluate(() => document.querySelector("audio")?.readyState ?? 0)).toBeGreaterThan(0);
 
+  // Mute every other paragraph of the first forty through the edit bar, so
+  // the live mute (#84) has spans to look through on every tick.
+  for (let turn = 0; turn < 40; turn += 2) {
+    await page.evaluate((turn) => {
+      const text = document.querySelector(`article p[data-turn="${turn}"]`)?.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, text.length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }, turn);
+    await page.getByRole("toolbar", { name: "Edit" }).getByRole("button", { name: /^Mute( \d+ words)?$/ }).click();
+  }
+  await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  const mutedWords = await page.evaluate(() => CSS.highlights.get("dsj-muted")?.size ?? 0);
+  expect(mutedWords).toBeGreaterThan(100);
+
   // Start it the way a person does, by clicking a word, then make the
   // playhead work: 4x speed, and a jump to a far part of the transcript every
   // half second, each of which the view follows.
   const box = await page.evaluate(() => {
     const range = document.createRange();
-    const text = document.querySelector("article p")?.firstChild as Text;
+    const paragraph = document.querySelector("article p") as HTMLElement;
+    // Clear of the sticky edit bar above and the player below.
+    paragraph.scrollIntoView({ block: "center" });
+    const text = paragraph.firstChild as Text;
     range.setStart(text, 1);
     range.setEnd(text, 3);
     const rect = range.getBoundingClientRect();
@@ -100,7 +122,9 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
   );
   const ticks = await page.evaluate(() => window.dsjPlayheadTicks?.() ?? []);
   const tick = summarise(ticks);
-  console.log(`playhead tick ms: ${JSON.stringify(tick)}; frames while playing: ${JSON.stringify(summarise(frames))}`);
+  console.log(
+    `playhead tick ms, ${mutedWords} words muted: ${JSON.stringify(tick)}; frames while playing: ${JSON.stringify(summarise(frames))}`,
+  );
   expect(tick.samples).toBeGreaterThan(200);
   expect(tick.p95).toBeLessThanOrEqual(TICK_P95_CEILING_MS);
 });

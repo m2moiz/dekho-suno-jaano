@@ -32,6 +32,7 @@ function transcript(overrides: Partial<TranscriptRow>): TranscriptRow {
     speaker_count: null,
     mark_count: null,
     language: null,
+    last_edited_at: null,
     ...overrides,
   };
 }

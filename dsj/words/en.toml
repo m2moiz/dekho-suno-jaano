@@ -1,0 +1,72 @@
+# English words `dsj hatao` mutes by default (#64).
+#
+# Hand-written in this repo. The categories follow public lists such as LDNOOBW
+# ("List of Dirty, Naughty, Obscene and Otherwise Bad Words"), but nothing is
+# copied from them, and words with a common ordinary meaning or that are also a
+# name (dick, cock, pussy, prick) are left out: a mute on every "Dick" is worse
+# than a list that misses one.
+#
+# Each entry: `roman` spellings, `script` (none for English), and `disguised`
+# forms. Recognisers mask profanity with asterisks, so "f***ing" is a spelling
+# to match, not punctuation to strip. A spelling is one word or a phrase of
+# up to three (#213), matched against that many words in a row in one
+# sentence; a phrase also matches written run together, so "bull shit" covers
+# "bullshit". Add your own words to your user file (`dsj hatao --help` names
+# it), never here: an update replaces this file.
+
+[[entry]]
+name = "fuck"
+roman = ["fuck", "fucks", "fucked", "fucker", "fuckers", "fucking", "fuckin", "fuckup",
+         "fuckhead", "fuckface", "fuckwit", "motherfucker", "motherfuckers",
+         "motherfucking", "motherfuckin", "mofo", "mother fucker", "mother fuckers",
+         "mother fucking"]
+disguised = ["f*ck", "f**k", "f***", "f*cking", "f**king", "f***ing", "f***in", "f*cked",
+             "f***ed", "fck", "fcking", "fuk", "fuking", "phuck", "phucking",
+             "motherf***er"]
+
+[[entry]]
+name = "shit"
+roman = ["shit", "shits", "shitty", "shitting", "shitted", "shithead", "shithole",
+         "bullshit", "horseshit", "dipshit", "shite", "bull shit", "horse shit"]
+disguised = ["sh*t", "s**t", "s***", "sh1t", "bulls**t", "bulls***", "sh*tty"]
+
+[[entry]]
+name = "bitch"
+roman = ["bitch", "bitches", "bitching", "bitchy", "sonofabitch"]
+disguised = ["b*tch", "b**ch", "b***h", "b****", "biatch", "biotch"]
+
+[[entry]]
+name = "ass"
+roman = ["ass", "arse", "asshole", "assholes", "arsehole", "arseholes", "dumbass",
+         "jackass", "asshat", "ass hole"]
+disguised = ["a**", "a**hole", "a**h***", "a******"]
+
+[[entry]]
+name = "bastard"
+roman = ["bastard", "bastards"]
+disguised = ["b*stard", "b******"]
+
+[[entry]]
+name = "cunt"
+roman = ["cunt", "cunts"]
+disguised = ["c*nt", "c**t", "c***"]
+
+[[entry]]
+name = "dickhead"
+roman = ["dickhead", "dickheads", "cocksucker", "cocksuckers", "dick head", "cock sucker"]
+
+[[entry]]
+name = "wanker"
+roman = ["wanker", "wankers", "wank", "twat", "twats", "bollocks"]
+
+[[entry]]
+name = "slut"
+roman = ["slut", "sluts", "slutty", "whore", "whores"]
+
+[[entry]]
+name = "piss"
+roman = ["piss", "pissing"]
+
+[[entry]]
+name = "goddamn"
+roman = ["goddamn", "goddamned", "goddam", "god damn"]

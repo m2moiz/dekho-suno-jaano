@@ -33,6 +33,7 @@ Three Urdu imperatives, in the order the tool works:
 | <div dir="rtl">سنو</div> | `suno` | *listen* — what was said, and when |
 | <div dir="rtl">دیکھو</div> | `dekho` | *look* — when the picture changed |
 | <div dir="rtl">دکھاؤ</div> | `dikhao` | *show me* — the picture itself |
+| <div dir="rtl">ہٹاؤ</div> | `hatao` | *remove it*: a copy with the swear words bleeped |
 | <div dir="rtl">جانو</div> | `dsj` | *know* — what you get from all three, and so the command |
 
 <p align="center">
@@ -82,6 +83,7 @@ the interesting part.
 | **Dikhao — frame retrieval** | working. The step that actually makes a recording answerable |
 | **Likho: export** | working. SRT, WebVTT and plain text from a finished transcript |
 | **Parho: import** | working. An SRT, WebVTT or dsj JSON transcript in place of ASR |
+| **Hatao: bleep** | working from the terminal. Word lists for English, Urdu, Hindi and Punjabi; how often each engine leaves a swear word out of its transcript is not yet measured (#152) |
 | **Frame description** | **not built**, blocked on a *measured* finding rather than a guess. See [Roadmap](#roadmap) |
 
 ---
@@ -441,6 +443,58 @@ recall by one string in fifteen ([docs/vlm-legibility.md](docs/vlm-legibility.md
 
 Also available as `dsj.media.extract_frame(video, t, dest, width=...)`.
 
+### Hatao: bleeping
+
+`hatao` (remove it) writes a copy of the recording with every word a word list
+flags muted, from the transcript `suno` already wrote. No model runs, no app or
+server is needed, and the recording itself is never written to:
+
+```bash
+dsj hatao recording.mov -t transcript.json -o clean.mov
+```
+
+| Flag | |
+|---|---|
+| `-t, --transcript PATH` | the recording's transcript (required) |
+| `-o, --out PATH` | the bleeped copy, in the input's container (required) |
+| `--overwrite` | replace `--out` and the two files beside it if they exist |
+
+The shipped lists in `dsj/words/` cover English, Urdu, Hindi and Punjabi, Roman
+and own-script spellings, and every word is looked up in every list, so a
+sentence that switches language halfway is covered. Matching is exact after
+folding case and punctuation; Roman Urdu has no fixed spelling, so an entry
+lists each spelling. A spelling can be a phrase of up to three words, such as
+`"bhen chod"`: it matches those words in a row inside one sentence, and they
+are muted together. Your own words go in `words.toml` in dsj's data folder
+(`~/Library/Application Support/dsj/` on a Mac, or the file `$DSJ_WORDS`
+names), which no update touches:
+
+```toml
+[[entry]]
+name = "yaar"
+roman = ["yaar", "yar"]
+script = ["یار"]
+```
+
+Each word is muted from 0.1 s before it to 0.1 s after it, but for no more
+than 1.4 s and never past the start of the next word: whisper guesses where a
+word ends, and can run one on through the pause after it, speech included.
+The log lists every word cut short this way under `capped`. The picture is
+copied untouched and the sound re-encoded in its own codec. `clean.bleeps.json`
+beside the output lists every muted word with its start, end and the entry
+that matched it. Listen at those times: whether the cut clicks, or clips the
+word next to it, is a judgment for an ear. `clean.source.txt` holds the content
+id of the recording it came from, and outside a cloud-synced folder the copy
+carries it as the file tag `com.jaano.source` too, so a copy that leaves the
+folder can still be matched to its source.
+
+A run that matches nothing writes nothing, says so on stderr and exits 3, so it
+cannot pass for a cleaned file. Every run also prints a `recall:` line, because
+a recogniser can leave a swear word out of the transcript altogether, and how
+often each engine does that is not measured yet (#152). A transcript without
+word end times, from before v0.2.0 or from `parho`, is refused rather than
+guessed at.
+
 ### Likho: exporting a transcript
 
 The transcript is JSON, which nothing but dsj and `jq` reads. `likho` (write)
@@ -523,6 +577,41 @@ after three minutes of silence instead. A tab hidden behind another keeps it
 running, and a transcription started from the page outlives the window. Run
 `dsj ui` again while it is open and you get the running one's address, not a
 second copy.
+
+A transcript with word end times (v0.2.0 on) can be edited in the app: select
+words and mute them, or retype them with **Correct…** when the recogniser
+misheard. A correction keeps the same stretch of the recording, so no word
+around it moves; the new words share it in proportion to their length, lose
+their unsure tint, and the library lists the transcript as edited. When a word's
+edge is in the wrong place, which matters most for whisper, whose word ends are
+inferred, select the word and press **Timing…**: drag either edge over the
+waveform, or focus it and use the arrow keys. The word next to it gives up the
+time the edge moves into, and never overlaps; a whole drag is one undo step.
+An edit changes the transcript's edit list, the same file
+`dsj hatao` walks, kept beside the library in `edits/`; the recording and the
+transcript JSON are never written to. Every edit is saved as you make it.
+Cmd+Z undoes and Cmd+Shift+Z redoes, up to 1,000 steps, stepping only through
+edits, never through clicks, scrolling or playback. **The undo history does not
+survive closing or reloading the page:** the edits do, their history does not.
+An older transcript, or a `parho` import, reads as before and says why it
+cannot be edited.
+
+Above the transcript, **Words to bleep** lists every word the word lists match
+(the same lists and matcher `dsj hatao` uses), each with its time and the entry
+that matched it; when nothing matches it says how many words it searched.
+**Mute all** mutes them, **Dismiss** gives one its sound back, and each is an
+undo step. Pressing play mutes every muted word live, over exactly the
+stretches a render would silence (the server works them out with the render's
+own code), and **Hear** plays one match with a second either side and stops.
+A word typed into the box is added to your own `words.toml`, the file `dsj
+hatao` reads too, and what the next pass finds of it is muted.
+
+**Render** writes the bleeped copy as a job, with the render `dsj hatao` runs:
+beside the recording as `<name>.bleeped.<ext>` (then `.bleeped-2`, never over
+an earlier one), with the same `.bleeps.json` log and `.source.txt` note, and
+a link and a player for it in the page. **Render alone** does the same with
+only one match muted. A render waits for the machine like a transcription
+does: one run at a time, from the app or the terminal.
 
 It follows the Mac's light or dark Appearance, live, until you pick Light or
 Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
@@ -877,10 +966,12 @@ are OCR-based, which is the approach this tool rejects.
 
 ```
 dsj/            the package
-  cli.py           the `dsj` command: suno | dekho | dikhao | likho | parho | ui
+  cli.py           the `dsj` command: suno | dekho | dikhao | hatao | likho | parho | ui
   suno.py          suno   -- ASR orchestration, chunking, resume
   dekho.py         dekho  -- the moments the picture changed, ranked under a budget
-  media.py         ffmpeg: audio out, tile grids out, dikhao frames out
+  media.py         ffmpeg: audio out, tile grids out, dikhao frames out, bleeps rendered
+  hatao.py         hatao  -- the edit list, the word lists' matcher, what a render mutes
+  words/           the shipped word lists, one TOML file a language
   chunking.py      the chunk loop parakeet-mlx does not provide
   likho.py         likho  -- a transcript out as SRT, WebVTT or text
   parho.py         parho  -- an SRT, WebVTT or JSON transcript in, in place of ASR

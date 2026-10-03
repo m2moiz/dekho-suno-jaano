@@ -25,7 +25,8 @@ function firstLine(child: ChildProcess): Promise<string> {
 export async function startUi(library: string): Promise<Server> {
   const child = spawn("uv", ["run", "dsj", "ui", "--print-url"], {
     cwd: REPO,
-    env: { ...process.env, DSJ_LIBRARY: library },
+    // Its word list beside its library, never the owner's (#84).
+    env: { ...process.env, DSJ_LIBRARY: library, DSJ_WORDS: path.join(path.dirname(library), "words.toml") },
     stdio: ["ignore", "pipe", "inherit"],
   });
   const url = await firstLine(child);

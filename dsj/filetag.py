@@ -33,11 +33,14 @@ from __future__ import annotations
 
 __all__ = [
     "PROVIDER_DOMAIN_TAG",
+    "SOURCE_TAG",
     "TRANSCRIPT_TAG",
     "cloud_synced",
     "read_tag",
     "read_transcript",
     "sidecar_for",
+    "source_sidecar_for",
+    "stamp_source",
     "tag_transcript",
     "write_tag",
 ]
@@ -55,6 +58,10 @@ from typing import Any, cast
 logger = logging.getLogger("dsj.suno")
 
 TRANSCRIPT_TAG = "com.jaano.transcript"
+
+# On a file `dsj hatao` rendered: the content id of the recording it came from
+# (#121), so a bleeped copy can find its source, and through it its transcript.
+SOURCE_TAG = "com.jaano.source"
 
 # The tag macOS's File Provider puts on the root folder of each domain it syncs
 # (Microsoft documents reading it with `xattr -p` on OneDrive's root). It is how
@@ -201,3 +208,37 @@ def read_transcript(recording: Path) -> dict[str, Any]:
             )
         data = tagged
     return cast("dict[str, Any]", json.loads(data))
+
+
+def source_sidecar_for(rendered: Path) -> Path:
+    """Where a rendered file names its source: `<stem>.source.txt` beside it."""
+    return rendered.with_name(f"{rendered.stem}.source.txt")
+
+
+def stamp_source(source: Path, rendered: Path) -> str | None:
+    """Mark `rendered` with the content id of `source`, the recording it was made from.
+
+    The owner's choice on #121, 3 Oct 2026: both, and the sidecar always. The id
+    goes into `<stem>.source.txt` beside the file, because a sidecar survives a
+    trip through Google Drive and a tag does not (#117), and into the tag
+    `com.jaano.source` on the file itself, which no edit to the folder can
+    separate from it, unless the file is in a cloud-synced folder, the rule
+    #202 set for the transcript tag.
+
+    Returns:
+        None when both were written, else why the tag was not, for the caller to
+        say. The sidecar is written or this raises.
+    """
+    from dsj.atomic import atomic_write_text
+    from dsj.identity import content_id
+
+    cid = content_id(source)
+    atomic_write_text(source_sidecar_for(rendered), cid + "\n")
+    synced = cloud_synced(rendered)
+    if synced is not None:
+        return f"{synced}, and dsj does not tag files in a cloud-synced folder (#202)"
+    try:
+        write_tag(rendered, SOURCE_TAG, cid.encode())
+    except OSError as exc:
+        return str(exc.strerror or exc)
+    return None

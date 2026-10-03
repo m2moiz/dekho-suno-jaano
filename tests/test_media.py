@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import warnings
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -320,3 +321,161 @@ def test_envelope_reports_a_file_ffmpeg_cannot_read(tmp_path: Path) -> None:
 
     with pytest.raises(media.MediaError, match="failed to read the audio"):
         media.envelope(bad)
+
+
+# --------------------------------------------------------------------------
+# mute: the bleep render (#65)
+# --------------------------------------------------------------------------
+
+
+def _samples(path: Path) -> np.ndarray[Any, np.dtype[np.float32]]:
+    """The sound, decoded to mono float at 16 kHz, from its first sample."""
+    raw = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-vn", "-ac", "1",
+         "-ar", "16000", "-f", "f32le", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return np.frombuffer(raw, dtype=np.float32)
+
+
+def _mean_volume(path: Path, start: float, length: float) -> float:
+    """`ffmpeg -ss <start> -t <len> -i <file> -af volumedetect`, as #128 measures a span."""
+    log = subprocess.run(
+        ["ffmpeg", "-nostdin", "-hide_banner", "-ss", str(start), "-t", str(length),
+         "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True, check=True,
+    ).stderr
+    line = next(x for x in log.splitlines() if "mean_volume" in x)
+    return float(line.split("mean_volume:")[1].split("dB")[0])
+
+
+def _video(path: Path) -> tuple[str, str]:
+    """The first picture stream's codec, size and frame count, and its packets' md5."""
+    shape = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+         "-show_entries", "stream=codec_name,width,height,nb_read_frames",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    digest = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-map", "0:v",
+         "-c", "copy", "-f", "md5", "-"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return shape, digest
+
+
+def _duration(path: Path) -> float:
+    return float(
+        subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+             str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    )
+
+
+def test_mute_silences_exactly_the_spans_of_a_wav_and_nothing_else(
+    ready_wav: Path, tmp_path: Path
+) -> None:
+    before = ready_wav.read_bytes()
+    out = media.mute(ready_wav, [(0.5, 0.75), (1.2, 1.3)], tmp_path / "clean.wav")
+    assert ready_wav.read_bytes() == before
+    original, muted = _samples(ready_wav), _samples(out)
+    assert len(muted) == len(original)
+    silent = np.flatnonzero(muted != original)
+    # Every sample of each span is silent, and at most one 5 ms frame more.
+    for a, b in ((0.5, 0.75), (1.2, 1.3)):
+        assert not muted[int(a * 16000) : int(b * 16000)].any()
+    frame = int(media.MUTE_FRAME_S * 16000)
+    inside = ((silent >= 0.5 * 16000 - frame) & (silent < 0.75 * 16000 + frame)) | (
+        (silent >= 1.2 * 16000 - frame) & (silent < 1.3 * 16000 + frame)
+    )
+    assert inside.all(), "a sample outside every span changed"
+
+
+def test_mute_keeps_the_picture_and_the_length_of_a_movie(
+    video_with_audio: Path, tmp_path: Path
+) -> None:
+    before = video_with_audio.read_bytes()
+    out = media.mute(video_with_audio, [(0.5, 1.0)], tmp_path / "clean.mov")
+    assert video_with_audio.read_bytes() == before
+    assert _video(out) == _video(video_with_audio)  # same codec, size, frames, packets
+    assert _duration(out) == pytest.approx(_duration(video_with_audio), abs=0.05)
+    # Far quieter over the span than the input, and the same outside it.
+    assert _mean_volume(out, 0.55, 0.4) < _mean_volume(video_with_audio, 0.55, 0.4) - 60
+    assert _mean_volume(out, 1.3, 0.5) == pytest.approx(
+        _mean_volume(video_with_audio, 1.3, 0.5), abs=0.5
+    )
+
+
+def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
+    tmp_path: Path,
+) -> None:
+    """A transcript's clock starts at the first sample; the filter's at the file's start."""
+    late = tmp_path / "late.mov"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
+        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=3:sample_rate=48000",
+        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+        str(late),
+    )
+    out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.mov")
+    quiet = np.flatnonzero(np.abs(_samples(out)) < 1e-4)
+    # The longest quiet run: a sine crosses zero by itself, a sample at a time.
+    runs = np.split(quiet, np.flatnonzero(np.diff(quiet) != 1) + 1)
+    longest = max(runs, key=len)
+    # AAC's own delay moves the edges a few ms either way; the offset was 479 ms.
+    assert longest[0] / 16000 == pytest.approx(1.0, abs=0.03)
+    assert longest[-1] / 16000 == pytest.approx(1.5, abs=0.03)
+
+
+def test_mute_reports_progress_in_seconds_written(ready_wav: Path, tmp_path: Path) -> None:
+    seen: list[float] = []
+    media.mute(ready_wav, [(0.1, 0.2)], tmp_path / "clean.wav", on_progress=seen.append)
+    assert seen
+    assert seen[-1] == pytest.approx(2.0, abs=0.1)
+
+
+def test_mute_refuses_to_replace_an_output_unless_asked(ready_wav: Path, tmp_path: Path) -> None:
+    out = tmp_path / "clean.wav"
+    out.write_bytes(b"keep me")
+    rendered: list[float] = []
+    with pytest.raises(FileExistsError, match="already exists, and replacing it was not asked"):
+        media.mute(ready_wav, [(0.1, 0.2)], out, on_progress=rendered.append)
+    assert not rendered, "refused only after rendering, not before starting"
+    assert out.read_bytes() == b"keep me"
+    media.mute(ready_wav, [(0.1, 0.2)], out, replace=True)
+    assert out.read_bytes() != b"keep me"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["clean.wav"]
+
+
+def test_mute_never_writes_over_its_input(ready_wav: Path, tmp_path: Path) -> None:
+    copy = tmp_path / "rec.wav"
+    copy.write_bytes(ready_wav.read_bytes())
+    with pytest.raises(ValueError, match="never writes over its input"):
+        media.mute(copy, [(0.1, 0.2)], copy, replace=True)
+    assert copy.read_bytes() == ready_wav.read_bytes()
+
+
+def test_mute_keeps_the_container(ready_wav: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"name it \*\.wav"):
+        media.mute(ready_wav, [(0.1, 0.2)], tmp_path / "clean.m4a")
+    assert not list(tmp_path.iterdir())
+
+
+def test_an_interrupted_render_leaves_no_file_behind(
+    video_with_audio: Path, tmp_path: Path
+) -> None:
+    def interrupt(_done: float) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        media.mute(video_with_audio, [(0.5, 1.0)], tmp_path / "clean.mov", on_progress=interrupt)
+    assert not list(tmp_path.iterdir()), "an interrupted render left a file"
+
+
+def test_mute_names_a_file_with_no_sound(video_without_audio: Path, tmp_path: Path) -> None:
+    with pytest.raises(media.NoAudioStream):
+        media.mute(video_without_audio, [(0.5, 1.0)], tmp_path / "clean.mov")
+    assert not list(tmp_path.iterdir())

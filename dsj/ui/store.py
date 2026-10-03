@@ -55,9 +55,10 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 
 # Kept in SQLite's own `user_version`. Bumped by whoever changes the tables, so
 # an older dsj refuses a library a newer one wrote instead of misreading it.
-# Version 2 added `recordings.unreadable` (#110); _MIGRATIONS brings a version 1
-# library up to it in place.
-SCHEMA_VERSION = 2
+# Version 2 added `recordings.unreadable` (#110), version 3
+# `transcripts.last_edited_at` (#83); _MIGRATIONS brings an older library up
+# to date in place, one version at a time.
+SCHEMA_VERSION = 3
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -97,7 +98,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   diarized      INTEGER,
   speaker_count INTEGER,
   mark_count    INTEGER,
-  language      TEXT
+  language      TEXT,
+  last_edited_at TEXT
 );
 CREATE INDEX IF NOT EXISTS transcripts_by_recording ON transcripts(recording_id);
 PRAGMA user_version = {SCHEMA_VERSION};
@@ -111,6 +113,10 @@ _MIGRATIONS = {
     # show it (#110). NULL for every row written before, which is what a fresh
     # read of those files would mostly say too: version 1 stored no reason.
     1: "ALTER TABLE recordings ADD COLUMN unreadable TEXT",
+    # When the app last saved an edit to the transcript's edit list (#83), so
+    # the library can show which transcripts a person corrected. NULL for every
+    # transcript nobody has edited, which before version 3 was all of them.
+    2: "ALTER TABLE transcripts ADD COLUMN last_edited_at TEXT",
 }
 
 _RECORDING_COLUMNS = (
@@ -119,7 +125,7 @@ _RECORDING_COLUMNS = (
 )
 _TRANSCRIPT_COLUMNS = (
     "id, recording_id, json_path, finished_at, engine, model, diarized, speaker_count, "
-    "mark_count, language"
+    "mark_count, language, last_edited_at"
 )
 
 
@@ -169,6 +175,9 @@ class Transcript:
     speaker_count: int | None
     mark_count: int | None
     language: str | None
+    # When the app last saved an edit to it (#83), else None. The JSON file is
+    # never edited; the edit list beside the library is (dsj/ui/edits.py).
+    last_edited_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -354,6 +363,7 @@ def _transcript(row: tuple[Any, ...]) -> Transcript:
         speaker_count=row[7],
         mark_count=row[8],
         language=row[9],
+        last_edited_at=row[10],
     )
 
 
@@ -508,6 +518,13 @@ class Library:
         found = self.transcript(transcript_id)
         assert found is not None
         return found
+
+    def mark_edited(self, transcript_id: int, when: str) -> None:
+        """Record that the app saved an edit to this transcript's edit list at `when` (#83)."""
+        with self._db:
+            self._db.execute(
+                "UPDATE transcripts SET last_edited_at = ? WHERE id = ?", (when, transcript_id)
+            )
 
     def relink(self, recording_id: int, media: Path) -> Recording:
         """Point a recording at `media`, if `media` holds the same recording.

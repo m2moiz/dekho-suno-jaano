@@ -68,7 +68,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
 from dsj.ui.jobs import Jobs
-from dsj.ui.routes import jobs, media, recording
+from dsj.ui.routes import jobs, marks, media, recording
 from dsj.ui.store import library_path
 
 # Committed, and inside the package, so an install carries the page with no
@@ -103,9 +103,10 @@ PAGE_HEADER = "x-dsj-page"
 # are everything else, and are served to any loopback request (#112 rule 2).
 _GUARDED = ("/api", "/media")
 
-# The one route whose requests come from a media element, which sends no
-# headers of its own: GET or HEAD of a recording's file (dsj/ui/routes/media.py).
-_MEDIA = re.compile(r"/api/recording/[^/]+/media")
+# The routes whose requests come from a media element, which sends no headers
+# of its own: GET or HEAD of a recording's file (dsj/ui/routes/media.py), and
+# of a finished bleep render's (#215, dsj/ui/routes/jobs.py).
+_MEDIA = re.compile(r"/api/(?:recording|renders)/[^/]+/media")
 
 # How long a second `dsj ui` waits for the first to write where it listens. The
 # first writes it straight after binding, so this only covers two launched in
@@ -298,6 +299,7 @@ def create_app(
     app.include_router(recording.router)
     app.include_router(media.router)
     app.include_router(jobs.router)
+    app.include_router(marks.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     app.add_api_route("/api/bye", bye, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.

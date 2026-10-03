@@ -69,6 +69,20 @@ def private_library(
     monkeypatch.setenv("DSJ_LIBRARY", str(tmp_path_factory.mktemp("library") / "library.db"))
 
 
+@pytest.fixture(autouse=True)
+def private_words(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point every test at its own, empty, user word list (#64).
+
+    Without it a test that runs `dsj hatao` would search the owner's own list in
+    ~/Library/Application Support/dsj/words.toml, and mute what the owner added
+    there rather than what the test set up. The file does not exist until a test
+    writes it.
+    """
+    monkeypatch.setenv("DSJ_WORDS", str(tmp_path_factory.mktemp("words") / "words.toml"))
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Give every slow-marked test the long timeout ceiling.
 

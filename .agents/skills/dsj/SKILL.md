@@ -7,9 +7,10 @@ description: >
   when a `dsj suno`, `dsj dekho` or `dsj dikhao` run needs polling, resuming, or
   reading after it failed. Also when a long recording must be made answerable without
   feeding the whole video to a vision model, when a transcript has to become SRT, VTT
-  or text, or when an existing caption file has to stand in for a transcript.
+  or text, when an existing caption file has to stand in for a transcript, or when
+  swear words or other listed words have to be bleeped out of a recording.
 metadata:
-  version: 0.3.0
+  version: 0.4.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -27,7 +28,8 @@ against about 10,000 for its transcript.
 Three verbs, in the order the tool works: `suno` (listen), `dekho` (look), `dikhao`
 (show me). Two more work on the transcript alone: `likho` (write) turns a finished one
 into subtitles or text for tools that are not dsj, and `parho` (read) turns a caption
-file those tools made into a transcript, in place of `suno`. The sixth, `ui`, is for a
+file those tools made into a transcript, in place of `suno`. `hatao` (remove it) writes a
+copy of the recording with the words a word list flags muted. The seventh, `ui`, is for a
 person rather than an agent: it opens the app in a browser.
 
 The transcript is one JSON object. Its top-level keys are `audio`, `engine`, `model`,
@@ -58,7 +60,7 @@ was written against the `version` in its own header above. If the two differ, a 
 named below may not exist in that build, and using one fails as `No such option`, which
 reads like a typo and is not one.
 
-`dsj --help` lists the six verbs. There is no `dsj doctor`, and no way to ask the tool
+`dsj --help` lists the seven verbs. There is no `dsj doctor`, and no way to ask the tool
 which engine it has until you try to use one.
 
 **From a clone, every command below needs a `uv run` prefix**, because `uv sync`
@@ -80,7 +82,7 @@ for the change before running the patched tool, and put a measurement, with the 
 that produced it, behind any constant you introduce. Then gate it as
 [Changing dsj itself](#changing-dsj-itself) says.
 
-## The six verbs
+## The seven verbs
 
 ### suno
 
@@ -172,6 +174,63 @@ open "$(dsj dikhao recording.mov 431.5 -o /tmp/f.jpg)"
 
 The 1500 px default is a measured ceiling: a full 2940 px frame is about 776 KB as a
 JPEG, more than most vision APIs want, and legibility stopped improving well below that.
+
+### hatao
+
+Bleep: write a copy of the recording with every word a word list flags muted. It reads
+the transcript `suno` wrote, runs no model, and never writes to the recording.
+
+```bash
+dsj hatao recording.mov -t transcript.json -o clean.mov
+```
+
+| Flag | |
+|---|---|
+| `-t, --transcript PATH` | **required.** The recording's transcript, as `suno` wrote it |
+| `-o, --out PATH` | **required.** The bleeped copy. Same container as the input, so the same suffix |
+| `--overwrite` | replace `--out` and the two files beside it if they exist; refused otherwise, exit 1 |
+
+The shipped word lists cover English, Urdu, Hindi and Punjabi, in Roman and in their own
+scripts, and every word is looked up in every list, so a sentence that mixes languages
+is covered. Add a word by adding its spellings to the user's own list, the file
+`$DSJ_WORDS` names, else `words.toml` in dsj's data folder
+(`~/Library/Application Support/dsj/` on a Mac). Matching is exact after folding case
+and punctuation, so list every spelling you want caught. A spelling may be a phrase of
+up to three words (`"bhen chod"`), which matches that many words in a row inside one
+sentence, never across a sentence's end, and mutes them together with the pauses
+between them; written run together (`bhenchod`) it matches too:
+
+```toml
+[[entry]]
+name = "yaar"
+roman = ["yaar", "yar"]
+script = ["یار"]
+```
+
+Each muted word is silenced from 0.1 s before its start to 0.1 s after its end, for at
+most 1.4 s and never past the start of the next word, since whisper can run a word's end
+on through the pause after it; stderr says when it cut one, and the log lists each. The
+picture is copied untouched, the sound re-encoded in its own codec. Beside `--out` goes
+`<stem>.bleeps.json`, listing every muted word with its `start`, `end` and the list
+`entry` that matched it, and the merged `spans` that were silenced. Read it to check
+the result, and listen at those times. Beside it too goes `<stem>.source.txt`, the content
+id of the recording the copy came from (its size, a dash, and a SHA-256 of its first and
+last MiB), and the copy carries the same id as the file tag `com.jaano.source`
+(`xattr -p com.jaano.source clean.mov`), except in a cloud-synced folder, where the
+sidecar alone holds it and stderr says so.
+
+Two things it says on stderr every run, and both matter:
+
+- `recall:` a recogniser can leave a swear word out of the transcript altogether, and a
+  word that was never written down cannot be muted. How often each engine does this is
+  not measured yet, and the line says so.
+- When nothing matched, `warning: nothing to mute`, naming the transcript and the lists
+  searched. **Nothing is written and the exit code is 3**, so a run that muted nothing
+  can never pass for a cleaned file.
+
+A transcript without word end times (`e`), written before v0.2.0 or imported by
+`parho`, is refused with exit 1 rather than guessed at: transcribe the recording again.
+A plain `kill` stops a render and leaves no output behind, exit 143.
 
 ### likho
 
@@ -454,10 +513,11 @@ decode ends leaves nothing behind.
 | Exit | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | `suno`: a mistake you can put right (a missing input or output directory, a bad `--engine`, an engine not installed), printed as one line, `dsj: <message>`. Anything else: an uncaught exception, printed as a traceback on stderr |
-| 2 | A usage error, including a `likho` format it cannot name. Run `dsj <verb> --help` |
+| 1 | `suno` and `hatao`: a mistake you can put right (a missing input or output directory, a bad `--engine`, an engine not installed, a transcript with no word ends, an output that exists), printed as one line, `dsj: <message>`. Anything else: an uncaught exception, printed as a traceback on stderr |
+| 2 | A usage error, including a `likho` format it cannot name or a `hatao` output in another container. Run `dsj <verb> --help` |
+| 3 | `hatao` only: no word matched a word list, so nothing was muted and nothing written |
 | 130 | Interrupted by Ctrl-C. For `suno`, re-run to resume; under whisper only a run stopped after its decode resumes |
-| 143 | Stopped by `kill`. The same as 130 otherwise |
+| 143 | Stopped by `kill`. The same as 130 otherwise; a `hatao` render leaves no file |
 | 75 | `suno` only: another `suno` is already running on this machine. Nothing was started; stderr names its pid |
 
 **Read the last line of stderr, not the first.** A failure you caused is that one

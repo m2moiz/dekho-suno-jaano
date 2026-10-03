@@ -52,6 +52,7 @@ def _row(library: Library, rec: store_mod.Recording) -> Recording:
                 speaker_count=t.speaker_count,
                 mark_count=t.mark_count,
                 language=t.language,
+                last_edited_at=t.last_edited_at,
             )
             for t in library.transcripts(rec.id)
         ],

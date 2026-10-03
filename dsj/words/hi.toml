@@ -1,0 +1,70 @@
+# Hindi words `dsj hatao` mutes by default (#64).
+#
+# Hand-written in this repo, the same words as ur.toml (spoken Hindi and Urdu
+# share them) with their Devanagari forms under `script`. ur.toml is loaded
+# first, so a Roman spelling found in both is reported as ur's. Spellings with
+# a nukta or a chandrabindu are listed both ways (ड़ and ड, ँ and ं), because a
+# recogniser writes either. Add your own words to your user file
+# (`dsj hatao --help` names it), never here: an update replaces this file.
+
+[[entry]]
+name = "madarchod"
+roman = ["madarchod", "maderchod", "madarchood", "madharchod", "maadarchod", "madar chod"]
+script = ["मादरचोद", "मादरचोत", "मादर चोद"]
+
+[[entry]]
+name = "behenchod"
+roman = ["behenchod", "bhenchod", "benchod", "bhanchod", "behnchod", "bhainchod",
+         "bhencho", "bencho", "behen chod", "bhen chod"]
+script = ["बहनचोद", "बहेनचोद", "भेनचोद", "भैनचोद", "बहनचोत", "बहन चोद", "बहेन चोद", "भेन चोद"]
+
+[[entry]]
+name = "chutiya"
+roman = ["chutiya", "chutia", "chootiya", "chootia", "chutiye", "chutiyapa", "choot", "chut"]
+script = ["चूतिया", "चुतिया", "चूतिये", "चुतिये", "चूतियापा", "चूत"]
+
+[[entry]]
+name = "gandu"
+roman = ["gandu", "gaandu", "gandoo", "gaand"]
+script = ["गांडू", "गाँडू", "गांडु", "गांड", "गाँड"]
+
+[[entry]]
+name = "lund"
+roman = ["lund", "lauda", "lawda", "loda", "lavda", "laude", "lawde", "lodu"]
+script = ["लंड", "लण्ड", "लौड़ा", "लौडा", "लौड़े", "लौडे", "लोडू", "लवड़ा"]
+
+[[entry]]
+name = "bhosdi"
+roman = ["bhosdi", "bhosdike", "bhosadike", "bhosdiwala", "bhosda", "bhosri"]
+script = ["भोसड़ी", "भोसडी", "भोसड़ा", "भोसडा", "भोसड़ीके", "भोसडीके", "भोसड़ी के", "भोसडी के"]
+
+[[entry]]
+name = "randi"
+roman = ["randi", "raandi", "rundi", "randwa"]
+script = ["रंडी", "रण्डी", "रंडवा"]
+
+[[entry]]
+name = "harami"
+roman = ["harami", "haraami", "haramzada", "haramzadi", "haramzade", "haramkhor"]
+script = ["हरामी", "हरामज़ादा", "हरामजादा", "हरामज़ादी", "हरामजादी", "हरामज़ादे", "हरामखोर",
+          "हराम ज़ादा", "हराम जादा", "हराम खोर"]
+
+[[entry]]
+name = "bharwa"
+roman = ["bharwa", "bhadwa", "bharwe", "bhadwe", "bhadva"]
+script = ["भड़वा", "भडवा", "भड़वे", "भडवे"]
+
+[[entry]]
+name = "jhant"
+roman = ["jhant", "jhaant", "jhantu"]
+script = ["झांट", "झाँट", "झांटू", "झाँटू"]
+
+[[entry]]
+name = "chodu"
+roman = ["chodu"]
+script = ["चोदू"]
+
+[[entry]]
+name = "kameena"
+roman = ["kamina", "kameena", "kamine", "kameene", "kameeni"]
+script = ["कमीना", "कमीने", "कमीनी"]

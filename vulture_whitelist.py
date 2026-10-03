@@ -27,6 +27,17 @@ whitelist.frozen_clock  # tests/conftest.py
 whitelist.already_extracted_media  # tests/conftest.py
 whitelist.no_real_diarizer  # tests/conftest.py
 whitelist.private_suno_lock  # tests/conftest.py
+whitelist.private_words  # tests/conftest.py
+whitelist.private_library  # tests/conftest.py, autouse
+# A session fixture, injected by name into the slow tests that load a model.
+whitelist.model_id  # tests/conftest.py
+# Signature fidelity for conftest's stand-ins: each restates the parameters of
+# the function it replaces (parakeet_mlx's load_audio, media.needs_conversion,
+# media.loudness), and the caller passes them, so the body ignoring one is the
+# point of a stub. Seen only when a branch changes conftest.
+whitelist.rate  # tests/conftest.py
+whitelist.stream  # tests/conftest.py
+whitelist.frame_s  # tests/conftest.py
 whitelist.end_what_the_test_started  # tests/test_run_guards.py, autouse
 whitelist.no_stub_outlives_the_module  # tests/test_run_guards.py, autouse
 # A session fixture, injected by name into tests/test_chunking.py,
@@ -44,6 +55,7 @@ whitelist.overlap_duration  # tests/test_chunking.py
 whitelist.suno  # dsj/cli.py
 whitelist.dekho  # dsj/cli.py
 whitelist.dikhao  # dsj/cli.py
+whitelist.hatao  # dsj/cli.py
 whitelist.likho  # dsj/cli.py
 whitelist.parho  # dsj/cli.py
 whitelist.ui  # dsj/cli.py
@@ -110,3 +122,37 @@ whitelist.import_recording  # dsj/ui/routes/recording.py, the same: @router.post
 # fields from it; FastAPI then serializes them. Nothing reads either as an
 # attribute (#113).
 whitelist.default_model  # dsj/ui/jobs.py EngineChoice, dsj/ui/schemas.py Engine
+whitelist.read_edits  # dsj/ui/routes/marks.py, the same: @router.get registers it
+whitelist.find_matches  # dsj/ui/routes/marks.py, the same: @router.post registers it
+whitelist.engines  # dsj/ui/routes/jobs.py, the same: @router.get registers it
+whitelist.render_media  # dsj/ui/routes/jobs.py, the same: @router.get registers it
+
+# The page's half of the wire format (#155): pydantic reads every field of these
+# models when FastAPI serializes or parses a request, and `just api` generates
+# ui/src/api/schema.d.ts from them, where the page reads each one. Nothing in
+# Python reads them as attributes, so a branch that changes dsj/ui/schemas.py
+# sees them as unused. Each is read on the page or by dsj/ui/jobs.py.
+whitelist.finished_at  # dsj/ui/schemas.py Transcript
+whitelist.diarized  # dsj/ui/schemas.py Transcript
+whitelist.speaker_count  # dsj/ui/schemas.py Transcript
+whitelist.mark_count  # dsj/ui/schemas.py Transcript
+whitelist.size_bytes  # dsj/ui/schemas.py Recording
+whitelist.audio_codec  # dsj/ui/schemas.py Recording
+whitelist.first_seen  # dsj/ui/schemas.py Recording
+whitelist.unreadable  # dsj/ui/schemas.py Recording
+whitelist.reason  # dsj/ui/schemas.py Engine
+whitelist.diarize  # dsj/ui/schemas.py TranscribeRequest, read by dsj/ui/jobs.py
+whitelist.start_over  # dsj/ui/schemas.py TranscribeRequest, read by dsj/ui/jobs.py
+whitelist.reports_progress  # dsj/ui/schemas.py Job
+whitelist.started_at  # dsj/ui/schemas.py Job
+whitelist.fraction  # dsj/ui/schemas.py Job
+whitelist.audio_done_s  # dsj/ui/schemas.py Job
+whitelist.elapsed_s  # dsj/ui/schemas.py Job
+whitelist.eta_s  # dsj/ui/schemas.py Job
+whitelist.stalled_s  # dsj/ui/schemas.py Job
+whitelist.error  # dsj/ui/schemas.py Job
+whitelist.notes  # dsj/ui/schemas.py Job
+whitelist.start_s  # dsj/ui/schemas.py Match
+whitelist.end_s  # dsj/ui/schemas.py Match
+whitelist.recall  # dsj/ui/schemas.py Matches
+whitelist.output  # dsj/ui/schemas.py RenderJob

@@ -319,7 +319,9 @@ def test_a_run_started_from_the_app_fills_every_column(tmp_path: Path, library: 
     assert transcript.finished_at > LONG_AGO.isoformat()
     recording = library.recording(transcript.recording_id)
     assert recording is not None
-    assert None not in vars(transcript).values()
+    # `last_edited_at` is None until a person edits it in the app (#83).
+    assert transcript.last_edited_at is None
+    assert None not in (vars(transcript) | {"last_edited_at": "never"}).values()
     # `unreadable` is the one column whose None is the good answer: ffprobe read it.
     assert recording.unreadable is None
     assert None not in (vars(recording) | {"unreadable": "read"}).values()
