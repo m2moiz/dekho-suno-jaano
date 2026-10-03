@@ -47,6 +47,10 @@ function play(element: HTMLMediaElement): void {
 // somewhere else, so the view stops following the playhead.
 const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "]);
 
+// The custom property on <html> that holds the player bar's height, read by
+// the page's scroll padding in index.css (#230).
+export const PLAYER_HEIGHT = "--dsj-player-height";
+
 const MEDIA_ERRORS: Record<number, string> = {
   1: "loading was stopped",
   2: "the network failed while loading it",
@@ -259,13 +263,36 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     };
   }, [frames]);
 
+  // The page's scroll padding at the bottom is this bar's height, so anything
+  // the browser scrolls into view, a word found with Cmd+F above all, centres
+  // in the part of the window the bar leaves uncovered (#230). Without it a
+  // match centred in the whole window sat under the picture: the bar is 327 of
+  // 600 px tall, 371 of 725 and 422 of 870 with a 640x360 picture showing.
+  const bar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = bar.current;
+    if (element === null) return;
+    const root = document.documentElement;
+    const resized = new ResizeObserver(() => {
+      root.style.setProperty(PLAYER_HEIGHT, `${element.getBoundingClientRect().height}px`);
+    });
+    resized.observe(element);
+    return () => {
+      resized.disconnect();
+      root.style.removeProperty(PLAYER_HEIGHT);
+    };
+  }, []);
+
   const attach = (element: HTMLMediaElement | null) => {
     media.current = element;
   };
   const src = mediaSrc(recording.id, soundOnly);
 
   return (
-    <div className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur">
+    <div
+      ref={bar}
+      className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur"
+    >
       {hasVideo && (
         // Folded away with display: none, which leaves the element playing.
         <div className={videoShown ? undefined : "hidden"}>
