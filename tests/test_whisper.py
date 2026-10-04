@@ -25,9 +25,10 @@ import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
-from dsj.checkpoint import checkpoint_path_for
+from dsj.asr import Transcription
+from dsj.checkpoint import checkpoint_path_for, read_transcription, write_transcription
 from dsj.merge import Turn
-from dsj.suno import Progress, transcribe
+from dsj.suno import LOOP_REASON, Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
 
 if TYPE_CHECKING:
@@ -1014,7 +1015,8 @@ def _words_seg(words: list[tuple[float, float, str]]) -> dict[str, Any]:
 _LOOP = _words_seg([(10.0 + i, 10.5 + i, " na") for i in range(9)])
 _BEFORE = _words_seg([(0.0, 0.5, " We"), (0.5, 1.0, " began.")])
 _AFTER = _words_seg([(18.0, 18.2, " Then"), (18.2, 18.4, " stop.")])
-_MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
+# Named, as mlx-whisper names the language it decoded in on every result (#229).
+_MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER], "language": "en"}
 
 # The neighbour after the loop starts at 18.0 s, inside the loop's span, so the
 # retry reads 10.0 to 18.0 s, decoded as 8.0 to 20.0 s: its clip clock is 8 s
@@ -1109,13 +1111,16 @@ def test_a_loop_split_into_one_word_sentences_is_decoded_again_as_one_span(
     split = [_words_seg([(10.0 + i, 10.5 + i, " na.")]) for i in range(9)]
     after = _words_seg([(19.0, 19.2, " Then"), (19.2, 19.4, " stop.")])
     calls = _stub_anchored(
-        monkeypatch, 30 * 16000, [{"text": "", "segments": [_BEFORE, *split, after]}, _READ]
+        monkeypatch,
+        30 * 16000,
+        [{"text": "", "segments": [_BEFORE, *split, after], "language": "en"}, _READ],
     )
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
 
     assert len(calls) == 2
     assert calls[1]["n_samples"] == int(20.5 * 16000) - int(8.0 * 16000)
+    assert calls[1]["language"] == "en"
     assert payload["unclear"] == []
     tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
     assert tokens == [
@@ -1127,6 +1132,65 @@ def test_a_loop_split_into_one_word_sentences_is_decoded_again_as_one_span(
         (19.2, " stop."),
     ]
     _assert_no_overlap(payload["sentences"])
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_retry_under_detection_decodes_in_the_language_the_main_pass_detected(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """No `--language`: the main pass detects one, and every retry decodes in it (#229).
+
+    Left to detect again on a 10 to 30 s clip, whisper wrote Urdu loop spans
+    in English, 3 to 5% of their words right. The fake records the language
+    each call was given.
+    """
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN | {"language": "ur"}, _READ])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert [c["language"] for c in calls] == [None, "ur"]
+    assert payload["unclear"] == []
+    assert " w0" in payload["text"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_run_that_cannot_say_what_language_it_decoded_in_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """With no language asked for and none reported, a retry would detect again (#229).
+
+    A result banked before #229 is such a run. Its loop stays `unclear`
+    rather than coming back in a language nobody chose.
+    """
+    unnamed = {k: v for k, v in _MAIN.items() if k != "language"}
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [unnamed, _READ])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 1
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON]
+
+
+def test_a_banked_result_keeps_the_language_it_was_decoded_in(tmp_path: Path) -> None:
+    """A resumed run retries in the language the banked decode detected (#229).
+
+    A bank written before #229 has no `language`, and reads back as None.
+    """
+    bank = tmp_path / "out.json.ckpt"
+    media = tmp_path / "in.wav"
+    media.write_bytes(b"")
+    fp = {"engine": "whisper"}
+    write_transcription(bank, fp, media, Transcription(text="", sentences=[], language="ur"))
+    found = read_transcription(bank, fp)
+    assert found is not None
+    assert found.language == "ur"
+
+    old = json.loads(bank.read_text())
+    del old["transcription"]["language"]
+    bank.write_text(json.dumps(old))
+    found = read_transcription(bank, fp)
+    assert found is not None
+    assert found.language is None
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -1188,7 +1252,9 @@ def test_retried_words_never_land_inside_a_neighbour(
 ) -> None:
     """Only the stretch no other sentence covers is read again, so nothing is written twice."""
     calls = _stub_anchored(
-        monkeypatch, 30 * 16000, [{"segments": [_PREV, _LOOP, _NEXT]}, _SEAM_READ]
+        monkeypatch,
+        30 * 16000,
+        [{"segments": [_PREV, _LOOP, _NEXT], "language": "en"}, _SEAM_READ],
     )
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
@@ -1220,7 +1286,9 @@ def test_a_loop_a_neighbour_already_covers_is_not_decoded_again(
     825.3 s). It stays a loop, as before the retry existed.
     """
     cover = _words_seg([(8.0, 14.0, " Long"), (14.0, 20.0, " sentence.")])
-    calls = _stub_anchored(monkeypatch, 30 * 16000, [{"segments": [cover, _LOOP]}])
+    calls = _stub_anchored(
+        monkeypatch, 30 * 16000, [{"segments": [cover, _LOOP], "language": "en"}]
+    )
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
 
@@ -1259,7 +1327,9 @@ def test_a_loop_over_silence_is_never_decoded_again(
         [(1.0 + i * 0.5, 1.4 + i * 0.5, " ha") for i in range(4)]
         + [(26.0 + i * 0.5, 26.4 + i * 0.5, " ha") for i in range(4)]
     )
-    calls = _stub_anchored(monkeypatch, 30 * rate, [{"segments": [across, over_silence]}])
+    calls = _stub_anchored(
+        monkeypatch, 30 * rate, [{"segments": [across, over_silence], "language": "en"}]
+    )
 
     payload = transcribe(wav, tmp_path / "out.json", engine="whisper", diarize=False)
 

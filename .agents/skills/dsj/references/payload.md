@@ -72,8 +72,12 @@ spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a f
 second attempt samples, so a rerun can recover a different set. A
 recovered span reads like any other sentence. Scored against three public hand-checked
 references, 58 to 95% of the words it recovered under `--roman-urdu` were right (77% or
-more in 11 of 12 runs), about the rate of the rest of those transcripts; under whisper left to detect the language, on Urdu,
-3 to 5% were, so the retry wrote words in the wrong language there. To know what was said in a span listed here, listen to it. On the five whisper transcripts
+more in 11 of 12 runs), about the rate of the rest of those transcripts. Under whisper left to
+detect the language, the retry decodes in the language the main pass detected (#229): on
+Urdu, 84% of the words it recovered were right, against 3 to 5% when each span was left to
+detect its own and came back in English. A run that cannot say what language it decoded
+in, a whisper result banked before that change, does not retry, and its loops stay here.
+To know what was said in a span listed here, listen to it. On the five whisper transcripts
 the rule was measured on, every sentence it matched was a loop. It runs under every
 engine; on a parakeet transcript of a 17-minute English call it matched nothing.
 

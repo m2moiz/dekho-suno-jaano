@@ -571,8 +571,9 @@ def _without_silence(
 # #148's podcast). A split loop (#223), read as one span since, cut the word
 # error rate in 8 of 12 runs that had one and raised it in none (70.8 to
 # 62.3% on the podcast's worst; scratch/accuracy/split_retry.py). Under whisper
-# left to detect the language, on Urdu, 3 to 5% match: the retry, deciding
-# the language on a short clip, writes the wrong one there.
+# left to detect the language, on Urdu, 3 to 5% matched: the retry, deciding
+# the language on a short clip, wrote the wrong one there, so it now decodes
+# in the language the main pass detected (#229).
 #
 # parakeet and sherpa never retry: is_loop catches nothing they write, and
 # neither has a second set of settings to try. RETRY_LOOPS = False turns it
@@ -1530,19 +1531,25 @@ def _transcribe(
         # speech (#181), and before the retry, so no loop over silence is
         # decoded again (#183); both last, so `unclear` comes out in the same order as
         # `sentences`.
+        # Read before the steps below rebuild the transcription without it.
+        decoded_in = language or transcription.language
         transcription, no_speech = _without_silence(
             _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription))),
             stretches,
         )
         # whisper's loops get one more decode each before they are given up
-        # on (#183); the chunk engines write none to retry.
-        if spec.kind == "file" and RETRY_LOOPS:
+        # on (#183); the chunk engines write none to retry. Always in the
+        # language the main pass decoded in (#229): left to detect it again
+        # on a 10 to 30 s clip, whisper wrote Urdu spans in English, 3 to 5%
+        # of them right. A run that cannot say what it decoded in (a result
+        # banked before #229) does not retry, and its loops stay `unclear`.
+        if spec.kind == "file" and RETRY_LOOPS and decoded_in is not None:
             whisper_model = model_id
             transcription = _retried(
                 transcription,
                 stretches,
                 lambda: redecoder(
-                    audio, model_id=whisper_model, language=language, prompt=prompt
+                    audio, model_id=whisper_model, language=decoded_in, prompt=prompt
                 ),
                 report,
             )

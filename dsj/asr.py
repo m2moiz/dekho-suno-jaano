@@ -131,10 +131,16 @@ class Transcription(NamedTuple):
     tokens: [{t, w, charOffset}]}`, each token also carrying `e` and `c` when
     the engine reports them -- so the caller writes them out rather than
     converting them.
+
+    `language` is the language the engine decoded in: the one asked for, or
+    the one whisper detected when none was (#229). None when the engine does
+    not say. Only a whisper run's loop retry reads it, and only the engine's
+    own result carries it; the steps after rebuild a Transcription without it.
     """
 
     text: str
     sentences: list[dict[str, Any]]
+    language: str | None = None
 
 
 def with_char_offsets(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:

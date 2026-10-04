@@ -574,7 +574,8 @@ def transcribe_whisper(
             from.
 
     Returns:
-        The full text and the payload's sentences, one per whisper segment.
+        The full text and the payload's sentences, one per whisper segment,
+        and the language it decoded in: `language`, or what whisper detected.
 
     Raises:
         WhisperUnavailable: if mlx-whisper is not installed.
@@ -610,7 +611,9 @@ def transcribe_whisper(
             on_progress=on_progress,
         )
         return Transcription(
-            text=" ".join(str(s["text"]) for s in sentences).strip(), sentences=sentences
+            text=" ".join(str(s["text"]) for s in sentences).strip(),
+            sentences=sentences,
+            language=language,
         )
 
     result = transcribe(
@@ -632,8 +635,13 @@ def transcribe_whisper(
     )
 
     segments = cast("list[dict[str, Any]]", result.get("segments") or [])
+    # whisper names the language it decoded in, detected from the first 30 s
+    # when none was asked for. The loop retry decodes in it (#229).
+    detected = result.get("language")
     return Transcription(
-        text=str(result.get("text", "")).strip(), sentences=_sentences_from(segments, 0.0)
+        text=str(result.get("text", "")).strip(),
+        sentences=_sentences_from(segments, 0.0),
+        language=language or (str(detected) if detected else None),
     )
 
 

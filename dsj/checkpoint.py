@@ -365,16 +365,24 @@ def write_transcription(
     payload = {
         "media": str(media.resolve()),
         "fingerprint": fp,
-        "transcription": {"text": transcription.text, "sentences": transcription.sentences},
+        "transcription": {
+            "text": transcription.text,
+            "sentences": transcription.sentences,
+            "language": transcription.language,
+        },
     }
     atomic_write_text(path, json.dumps(payload), fsync=True)
 
 
 class _TranscriptionDoc(BaseModel):
-    """A banked whisper result: whisper's text and sentences, as it returned them."""
+    """A banked whisper result: whisper's text and sentences, as it returned them.
+
+    `language` is absent from a result banked before #229; it reads as None.
+    """
 
     text: str
     sentences: list[dict[str, Any]]
+    language: str | None = None
 
 
 class _BankDoc(BaseModel):
@@ -400,7 +408,11 @@ def read_transcription(
         except ValidationError:
             payload = _UNREADABLE
         else:
-            return Transcription(text=doc.transcription.text, sentences=doc.transcription.sentences)
+            return Transcription(
+                text=doc.transcription.text,
+                sentences=doc.transcription.sentences,
+                language=doc.transcription.language,
+            )
     if isinstance(payload, str) and on_reject is not None:
         on_reject(payload)
     return None
