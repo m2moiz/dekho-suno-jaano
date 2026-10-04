@@ -70,10 +70,26 @@ with no loop and more than five words in that part replaces the loop in `sentenc
 to it, so no word is written twice; a loop that survives both is recorded here. On four of the owner's transcripts the two attempts recovered 26 of the 37 loop
 spans they tried, 551 of 787 loop seconds, at 42 to 129 s of extra wall time a file. The
 second attempt samples, so a rerun can recover a different set. A
-recovered span reads like any other sentence, and whether its words are right is not yet
-measured. To know what was said in a span listed here, listen to it. On the five whisper transcripts
+recovered span reads like any other sentence. Scored against three public hand-checked
+references, 58 to 95% of the words it recovered under `--roman-urdu` were right (77% or
+more in 11 of 12 runs), about the rate of the rest of those transcripts. Under whisper left to
+detect the language, the retry decodes in the language the main pass detected (#229): on
+Urdu, 84% of the words it recovered were right, against 3 to 5% when each span was left to
+detect its own and came back in English. A run that cannot say what language it decoded
+in, a whisper result banked before that change, does not retry, and its loops stay here.
+To know what was said in a span listed here, listen to it. On the five whisper transcripts
 the rule was measured on, every sentence it matched was a loop. It runs under every
 engine; on a parakeet transcript of a 17-minute English call it matched nothing.
+
+whisper can also split a loop into sentences, one word each: on a synthetic test file it
+wrote one word as 13 one-word sentences. So five or more consecutive sentences with the
+same words are a loop too when, taken together, they make more than six words: seven
+one-word sentences, or five of two words. The whole run is one entry here, from its first
+sentence's start to its last one's end, with every word of it counted. A hand-checked
+transcript of 14 minutes of real speech never repeats a sentence and never says one word
+more than four times in a row. Under whisper a split loop is decoded again the same way
+as a single loop sentence, its whole run as one span, and a retry that is itself a split
+loop is refused.
 
 **No speech** is a stretch of at least 5 s where every 0.1 s frame of the audio is quieter
 than -55 dBFS, with words in it anyway: whisper wrote about 220 over a silent minute of the
@@ -117,7 +133,7 @@ On a transcript with no `engine`, the `model` column is how to tell:
 |---|---|---|---|
 | parakeet | a hub id, `mlx-community/parakeet-tdt-0.6b-v3` by default | **Measured.** The decoder emits each token at an encoder frame, with a duration of whole 0.08 s frames. | One minus the normalised entropy of the decoder's whole distribution at that step. About half its tokens read `1.0`. |
 | sherpa | a local model directory, `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` by default | **Measured**, the same way: the same TDT model and the same duration head. | The probability the decoder gave the token it emitted, exp of its log-probability. sherpa exposes only that, not the distribution parakeet's entropy is taken over. |
-| whisper | a hub id naming whisper, `mlx-community/whisper-large-v3-turbo` by default | **Inferred.** whisper times each word after decoding it, by aligning its cross-attention to the audio, then shortens words it judges too long. How far that lands from the real boundary is not yet measured here, so pad a cut rather than trusting it to the frame. | The mean of the probabilities the model gave the word's sub-word tokens. |
+| whisper | a hub id naming whisper, `mlx-community/whisper-large-v3-turbo` by default | **Inferred.** whisper times each word after decoding it, by aligning its cross-attention to the audio, then shortens words it judges too long. With no punctuation to give a pause to, which is how `--language ur` writes, the aligner hands the whole pause to the word after it, so dsj starts such a word at most twice its segment's median word length (at most 1.4 s) before its end, whisper's own ceiling. How far the result lands from the real boundary on real speech is not yet measured, so pad a cut rather than trusting it to the frame. | The mean of the probabilities the model gave the word's sub-word tokens. |
 | `dsj parho`, from SRT | `import:srt` | **The file's.** One token per sentence, spanning the cue: `t` and `e` are the cue's start and end, and nothing finer is known. | **Absent.** Nothing measured it. |
 | `dsj parho`, from WebVTT | `import:vtt` | **The file's.** A cue with timestamp tags splits into word tokens, `t` from each tag, and **no `e`**: a tag marks where a word starts, not where it ends. An untagged cue is one token with `t` and `e`, as for SRT. | **Absent.** |
 

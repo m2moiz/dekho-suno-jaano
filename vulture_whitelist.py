@@ -48,6 +48,10 @@ whitelist.chunked_audio_path  # tests/conftest.py
 # and the parameter names must match upstream's keyword API exactly.
 whitelist.chunk_duration  # tests/test_chunking.py
 whitelist.overlap_duration  # tests/test_chunking.py
+# The same for _Generates, which restates BaseParakeet.generate: the call in
+# _LoadedParakeet._decode_once passes `decoding_config=` by this name, and a
+# Protocol body never reads its own parameters.
+whitelist.decoding_config  # dsj/parakeet.py
 
 # typer registers these by decorator, `@app.command("suno")` and friends, so
 # the only caller is typer's own dispatch. `dsj --help` lists all three, which

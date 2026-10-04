@@ -19,7 +19,7 @@ name = "fuck"
 roman = ["fuck", "fucks", "fucked", "fucker", "fuckers", "fucking", "fuckin", "fuckup",
          "fuckhead", "fuckface", "fuckwit", "motherfucker", "motherfuckers",
          "motherfucking", "motherfuckin", "mofo", "mother fucker", "mother fuckers",
-         "mother fucking"]
+         "mother fucking", "matherfuckers", "matherfucking"]
 disguised = ["f*ck", "f**k", "f***", "f*cking", "f**king", "f***ing", "f***in", "f*cked",
              "f***ed", "fck", "fcking", "fuk", "fuking", "phuck", "phucking",
              "motherf***er"]
@@ -27,7 +27,7 @@ disguised = ["f*ck", "f**k", "f***", "f*cking", "f**king", "f***ing", "f***in", 
 [[entry]]
 name = "shit"
 roman = ["shit", "shits", "shitty", "shitting", "shitted", "shithead", "shithole",
-         "bullshit", "horseshit", "dipshit", "shite", "bull shit", "horse shit"]
+         "bullshit", "horseshit", "horsshit", "dipshit", "shite", "bull shit", "horse shit"]
 disguised = ["sh*t", "s**t", "s***", "sh1t", "bulls**t", "bulls***", "sh*tty"]
 
 [[entry]]
@@ -38,7 +38,7 @@ disguised = ["b*tch", "b**ch", "b***h", "b****", "biatch", "biotch"]
 [[entry]]
 name = "ass"
 roman = ["ass", "arse", "asshole", "assholes", "arsehole", "arseholes", "dumbass",
-         "jackass", "asshat", "ass hole"]
+         "asholes", "jackass", "asshat", "ashat", "ass hole"]
 disguised = ["a**", "a**hole", "a**h***", "a******"]
 
 [[entry]]
@@ -57,7 +57,7 @@ roman = ["dickhead", "dickheads", "cocksucker", "cocksuckers", "dick head", "coc
 
 [[entry]]
 name = "wanker"
-roman = ["wanker", "wankers", "wank", "twat", "twats", "bollocks"]
+roman = ["wanker", "wankers", "wunkers", "wank", "twat", "twats", "bollocks"]
 
 [[entry]]
 name = "slut"

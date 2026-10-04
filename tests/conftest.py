@@ -10,6 +10,7 @@ re-reads on every call.
 from __future__ import annotations
 
 import contextlib
+import math
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -156,12 +157,19 @@ class FakeModel:
     def generate(
         self, mel: Any, *, decoding_config: DecodingConfig | None = None
     ) -> list[AlignedResult]:
-        """Decode `self.tokens` as one chunk, ignoring the mel entirely.
+        """Decode `self.tokens` as one chunk, or those inside a part of it.
 
         Signature-compatible with dsj.chunking._Generates, which is the
         Protocol naming the only method dsj calls on a model. `mel` is Any
         for the same reason it is there: mlx's array type is a compiled
         extension with no stubs.
+
+        `mel` is the samples (the fixture stubs get_logmel to hand them
+        through), a `range` from load_audio's stub. A chunk starting at
+        sample 0 gets every token, as before. Anything else is a part
+        dsj.parakeet decodes again (#228): it gets the tokens that start
+        inside it, timed from its own start, as a real model would hear
+        only that audio.
         """
         from parakeet_mlx.alignment import (
             AlignedToken,
@@ -171,15 +179,22 @@ class FakeModel:
         )
 
         self.mels.append(mel)
+        rate = self.preprocessor_config.sample_rate
+        lo, hi = (
+            (mel.start / rate, mel.stop / rate)
+            if isinstance(mel, range) and mel.start > 0
+            else (0.0, math.inf)
+        )
         decoded = [
             AlignedToken(
                 id=i,
                 text=t.text,
-                start=t.start,
+                start=t.start - lo,
                 duration=t.end - t.start,
                 confidence=t.confidence,
             )
             for i, t in enumerate(self.tokens)
+            if lo <= t.start < hi
         ]
         cfg: Any = (decoding_config.sentence if decoding_config else None) or SentenceConfig()
         return [sentences_to_result(tokens_to_sentences(decoded, cfg))]

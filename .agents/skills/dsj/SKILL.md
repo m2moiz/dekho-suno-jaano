@@ -10,7 +10,7 @@ description: >
   or text, when an existing caption file has to stand in for a transcript, or when
   swear words or other listed words have to be bleeped out of a recording.
 metadata:
-  version: 0.4.0
+  version: 0.4.1
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -125,6 +125,11 @@ any other whisper run reports 0% and then nothing until transcription ends:
 dsj suno voice-note.m4a -o transcript.json --roman-urdu
 ```
 
+`--roman-urdu` is for Urdu and English mixed in one sentence. For speech that is mostly
+Urdu, `--engine whisper --language ur` makes about half the errors (21 to 23% of words
+against 41 to 43% on a public Urdu set), written in Urdu script. Measured per mode in
+[references/engines.md](references/engines.md#which-mode-by-error-rate).
+
 Engine choice, the install bundles, and the extra step `--engine sherpa` needs are in
 [references/engines.md](references/engines.md).
 
@@ -210,7 +215,8 @@ script = ["یار"]
 Each muted word is silenced from 0.1 s before its start to 0.1 s after its end, for at
 most 1.4 s and never past the start of the next word, since whisper can run a word's end
 on through the pause after it; stderr says when it cut one, and the log lists each. The
-picture is copied untouched, the sound re-encoded in its own codec. Beside `--out` goes
+picture is copied untouched, the sound re-encoded in its own codec (Vorbis as Opus: ffmpeg
+has no usable Vorbis encoder). Beside `--out` goes
 `<stem>.bleeps.json`, listing every muted word with its `start`, `end` and the list
 `entry` that matched it, and the merged `spans` that were silenced. Read it to check
 the result, and listen at those times. Beside it too goes `<stem>.source.txt`, the content

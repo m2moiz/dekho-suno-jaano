@@ -25,9 +25,10 @@ import numpy as np
 import pytest
 
 from dsj import whisper as whisper_mod
-from dsj.checkpoint import checkpoint_path_for
+from dsj.asr import Transcription
+from dsj.checkpoint import checkpoint_path_for, read_transcription, write_transcription
 from dsj.merge import Turn
-from dsj.suno import Progress, transcribe
+from dsj.suno import LOOP_REASON, Progress, transcribe
 from dsj.whisper import ROMAN_URDU_PROMPT, WhisperUnavailable, transcribe_whisper
 
 if TYPE_CHECKING:
@@ -215,6 +216,77 @@ def test_a_whisper_word_ending_before_it_starts_is_written_at_its_start() -> Non
     [sentence] = whisper_mod._sentences_from([segment], 0.0)  # pyright: ignore[reportPrivateUsage]
     [token] = sentence["tokens"]
     assert (token["t"], token["e"]) == (1.0, 1.0)
+
+
+# Three words said 1.5 s apart, where scratch/bleep_recall/make_audio.py put
+# them in en_samantha.wav, and the times `--roman-urdu` gave them on #152's
+# run: each word starts where the one before it ended, in the pause (#222).
+_SAID = [(1.0, 1.378), (2.878, 3.383), (4.883, 5.318)]
+_ALIGNED_INTO_PAUSES = [(0.0, 1.2), (1.2, 3.34), (3.34, 5.3)]
+
+
+def _covered(said: tuple[float, float], spans: list[tuple[float, float]]) -> float:
+    a, b = said
+    return sum(max(0.0, min(b, y) - max(a, x)) for x, y in spans) / (b - a)
+
+
+@pytest.mark.parametrize("segments", ["one", "one per word"])
+def test_a_word_whisper_starts_in_the_pause_before_it_is_muted_where_it_is_said(
+    tmp_path: Path, segments: str
+) -> None:
+    """The pause goes back to being a pause, so `dsj hatao` mutes the word (#222).
+
+    With no full stop for the aligner to give the pause to, whisper's start for
+    a word said after a pause is the previous word's end. hatao caps a mute at
+    MAX_WORD_S from the start, so it silenced 1.4 s of the pause and stopped
+    before the word: 0.36 s of the 0.505 s word muted, the rest audible.
+    whisper writes such words in one segment, or one segment each, as it did
+    at the end of every English set. The first word is not asserted on: whisper
+    ended it 0.18 s before it was said, a different miss plain whisper has too.
+    """
+    from dsj import hatao
+
+    words = [
+        (a, b, w)
+        for w, (a, b) in zip([" one", " two", " three"], _ALIGNED_INTO_PAUSES, strict=True)
+    ]
+    groups = [words] if segments == "one" else [[w] for w in words]
+    sentences = whisper_mod._sentences_from(  # pyright: ignore[reportPrivateUsage]
+        [_words_seg(g) for g in groups], 0.0
+    )
+    doc = hatao.from_transcript({"sentences": sentences}, tmp_path / "a.wav", duration_s=6.0)
+    items = [i for i, e in enumerate(doc.content) if isinstance(e, hatao.Item) and e.text]
+
+    for index, said in zip(items[1:], _SAID[1:], strict=True):
+        muted = hatao.mute(doc, index, index + 1)
+        spans = hatao.spans_to_mute(muted, duration_s=6.0)
+        assert _covered(said, spans) >= 0.9, (said, spans)
+
+
+def test_a_word_after_a_gap_or_in_fluent_speech_keeps_its_start() -> None:
+    """Only a long word handed the previous word's end moves; nothing else does (#222)."""
+    segment = {
+        "start": 0.0,
+        "end": 3.0,
+        "text": " a b c d.",
+        "words": [
+            {"word": " a", "start": 0.0, "end": 0.3, "probability": 0.9},
+            {"word": " b", "start": 0.3, "end": 0.6, "probability": 0.9},
+            # after a gap the aligner already placed: left where it is
+            {"word": " c", "start": 1.0, "end": 2.5, "probability": 0.9},
+            {"word": " d.", "start": 2.5, "end": 3.0, "probability": 0.9},
+        ],
+    }
+    [sentence] = whisper_mod._sentences_from([segment], 0.0)  # pyright: ignore[reportPrivateUsage]
+    assert [t["t"] for t in sentence["tokens"]] == [0.0, 0.3, 1.0, 2.5]
+
+
+def test_a_long_first_word_starts_at_its_ceiling_not_at_the_start_of_the_decode() -> None:
+    """The first word of a decode follows its start, 0, as later words follow the one before."""
+    segment = _words_seg([(0.0, 3.0, " late"), (3.0, 3.3, " a"), (3.3, 3.6, " b")])
+    [sentence] = whisper_mod._sentences_from([segment], 10.0)  # pyright: ignore[reportPrivateUsage]
+    # Median 0.3 s, so the ceiling is 0.6 s: 3.0 - 0.6 on the decode's clock, plus 10.
+    assert [t["t"] for t in sentence["tokens"]] == [12.4, 13.0, 13.3]
 
 
 def test_numpy_times_are_narrowed_to_floats(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -943,7 +1015,8 @@ def _words_seg(words: list[tuple[float, float, str]]) -> dict[str, Any]:
 _LOOP = _words_seg([(10.0 + i, 10.5 + i, " na") for i in range(9)])
 _BEFORE = _words_seg([(0.0, 0.5, " We"), (0.5, 1.0, " began.")])
 _AFTER = _words_seg([(18.0, 18.2, " Then"), (18.2, 18.4, " stop.")])
-_MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER]}
+# Named, as mlx-whisper names the language it decoded in on every result (#229).
+_MAIN = {"text": "", "segments": [_BEFORE, _LOOP, _AFTER], "language": "en"}
 
 # The neighbour after the loop starts at 18.0 s, inside the loop's span, so the
 # retry reads 10.0 to 18.0 s, decoded as 8.0 to 20.0 s: its clip clock is 8 s
@@ -961,6 +1034,8 @@ _READ = {
 }
 _LOOPED = {"segments": [_words_seg([(2.0 + i * 0.5, 2.4 + i * 0.5, " na") for i in range(9)])]}
 _SHORT = {"segments": [_words_seg([(3.0, 3.5, " one"), (3.5, 4.0, " two")])]}
+# A retry that loops as one-word sentences (#223), which no single segment shows.
+_SPLIT_LOOPED = {"segments": [_words_seg([(2.0 + i, 2.4 + i, " na.")]) for i in range(9)]}
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -1003,7 +1078,9 @@ def test_a_loop_span_is_replaced_by_the_retrys_words_on_the_recordings_clock(
 
 
 @pytest.mark.usefixtures("already_extracted_media")
-@pytest.mark.parametrize("first", [_LOOPED, _SHORT], ids=["loops", "five-words-or-fewer"])
+@pytest.mark.parametrize(
+    "first", [_LOOPED, _SHORT, _SPLIT_LOOPED], ids=["loops", "five-words-or-fewer", "split-loop"]
+)
 def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path, first: dict[str, Any]
 ) -> None:
@@ -1019,6 +1096,101 @@ def test_the_warm_retry_runs_only_when_the_plain_one_fails(
     assert calls[2]["initial_prompt"] == ROMAN_URDU_PROMPT
     assert payload["unclear"] == []
     assert " w0" in payload["text"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_loop_split_into_one_word_sentences_is_decoded_again_as_one_span(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """#223's split loop gets #183's retry: its whole run is one span, read once.
+
+    Nine one-word sentences from 10.0 to 18.5 s, none of them a loop alone. The
+    retry reads 10.0 to 18.5 s, decoded as 8.0 to 20.5 s, and the seven of its
+    words that start in that span replace all nine sentences.
+    """
+    split = [_words_seg([(10.0 + i, 10.5 + i, " na.")]) for i in range(9)]
+    after = _words_seg([(19.0, 19.2, " Then"), (19.2, 19.4, " stop.")])
+    calls = _stub_anchored(
+        monkeypatch,
+        30 * 16000,
+        [{"text": "", "segments": [_BEFORE, *split, after], "language": "en"}, _READ],
+    )
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 2
+    assert calls[1]["n_samples"] == int(20.5 * 16000) - int(8.0 * 16000)
+    assert calls[1]["language"] == "en"
+    assert payload["unclear"] == []
+    tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    assert tokens == [
+        (0.0, " We"),
+        (0.5, " began."),
+        *[(10.5 + i, f" w{i}") for i in range(6)],
+        (18.3, " last"),
+        (19.0, " Then"),
+        (19.2, " stop."),
+    ]
+    _assert_no_overlap(payload["sentences"])
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_retry_under_detection_decodes_in_the_language_the_main_pass_detected(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """No `--language`: the main pass detects one, and every retry decodes in it (#229).
+
+    Left to detect again on a 10 to 30 s clip, whisper wrote Urdu loop spans
+    in English, 3 to 5% of their words right. The fake records the language
+    each call was given.
+    """
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [_MAIN | {"language": "ur"}, _READ])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert [c["language"] for c in calls] == [None, "ur"]
+    assert payload["unclear"] == []
+    assert " w0" in payload["text"]
+
+
+@pytest.mark.usefixtures("already_extracted_media")
+def test_a_run_that_cannot_say_what_language_it_decoded_in_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch, fake_media: Path, tmp_path: Path
+) -> None:
+    """With no language asked for and none reported, a retry would detect again (#229).
+
+    A result banked before #229 is such a run. Its loop stays `unclear`
+    rather than coming back in a language nobody chose.
+    """
+    unnamed = {k: v for k, v in _MAIN.items() if k != "language"}
+    calls = _stub_anchored(monkeypatch, 30 * 16000, [unnamed, _READ])
+
+    payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
+
+    assert len(calls) == 1
+    assert [u["reason"] for u in payload["unclear"]] == [LOOP_REASON]
+
+
+def test_a_banked_result_keeps_the_language_it_was_decoded_in(tmp_path: Path) -> None:
+    """A resumed run retries in the language the banked decode detected (#229).
+
+    A bank written before #229 has no `language`, and reads back as None.
+    """
+    bank = tmp_path / "out.json.ckpt"
+    media = tmp_path / "in.wav"
+    media.write_bytes(b"")
+    fp = {"engine": "whisper"}
+    write_transcription(bank, fp, media, Transcription(text="", sentences=[], language="ur"))
+    found = read_transcription(bank, fp)
+    assert found is not None
+    assert found.language == "ur"
+
+    old = json.loads(bank.read_text())
+    del old["transcription"]["language"]
+    bank.write_text(json.dumps(old))
+    found = read_transcription(bank, fp)
+    assert found is not None
+    assert found.language is None
 
 
 @pytest.mark.usefixtures("already_extracted_media")
@@ -1080,7 +1252,9 @@ def test_retried_words_never_land_inside_a_neighbour(
 ) -> None:
     """Only the stretch no other sentence covers is read again, so nothing is written twice."""
     calls = _stub_anchored(
-        monkeypatch, 30 * 16000, [{"segments": [_PREV, _LOOP, _NEXT]}, _SEAM_READ]
+        monkeypatch,
+        30 * 16000,
+        [{"segments": [_PREV, _LOOP, _NEXT], "language": "en"}, _SEAM_READ],
     )
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
@@ -1090,12 +1264,14 @@ def test_retried_words_never_land_inside_a_neighbour(
     assert payload["unclear"] == []
     _assert_no_overlap(payload["sentences"])
     tokens = [(t["t"], t["w"]) for s in payload["sentences"] for t in s["tokens"]]
+    # Each " seam." runs 2 to 3 s from the previous word's end, so it starts
+    # 1.4 s before its end, as _pause_free_starts starts a word given a pause (#222).
     assert tokens == [
         (7.0, " Before"),
-        (9.0, " seam."),
+        (10.6, " seam."),
         *[(12.0 + i * 0.5, f" v{i}") for i in range(8)],
         (16.0, " After"),
-        (18.0, " seam."),
+        (18.6, " seam."),
     ]
 
 
@@ -1110,7 +1286,9 @@ def test_a_loop_a_neighbour_already_covers_is_not_decoded_again(
     825.3 s). It stays a loop, as before the retry existed.
     """
     cover = _words_seg([(8.0, 14.0, " Long"), (14.0, 20.0, " sentence.")])
-    calls = _stub_anchored(monkeypatch, 30 * 16000, [{"segments": [cover, _LOOP]}])
+    calls = _stub_anchored(
+        monkeypatch, 30 * 16000, [{"segments": [cover, _LOOP], "language": "en"}]
+    )
 
     payload = transcribe(fake_media, tmp_path / "out.json", engine="whisper", diarize=False)
 
@@ -1149,7 +1327,9 @@ def test_a_loop_over_silence_is_never_decoded_again(
         [(1.0 + i * 0.5, 1.4 + i * 0.5, " ha") for i in range(4)]
         + [(26.0 + i * 0.5, 26.4 + i * 0.5, " ha") for i in range(4)]
     )
-    calls = _stub_anchored(monkeypatch, 30 * rate, [{"segments": [across, over_silence]}])
+    calls = _stub_anchored(
+        monkeypatch, 30 * rate, [{"segments": [across, over_silence], "language": "en"}]
+    )
 
     payload = transcribe(wav, tmp_path / "out.json", engine="whisper", diarize=False)
 
@@ -1202,8 +1382,10 @@ def test_the_seconds_two_windows_share_are_written_once(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
+        # " then" and " more." run 1.9 and 3 s from the previous word's end,
+        # so they start 1.4 s before their ends (#222, _pause_free_starts).
         (1.0, " one"), (2.0, " two"), (5.0, " shared"), (6.0, " words"),
-        (7.1, " here"), (8.1, " then"), (10.0, " more."),
+        (7.1, " here"), (8.6, " then"), (11.6, " more."),
     ]
 
 
@@ -1233,7 +1415,8 @@ def test_a_loop_timed_into_a_windows_last_second_is_not_written(
 
     _assert_no_overlap(got.sentences)
     assert [(t["t"], t["w"]) for s in got.sentences for t in s["tokens"]] == [
-        (1.0, " one"), (2.0, " two."), (8.0, " The"), (9.0, " next"), (10.0, " window."),
+        # " window." runs 3 s from " next"'s end: 1.4 s before its end (#222).
+        (1.0, " one"), (2.0, " two."), (8.0, " The"), (9.0, " next"), (11.6, " window."),
     ]
 
 

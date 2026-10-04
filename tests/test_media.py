@@ -11,6 +11,7 @@ The fixtures are seconds long and a few kilobytes; no binary is committed.
 from __future__ import annotations
 
 import gc
+import re
 import shutil
 import subprocess
 import warnings
@@ -384,14 +385,38 @@ def test_mute_silences_exactly_the_spans_of_a_wav_and_nothing_else(
     original, muted = _samples(ready_wav), _samples(out)
     assert len(muted) == len(original)
     silent = np.flatnonzero(muted != original)
-    # Every sample of each span is silent, and at most one 5 ms frame more.
+    # Every sample of each span is silent, and only the fades either side change.
     for a, b in ((0.5, 0.75), (1.2, 1.3)):
         assert not muted[int(a * 16000) : int(b * 16000)].any()
-    frame = int(media.MUTE_FRAME_S * 16000)
-    inside = ((silent >= 0.5 * 16000 - frame) & (silent < 0.75 * 16000 + frame)) | (
-        (silent >= 1.2 * 16000 - frame) & (silent < 1.3 * 16000 + frame)
+    fade = int(media.MUTE_FADE_S * 16000)
+    inside = ((silent >= 0.5 * 16000 - fade) & (silent < 0.75 * 16000 + fade)) | (
+        (silent >= 1.2 * 16000 - fade) & (silent < 1.3 * 16000 + fade)
     )
     assert inside.all(), "a sample outside every span changed"
+
+
+def test_mute_fades_into_and_out_of_the_silence_rather_than_cutting(
+    ready_wav: Path, tmp_path: Path
+) -> None:
+    """A sound dropped to 0 in one sample is a click at the mute's edge (#216).
+
+    The sine's own steepest step between two samples is the most any sample of
+    the render may move by. A cut at a 440 Hz sine's crest steps by its whole
+    height, about five times that.
+    """
+    original = _samples(ready_wav)
+    out = media.mute(ready_wav, [(0.5, 0.75), (1.2, 1.3)], tmp_path / "clean.wav")
+    muted = _samples(out)
+    own = float(np.abs(np.diff(original)).max())
+    assert float(np.abs(np.diff(muted)).max()) <= 1.25 * own
+
+
+def test_the_apps_preview_fades_as_long_as_a_render() -> None:
+    """The app's live preview of a bleep fades with the render's own length (#225)."""
+    preview = Path(__file__).parents[1] / "ui/src/features/bleep/liveMute.ts"
+    found = re.search(r"^export const MUTE_FADE_S = ([0-9.]+);$", preview.read_text(), re.MULTILINE)
+    assert found, f"{preview} no longer declares MUTE_FADE_S"
+    assert float(found[1]) == media.MUTE_FADE_S
 
 
 def test_mute_keeps_the_picture_and_the_length_of_a_movie(
@@ -409,25 +434,92 @@ def test_mute_keeps_the_picture_and_the_length_of_a_movie(
     )
 
 
+def _audio_start(path: Path) -> float:
+    """`ffprobe -show_entries stream=start_time` of the first sound stream."""
+    return float(
+        subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=start_time", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "picture", "codec"),
+    [
+        (".mov", "libx264", "aac"),
+        (".mov", "libx264", "pcm_s16le"),
+        # Opus, which ffmpeg's own experimental encoder refused (#227): a
+        # browser's screen recording, and the same sound in a .mkv.
+        (".webm", "libvpx-vp9", "libopus"),
+        (".mkv", "libx264", "libopus"),
+    ],
+)
 def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
-    tmp_path: Path,
+    tmp_path: Path, suffix: str, picture: str, codec: str
 ) -> None:
-    """A transcript's clock starts at the first sample; the filter's at the file's start."""
-    late = tmp_path / "late.mov"
+    """A transcript's clock starts at the first sample; the filter's at the file's start.
+
+    The render's sound starts where the input's did, to the millisecond, so the
+    silence lands at the transcript's times in the render's own clock too
+    (#224). AAC's encoder used to start the render's sound one 1024-sample frame
+    (21 ms) early, so every mute sat 21 ms late in it. Matroska and WebM time
+    packets in whole milliseconds, and Opus starts 312 samples (6.5 ms) before
+    its first sound, so there the two starts may round one tick apart.
+    """
+    late = tmp_path / f"late{suffix}"
     _ffmpeg(
         "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
-        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=3:sample_rate=48000",
-        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+        "-itsoffset", "0.479", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=3:sample_rate=48000",
+        "-map", "0:v", "-map", "1:a", "-c:v", picture, "-pix_fmt", "yuv420p", "-c:a", codec,
         str(late),
     )
-    out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.mov")
-    quiet = np.flatnonzero(np.abs(_samples(out)) < 1e-4)
-    # The longest quiet run: a sine crosses zero by itself, a sample at a time.
+    out = media.mute(late, [(1.0, 1.5)], tmp_path / f"clean{suffix}")
+    tick = 0.001 if suffix == ".mov" else 0.0015
+    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=tick)
+    # The loudest sample of each 1.5 ms block at 16 kHz, which always holds a
+    # crest of the 440 Hz sine (one every 1.14 ms): its height.
+    level = np.abs(_samples(out))
+    height = level[: len(level) // 24 * 24].reshape(-1, 24).max(axis=1)
+    quiet = np.flatnonzero(height < 0.5 * height.max())
     runs = np.split(quiet, np.flatnonzero(np.diff(quiet) != 1) + 1)
     longest = max(runs, key=len)
-    # AAC's own delay moves the edges a few ms either way; the offset was 479 ms.
-    assert longest[0] / 16000 == pytest.approx(1.0, abs=0.03)
-    assert longest[-1] / 16000 == pytest.approx(1.5, abs=0.03)
+    # Below half height is the middle of each fade onward, which the AAC
+    # encoder's ringing around a fade does not move, as it does the first sample
+    # under 1e-4. The middle of each fade is half of MUTE_FADE_S outside the span.
+    half = media.MUTE_FADE_S / 2
+    assert longest[0] * 0.0015 == pytest.approx(1.0 - half, abs=0.005)
+    assert (longest[-1] + 1) * 0.0015 == pytest.approx(1.5 + half, abs=0.005)
+
+
+def test_a_vorbis_sound_is_rendered_as_opus_with_the_span_silent(tmp_path: Path) -> None:
+    """A Vorbis sound comes back as Opus, which a .webm also holds (#227).
+
+    ffmpeg's own Vorbis encoder is experimental and aborts, and this ffmpeg
+    has no libvorbis.
+    """
+    late = tmp_path / "late.webm"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
+        "-itsoffset", "0.479", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=3:sample_rate=48000",
+        "-map", "0:v", "-map", "1:a", "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
+        "-c:a", "vorbis", "-strict", "experimental", "-ac", "2",
+        str(late),
+    )
+    out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.webm")
+    codec = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream=codec_name", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert codec == "opus"
+    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=0.0015)
+    # The span, in the file's clock: the sound starts 0.479 s in.
+    assert _mean_volume(out, 1.53, 0.4) < _mean_volume(late, 1.53, 0.4) - 60
+    assert _mean_volume(out, 2.2, 0.5) == pytest.approx(_mean_volume(late, 2.2, 0.5), abs=0.5)
 
 
 def test_mute_reports_progress_in_seconds_written(ready_wav: Path, tmp_path: Path) -> None:

@@ -166,6 +166,39 @@ Every run passed `--no-diarize`. The full model writes most of its text in Urdu 
 whatever the prompt says, so `whisper-large-v3-turbo` is the default here and changing it
 means re-measuring.
 
+### Which mode, by error rate
+
+Word error rate against three public hand-checked references, whisper-large-v3-turbo,
+`--no-diarize`, two runs per whisper mode, 3 Oct 2026 (#184). The two figures are the two
+runs; whisper does not give the same answer twice. parakeet's column is from 4 Oct 2026,
+after #228.
+
+| speech | `--roman-urdu` | `--roman-urdu`, 30 s window | `--language ur` | whisper, language detected | parakeet |
+|---|---:|---:|---:|---:|---:|
+| Urdu and English in one sentence, #148's podcast, 14 min | 33.9 · 33.8% | 29.0 · 29.9% | 45.5 · 57.4% | 70.8 · 63.1% | 57.7% |
+| Urdu, UrduSpeech's hand-checked set, 34 min | 40.8 · 42.7% | 47.1 · 48.7% | 20.7 · 23.3% | 25.8 · 25.2% | not run |
+| English, an Earnings-22 call, 30 min | 29.1 · 15.8% | 19.3 · 15.3% | 18.9 · 7.9% | 4.5 · 4.4% | 4.9% |
+
+Output and reference are both romanized with `uroman` and compared as consonant
+skeletons, so the same word in Roman and in Urdu script, or English written in Urdu
+letters, counts as a match. A hand check of 50 such pairs found the comparison wrong on
+5, four of them two different words called the same, so it forgives slightly more than it
+punishes. The scripts are in `scratch/accuracy/`.
+
+1. **Urdu and English mixed:** `--roman-urdu`. `--language ur` gets 56 to 62% of the
+   English words wrong, against 9 to 11% under `--roman-urdu`, and whisper left to detect
+   the language writes the English and drops the Urdu.
+2. **Mostly Urdu:** `--engine whisper --language ur`, about half the errors of
+   `--roman-urdu` (21 to 23% against 41 to 43%), in Urdu script.
+3. **The window stays at 120 s.** 30 s is 4 to 5 points better on the mixed recording
+   and 6 points worse on Urdu, and on the owner's recordings it lost words (#100).
+4. **English:** `--roman-urdu` and `--language ur` both loop on English, `--roman-urdu`
+   for 140 to 284 s of the 30 minutes. parakeet used to skip stretches of 11 to 46 s of
+   the call's speech after a full stop, unmarked, for 10%. Each gap over 4 s is now
+   decoded again on its own (#228): missed words fell from 6.6% to 0.7%, whisper's 1.3%.
+
+The owner's own corrected 10 minutes (#182) is the check on his voice.
+
 ## sherpa, Android, and the proot constraint
 
 sherpa runs the ONNX export of the same parakeet weights, which is what makes a phone

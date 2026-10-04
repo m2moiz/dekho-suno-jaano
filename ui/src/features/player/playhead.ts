@@ -28,10 +28,23 @@ window.dsjPlayheadTicks = () => Array.from(ticks.subarray(0, Math.min(ticked, RI
 
 // Where a followed word may sit, as fractions of the window's height: inside
 // this band the view stays put; outside it the view moves the word to TARGET.
-// The bottom edge leaves room for the player bar.
+// The band also ends where the player bar starts, whichever is higher: with a
+// picture showing, the bar starts at 45% of an 800x600 window, and a word
+// between there and 75% played on under the picture (#231).
 const BAND_TOP = 0.15;
 const BAND_BOTTOM = 0.75;
 const TARGET = 0.35;
+
+// The custom property on <html> that holds the player bar's height, written by
+// the Player and read by the page's scroll padding in index.css (#230) and by
+// the follow band here (#231).
+export const PLAYER_HEIGHT = "--dsj-player-height";
+
+/** The player bar's height in px, 0 when no player has written it. */
+function playerHeight(): number {
+  const value = Number.parseFloat(document.documentElement.style.getPropertyValue(PLAYER_HEIGHT));
+  return Number.isFinite(value) ? value : 0;
+}
 
 export type PlayheadOptions = {
   media: HTMLMediaElement;
@@ -149,7 +162,14 @@ export class Playhead {
     if (this.shown < 0) return;
     const rect = this.range.getBoundingClientRect();
     const height = window.innerHeight;
-    if (rect.top >= height * BAND_TOP && rect.bottom <= height * BAND_BOTTOM) return;
-    window.scrollBy({ top: rect.top - height * TARGET, behavior: "smooth" });
+    const top = height * BAND_TOP;
+    // Never shorter than the word, or a word that cannot fit would be
+    // scrolled again on every frame.
+    const bottom = Math.max(Math.min(height * BAND_BOTTOM, height - playerHeight()), top + rect.height);
+    if (rect.top >= top && rect.bottom <= bottom) return;
+    // TARGET, unless the word would end under the player there: then the
+    // middle of what the player leaves.
+    const target = height * TARGET + rect.height <= bottom ? height * TARGET : (top + bottom - rect.height) / 2;
+    window.scrollBy({ top: rect.top - target, behavior: "smooth" });
   }
 }

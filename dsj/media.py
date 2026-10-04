@@ -497,16 +497,43 @@ def sound_copy(media: Path, dest: Path) -> Path:
     return dest
 
 
-# How finely a mute lands, in seconds. ffmpeg switches a filter on and off per
-# frame of samples, not per sample, and a decoder's frame is long: measured on a
-# 16 kHz wav, a mute asked for at 1.0 to 1.5 s landed at 1.024 to 1.536 s,
-# 1024-sample frames. Cutting the stream into 5 ms frames first put it at 1.000
-# to 1.504 s. Each span is widened by one frame at its start, so silence covers
-# every sample asked for and at most one frame more at either edge.
+# How finely ffmpeg switches the mute's filter on and off, in seconds. A filter's
+# `enable` is checked per frame of samples, and a decoder's frame is long:
+# measured on a 16 kHz wav, a mute switched on for 1.0 to 1.5 s landed at 1.024
+# to 1.536 s, 1024-sample frames. So the stream is cut into 5 ms frames first, and
+# the filter is switched on one frame early; inside the frames it is on for, the
+# gain is worked out per sample, so the silence lands on the sample asked for.
 MUTE_FRAME_S = 0.005
+
+# How long the sound takes to fade out before a muted span and back in after it,
+# in seconds (#221). A sound dropped to 0 in one sample is a step in the
+# waveform, which is a click. Measured on 3 Oct 2026 with `scratch/click_check.py
+# run` (the commands are in #221) over 98 mute edges, 24 on scratch/clip45.wav
+# with parakeet's transcript and 74 on #148's podcast with whisper's: cut in one
+# sample, 52 edges had more than twice the energy above 4 kHz that the input
+# had there, up to 25 dB more. Faded over 2.5, 5 or 10 ms on a raised cosine,
+# none had more than the input. The fade sits outside the span, so every sample
+# asked for is still silent.
+MUTE_FADE_S = 0.005
 
 # Codecs whose re-encode loses nothing, so they take no bit rate.
 _LOSSLESS = ("flac", "alac")
+
+# The encoder for a sound whose codec's own-named encoder ffmpeg marks
+# experimental, so `-c:a <codec>` exits 88 (#227). Measured 4 Oct 2026 with
+# ffmpeg 9.0.1 on 6 s of speech in a .webm, re-encoded with no mute, against
+# the input decoded: Opus through libopus keeps 27.7 dB SNR, through ffmpeg's
+# own `opus` with `-strict experimental` 17.7 dB. This build has no
+# libvorbis, and its own `vorbis` with `-strict experimental` aborts on an
+# assertion (exit -6), so a Vorbis sound becomes Opus, which every container
+# that holds Vorbis (.webm, .mkv, .ogg) also holds: 21.6 dB. Every other
+# codec keeps its own name, which ffmpeg resolves to a default encoder.
+_ENCODERS = {"opus": "libopus", "vorbis": "libopus"}
+
+
+def _encoder(codec_name: str) -> str:
+    """The `-c:a` value that re-encodes a sound probed as `codec_name`."""
+    return _ENCODERS.get(codec_name, codec_name)
 
 
 @dataclass(frozen=True)
@@ -549,6 +576,61 @@ def _encoding(media: Path) -> _Encoding:
     )
 
 
+def _priming(enc: _Encoding, suffix: str) -> int:
+    """How many samples of its own the encoder writes before the sound, in this container.
+
+    A lossy encoder starts with a frame of its own (its priming), timed before
+    the first sample it was given. A sound that starts at 0 has that frame
+    hidden by an edit list, but a .mov or .mp4 whose sound starts later plays
+    it, so the render's sound starts that much earlier than the input's (#224).
+    Rather than knowing every encoder, this encodes a tenth of a second of
+    silence that starts 1 s in and reads where it starts: measured on 3 Oct
+    2026 at 48 kHz, 0.978667 s for AAC in a .mov or .mp4 (1024 samples), 0.976979
+    s for MP3 in a .mov (1105), and 1.0 s for AAC in a .mkv, which keeps the
+    start itself (0).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = Path(tmp) / f"priming{suffix}"
+        proc = subprocess.run(
+            [
+                _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-itsoffset", "1", "-t", "0.1",
+                "-f", "lavfi", "-i", f"anullsrc=r={enc.sample_rate}:cl=mono",
+                "-c:a", _encoder(enc.codec_name), str(sample),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            raise MediaError(
+                f"ffmpeg could not encode {_encoder(enc.codec_name)} into a {suffix} file:\n"
+                f"{proc.stderr.strip()}"
+            )
+        start = subprocess.run(
+            [
+                _tool("ffprobe"), "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=start_time", "-of", "csv=p=0", str(sample),
+            ],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    return max(0, round((1.0 - float(start)) * enc.sample_rate))
+
+
+def _silence(a: float, b: float, frame_s: float) -> str:
+    """One ffmpeg filter: silence from `a` to `b`, in the filter's clock, faded at both ends.
+
+    The gain is 0 from `a` to `b`, 1 from MUTE_FADE_S beyond them, and a raised
+    cosine between, worked out per sample (`aeval`, whose `t` is the sample's
+    own time). Off for every frame that ends before the fade starts or starts
+    after it ends, so the rest of the recording is passed through untouched.
+    """
+    fade = MUTE_FADE_S
+    ramp = f"clip(max(({a:.6f}-t)/{fade},(t-{b:.6f})/{fade}),0,1)"
+    return (
+        f"aeval=exprs='val(ch)*(1-cos(PI*{ramp}))/2':c=same"
+        f":enable='between(t,{a - fade - frame_s:.6f},{b + fade:.6f})'"
+    )
+
+
 def mute(
     media: Path,
     spans: Sequence[tuple[float, float]],
@@ -560,10 +642,16 @@ def mute(
     """Write `media` to `out` with silence over every span, and nothing else changed.
 
     `spans` are (start, end) in seconds from the first sample of the sound, the
-    clock a transcript counts in. The sound is re-encoded with its own codec and
-    bit rate, because a filter cannot run on encoded audio; a lossy codec
-    therefore loses a little outside the spans too, and a wav comes out the same
-    sample for sample there. The picture, when there is one, is copied untouched
+    clock a transcript counts in. The sound fades out over MUTE_FADE_S before
+    each span and back in after it, so no edge clicks (#216). The sound is
+    re-encoded with its own codec and bit rate (Vorbis as Opus, `_ENCODERS`,
+    #227), because a filter cannot run on
+    encoded audio; a lossy codec therefore loses a little outside the spans too,
+    and a wav comes out the same sample for sample outside the spans and their
+    fades. When a lossy sound starts after the picture, its first few
+    milliseconds (the encoder's priming, `_priming`) give way to the encoder's
+    own, so the render's sound starts where the input's did (#224). The picture,
+    when there is one, is copied untouched
     (`-c:v copy`). The container is the input's: `out` must have its suffix.
 
     Written beside `out` under a temporary name and renamed at the end, so an
@@ -592,15 +680,22 @@ def mute(
         raise MediaError(f"cannot write {out}: the directory {out.parent} does not exist.")
 
     enc = _encoding(media)
-    frame = max(1, round(enc.sample_rate * MUTE_FRAME_S))
-    widen = frame / enc.sample_rate
-    windows = "+".join(
-        f"between(t,{a + enc.offset_s - widen:.6f},{b + enc.offset_s:.6f})" for a, b in spans
-    )
-    audio_filter = (
-        f"asetnsamples=n={frame}:p=0,volume=volume=0:enable='{windows}'" if spans else "anull"
-    )
     lossy = not (enc.codec_name.startswith("pcm_") or enc.codec_name in _LOSSLESS)
+    # The input's first samples are dropped for as long as the encoder's priming,
+    # whose frame then starts where the input's sound did, and every later
+    # sample keeps its time (#224). Without it the render's sound starts that
+    # much earlier, so in the render's own clock each mute lands as much late.
+    # A sound that starts at 0 needs nothing: the container hides the priming.
+    skip = _priming(enc, out.suffix) if lossy and enc.offset_s > 0 else 0
+    frame = max(1, round(enc.sample_rate * MUTE_FRAME_S))
+    steps = [f"atrim=start_sample={skip}"] if skip else []
+    if spans:
+        steps.append(f"asetnsamples=n={frame}:p=0")
+        steps.extend(
+            _silence(a + enc.offset_s, b + enc.offset_s, frame / enc.sample_rate)
+            for a, b in spans
+        )
+    audio_filter = ",".join(steps) or "anull"
     rate = ["-b:a", str(enc.bit_rate)] if lossy and enc.bit_rate else []
     # The suffix stays last, because ffmpeg picks the container from it.
     tmp = out.with_name(f".{out.stem}.{os.getpid()}.tmp{out.suffix}")
@@ -611,7 +706,7 @@ def mute(
         # Every picture and sound stream, the picture copied as it is. A data or
         # subtitle stream is not carried: not every container can take one back.
         "-map", "0:v?", "-map", "0:a", "-c", "copy",
-        "-af", audio_filter, "-c:a", enc.codec_name, *rate,
+        "-af", audio_filter, "-c:a", _encoder(enc.codec_name), *rate,
         str(tmp),
     ]
     # stderr to a file and Popen as a context manager, for extract_audio's reasons.

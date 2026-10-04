@@ -314,6 +314,56 @@ def is_loop(text: str) -> bool:
     return len(words) > 6 and len(set(words)) <= max(2, len(words) / 3)
 
 
+# A loop whisper split across sentences (#223): on #152's synthetic mixed.wav,
+# plain whisper wrote one word as 13 one-word sentences, which is_loop, judging
+# one sentence at a time, never caught. So LOOP_RUN_MIN or more consecutive
+# sentences with the same words are also a loop when, taken together, is_loop
+# calls them one: more than six words, which for one-word sentences means seven
+# of them. Measured 3 Oct 2026 by scratch/loop_runs.py over the 57 transcripts
+# in scratch/real_bench/runs/ (#148's public fixture and the owner's
+# recordings): #148's hand-checked reference of the fixture, 2,883 words of
+# real speech, never repeats a sentence and repeats a word back to back at most
+# 4 times, so 5 is one past anything it holds. At 5 the rule takes 71 distinct
+# runs out of 38 of the 57 transcripts. 51 of them no other decode of the same
+# recording repeats 5 times near the same seconds: a loop comes and goes
+# between runs (#100), a speaker's own words do not. The other 20 are 5 to 31
+# sentences long, beyond anything in the reference, and the script lists them
+# for a person to listen to. At 3 the rule would also take a short phrase said
+# 3 or 4 times over, some at a speaking rate the numbers cannot tell from speech.
+LOOP_RUN_MIN = 5
+
+
+def _loop_runs(sentences: list[Sentence]) -> list[tuple[int, int]]:
+    """Each split loop in `sentences`, as the indexes of its first and last sentence (#223).
+
+    A split loop is LOOP_RUN_MIN or more consecutive sentences with the same
+    words, compared as is_loop compares them, whose words together is_loop
+    calls a loop. A sentence with no words at all, which whisper writes as a run
+    of exclamation marks inside such a loop, neither breaks a run nor counts
+    toward it, and goes with the run when it lies inside one.
+    """
+    runs: list[tuple[int, int]] = []
+    current: tuple[str, ...] = ()
+    first = last = count = 0
+
+    def close() -> None:
+        if count >= LOOP_RUN_MIN and is_loop(" ".join(current * count)):
+            runs.append((first, last))
+
+    for i, s in enumerate(sentences):
+        words = tuple(w.lower() for w in _WORD.findall(str(s["text"])))
+        if not words:
+            continue
+        if words == current:
+            count += 1
+            last = i
+            continue
+        close()
+        current, first, last, count = words, i, i, 1
+    close()
+    return runs
+
+
 def _without_loops(transcription: Transcription) -> tuple[Transcription, list[dict[str, Any]]]:
     """`transcription` with its repetition loops taken out, and where they were.
 
@@ -333,10 +383,31 @@ def _without_loops(transcription: Transcription) -> tuple[Transcription, list[di
     `unclear` runs earliest first too, and `text` is rebuilt from what is left.
     Under parakeet and sherpa the rule catches nothing, measured on the English
     call above, and the transcription passes through untouched.
+
+    A loop split into consecutive sentences (_loop_runs) leaves the same way,
+    the whole run as one entry from its first sentence's start to its last
+    one's end, with every word of the run counted (#223).
     """
     kept: list[Sentence] = []
     unclear: list[dict[str, Any]] = []
-    for s in transcription.sentences:
+    sentences = transcription.sentences
+    runs = dict(_loop_runs(sentences))
+    skip_to = -1
+    for i, s in enumerate(sentences):
+        if i <= skip_to:
+            continue
+        if i in runs:
+            skip_to = runs[i]
+            run = sentences[i : skip_to + 1]
+            unclear.append(
+                {
+                    "start": s["start"],
+                    "end": max(cast("float", r["end"]) for r in run),
+                    "reason": LOOP_REASON,
+                    "words": sum(len(_WORD.findall(str(r["text"]))) for r in run),
+                }
+            )
+            continue
         text = str(s["text"])
         if is_loop(text):
             unclear.append(
@@ -492,8 +563,17 @@ def _without_silence(
 # counted were almost wholly inside a neighbour (0.4 and 3.8 s left unread),
 # so its words there were duplicates; and warm samples at temperature 0.4, so
 # a span it reads on one run it can miss on the next (two did on 171500, one
-# went the other way). Not yet measured: whether the recovered text is right
-# (#182 is the check).
+# went the other way). Whether the recovered text is right, scored 3 Oct
+# 2026 against #184's three public references (scratch/accuracy/score.py
+# retry): under --roman-urdu 58 to 95% of recovered words match the
+# reference (77% or more in 11 of 12 runs), as the rest of each transcript
+# does, and the file's word error rate falls in every run (35.7 to 33.9% on
+# #148's podcast). A split loop (#223), read as one span since, cut the word
+# error rate in 8 of 12 runs that had one and raised it in none (70.8 to
+# 62.3% on the podcast's worst; scratch/accuracy/split_retry.py). Under whisper
+# left to detect the language, on Urdu, 3 to 5% matched: the retry, deciding
+# the language on a short clip, wrote the wrong one there, so it now decodes
+# in the language the main pass detected (#229).
 #
 # parakeet and sherpa never retry: is_loop catches nothing they write, and
 # neither has a second set of settings to try. RETRY_LOOPS = False turns it
@@ -576,18 +656,39 @@ def _retried(
     such part is not retried and stays a loop. The result is put back in time
     order all the same.
 
+    A loop split into one-word sentences (_loop_runs, #223) is one loop here
+    too: its whole run, first sentence's start to latest end, is read again as
+    one span, and a replacement takes the place of every sentence in it. Each
+    of its sentences alone is one or two words, which is_loop never calls a
+    loop, so before this the run was taken out unread. A retry is refused when
+    it is itself a loop either way.
+
     Reports state "retrying" once before the first span and once after each,
     counting the seconds to be read again, so a long run does not look stuck.
     """
     inner = [(a + SILENCE_EDGE_S, b - SILENCE_EDGE_S) for a, b in stretches]
     sentences = transcription.sentences
-    loops = [is_loop(str(s["text"])) for s in sentences]
-    read = [s for s, looped in zip(sentences, loops, strict=True) if not looped]
+    # Each loop as (first sentence, last sentence): one loop sentence, or a run
+    # of sentences _loop_runs calls a split loop (#223), read again as one
+    # span from its first start to its latest end.
+    runs = dict(_loop_runs(sentences))
+    inside = {k for a, b in runs.items() for k in range(a, b + 1)}
+    spans = runs | {
+        i: i for i, s in enumerate(sentences) if i not in inside and is_loop(str(s["text"]))
+    }
+    looped = inside | set(spans)
+    read = [s for i, s in enumerate(sentences) if i not in looped]
+
+    def bounds(first: int) -> tuple[float, float]:
+        run = sentences[first : spans[first] + 1]
+        return cast("float", run[0]["start"]), max(cast("float", r["end"]) for r in run)
+
     todo: list[tuple[int, float]] = []
-    for i, s in enumerate(sentences):
-        if not loops[i] or any(s["start"] < b and a < s["end"] for a, b in inner):
+    for i in sorted(spans):
+        start, end = bounds(i)
+        if any(start < b and a < end for a, b in inner):
             continue
-        lo, hi = _unread(s["start"], s["end"], read)
+        lo, hi = _unread(start, end, read)
         if lo < hi:
             todo.append((i, hi - lo))
     if not todo:
@@ -602,11 +703,13 @@ def _retried(
         # Against the replacements made so far too: two loops can share seconds.
         others = sorted(read + [r for got in replaced.values() for r in got],
                         key=lambda o: cast("float", o["start"]))
-        lo, hi = _unread(sentences[i]["start"], sentences[i]["end"], others)
+        lo, hi = _unread(*bounds(i), others)
         for options in (RETRY_PLAIN, RETRY_WARM) if lo < hi else ():
             decoded = decode(lo - RETRY_PAD_S, hi + RETRY_PAD_S, options)
             got = _within(decoded, lo, hi)
-            looped = any(is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded)
+            looped = bool(_loop_runs(decoded)) or any(
+                is_loop("".join(str(t["w"]) for t in s["tokens"])) for s in decoded
+            )
             words = sum(len(_WORD.findall(str(s["text"]))) for s in got)
             if not looped and words > RETRY_MIN_WORDS:
                 replaced[i] = got
@@ -615,7 +718,8 @@ def _retried(
         report(Progress(done, total, time.monotonic() - started), "retrying")
     if not replaced:
         return transcription
-    kept = [r for i, s in enumerate(sentences) for r in replaced.get(i, [s])]
+    gone = {k for i in replaced for k in range(i + 1, spans[i] + 1)}
+    kept = [r for i, s in enumerate(sentences) if i not in gone for r in replaced.get(i, [s])]
     return _in_time_order(
         Transcription(text="".join(str(s["text"]) for s in kept).strip(), sentences=kept)
     )
@@ -1427,19 +1531,25 @@ def _transcribe(
         # speech (#181), and before the retry, so no loop over silence is
         # decoded again (#183); both last, so `unclear` comes out in the same order as
         # `sentences`.
+        # Read before the steps below rebuild the transcription without it.
+        decoded_in = language or transcription.language
         transcription, no_speech = _without_silence(
             _in_time_order(_in_whole_milliseconds(_text_from_tokens(transcription))),
             stretches,
         )
         # whisper's loops get one more decode each before they are given up
-        # on (#183); the chunk engines write none to retry.
-        if spec.kind == "file" and RETRY_LOOPS:
+        # on (#183); the chunk engines write none to retry. Always in the
+        # language the main pass decoded in (#229): left to detect it again
+        # on a 10 to 30 s clip, whisper wrote Urdu spans in English, 3 to 5%
+        # of them right. A run that cannot say what it decoded in (a result
+        # banked before #229) does not retry, and its loops stay `unclear`.
+        if spec.kind == "file" and RETRY_LOOPS and decoded_in is not None:
             whisper_model = model_id
             transcription = _retried(
                 transcription,
                 stretches,
                 lambda: redecoder(
-                    audio, model_id=whisper_model, language=language, prompt=prompt
+                    audio, model_id=whisper_model, language=decoded_in, prompt=prompt
                 ),
                 report,
             )

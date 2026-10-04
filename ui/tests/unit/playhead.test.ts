@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HIGHLIGHT, Playhead } from "../../src/features/player/playhead";
+import { HIGHLIGHT, PLAYER_HEIGHT, Playhead } from "../../src/features/player/playhead";
 import {
   read,
   type Sentence,
@@ -199,6 +199,54 @@ describe("Playhead", () => {
     media.currentTime = 0.6;
     head.paint();
     expect(window.scrollBy).not.toHaveBeenCalled();
+  });
+
+  describe("with the player bar covering the bottom of the window (#231)", () => {
+    // jsdom's window is 768 px tall: the band runs from 115.2 px to 576 px
+    // with no player, and TARGET puts a word at 268.8 px.
+    afterEach(() => document.documentElement.style.removeProperty(PLAYER_HEIGHT));
+
+    function at(top: number) {
+      vi.mocked(Range.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(0, top, 10, 20));
+    }
+
+    it("ends the band where the bar starts, and moves a word under the bar to TARGET", () => {
+      document.documentElement.style.setProperty(PLAYER_HEIGHT, "400px");
+      const head = playhead();
+      at(300);
+      media.currentTime = 0.1;
+      head.paint();
+      expect(window.scrollBy).not.toHaveBeenCalled();
+      // At 400 px the word is inside the old band (to 576 px) and under the bar (from 368 px).
+      at(400);
+      media.currentTime = 0.6;
+      head.paint();
+      expect(window.scrollBy).toHaveBeenCalledWith({ top: 400 - 768 * 0.35, behavior: "smooth" });
+    });
+
+    it("keeps the old band where the bar starts below it", () => {
+      document.documentElement.style.setProperty(PLAYER_HEIGHT, "100px");
+      const head = playhead();
+      at(550);
+      media.currentTime = 0.1;
+      head.paint();
+      expect(window.scrollBy).not.toHaveBeenCalled();
+    });
+
+    it("puts the word in the middle of what is left when TARGET is under the bar, and leaves it there", () => {
+      document.documentElement.style.setProperty(PLAYER_HEIGHT, "600px");
+      const head = playhead();
+      at(300);
+      media.currentTime = 0.1;
+      head.paint();
+      // The band is 115.2 to 168 px; the middle for a 20 px word is 131.6 px.
+      const middle = (768 * 0.15 + 168 - 20) / 2;
+      expect(window.scrollBy).toHaveBeenCalledWith({ top: 300 - middle, behavior: "smooth" });
+      at(middle);
+      media.currentTime = 0.6;
+      head.paint();
+      expect(window.scrollBy).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("unregisters its highlight when disposed", () => {
