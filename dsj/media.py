@@ -519,6 +519,22 @@ MUTE_FADE_S = 0.005
 # Codecs whose re-encode loses nothing, so they take no bit rate.
 _LOSSLESS = ("flac", "alac")
 
+# The encoder for a sound whose codec's own-named encoder ffmpeg marks
+# experimental, so `-c:a <codec>` exits 88 (#227). Measured 4 Oct 2026 with
+# ffmpeg 9.0.1 on 6 s of speech in a .webm, re-encoded with no mute, against
+# the input decoded: Opus through libopus keeps 27.7 dB SNR, through ffmpeg's
+# own `opus` with `-strict experimental` 17.7 dB. This build has no
+# libvorbis, and its own `vorbis` with `-strict experimental` aborts on an
+# assertion (exit -6), so a Vorbis sound becomes Opus, which every container
+# that holds Vorbis (.webm, .mkv, .ogg) also holds: 21.6 dB. Every other
+# codec keeps its own name, which ffmpeg resolves to a default encoder.
+_ENCODERS = {"opus": "libopus", "vorbis": "libopus"}
+
+
+def _encoder(codec_name: str) -> str:
+    """The `-c:a` value that re-encodes a sound probed as `codec_name`."""
+    return _ENCODERS.get(codec_name, codec_name)
+
 
 @dataclass(frozen=True)
 class _Encoding:
@@ -580,13 +596,13 @@ def _priming(enc: _Encoding, suffix: str) -> int:
                 _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-itsoffset", "1", "-t", "0.1",
                 "-f", "lavfi", "-i", f"anullsrc=r={enc.sample_rate}:cl=mono",
-                "-c:a", enc.codec_name, str(sample),
+                "-c:a", _encoder(enc.codec_name), str(sample),
             ],
             capture_output=True, text=True, check=False,
         )
         if proc.returncode != 0:
             raise MediaError(
-                f"ffmpeg could not encode {enc.codec_name} into a {suffix} file:\n"
+                f"ffmpeg could not encode {_encoder(enc.codec_name)} into a {suffix} file:\n"
                 f"{proc.stderr.strip()}"
             )
         start = subprocess.run(
@@ -628,7 +644,8 @@ def mute(
     `spans` are (start, end) in seconds from the first sample of the sound, the
     clock a transcript counts in. The sound fades out over MUTE_FADE_S before
     each span and back in after it, so no edge clicks (#216). The sound is
-    re-encoded with its own codec and bit rate, because a filter cannot run on
+    re-encoded with its own codec and bit rate (Vorbis as Opus, `_ENCODERS`,
+    #227), because a filter cannot run on
     encoded audio; a lossy codec therefore loses a little outside the spans too,
     and a wav comes out the same sample for sample outside the spans and their
     fades. When a lossy sound starts after the picture, its first few
@@ -689,7 +706,7 @@ def mute(
         # Every picture and sound stream, the picture copied as it is. A data or
         # subtitle stream is not carried: not every container can take one back.
         "-map", "0:v?", "-map", "0:a", "-c", "copy",
-        "-af", audio_filter, "-c:a", enc.codec_name, *rate,
+        "-af", audio_filter, "-c:a", _encoder(enc.codec_name), *rate,
         str(tmp),
     ]
     # stderr to a file and Popen as a context manager, for extract_audio's reasons.

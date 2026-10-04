@@ -513,7 +513,8 @@ Each word is muted from 0.1 s before it to 0.1 s after it, but for no more
 than 1.4 s and never past the start of the next word: whisper guesses where a
 word ends, and can run one on through the pause after it, speech included.
 The log lists every word cut short this way under `capped`. The picture is
-copied untouched and the sound re-encoded in its own codec. `clean.bleeps.json`
+copied untouched and the sound re-encoded in its own codec, Vorbis as Opus (ffmpeg has
+no usable Vorbis encoder). `clean.bleeps.json`
 beside the output lists every muted word with its start, end and the entry
 that matched it. Listen at those times: whether the cut clicks, or clips the
 word next to it, is a judgment for an ear. `clean.source.txt` holds the content

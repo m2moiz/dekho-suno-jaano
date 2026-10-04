@@ -445,27 +445,40 @@ def _audio_start(path: Path) -> float:
     )
 
 
-@pytest.mark.parametrize("codec", ["aac", "pcm_s16le"])
+@pytest.mark.parametrize(
+    ("suffix", "picture", "codec"),
+    [
+        (".mov", "libx264", "aac"),
+        (".mov", "libx264", "pcm_s16le"),
+        # Opus, which ffmpeg's own experimental encoder refused (#227): a
+        # browser's screen recording, and the same sound in a .mkv.
+        (".webm", "libvpx-vp9", "libopus"),
+        (".mkv", "libx264", "libopus"),
+    ],
+)
 def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
-    tmp_path: Path, codec: str
+    tmp_path: Path, suffix: str, picture: str, codec: str
 ) -> None:
     """A transcript's clock starts at the first sample; the filter's at the file's start.
 
     The render's sound starts where the input's did, to the millisecond, so the
     silence lands at the transcript's times in the render's own clock too
     (#224). AAC's encoder used to start the render's sound one 1024-sample frame
-    (21 ms) early, so every mute sat 21 ms late in it.
+    (21 ms) early, so every mute sat 21 ms late in it. Matroska and WebM time
+    packets in whole milliseconds, and Opus starts 312 samples (6.5 ms) before
+    its first sound, so there the two starts may round one tick apart.
     """
-    late = tmp_path / "late.mov"
+    late = tmp_path / f"late{suffix}"
     _ffmpeg(
         "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
         "-itsoffset", "0.479", "-f", "lavfi", "-i",
         "sine=frequency=440:duration=3:sample_rate=48000",
-        "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", codec,
+        "-map", "0:v", "-map", "1:a", "-c:v", picture, "-pix_fmt", "yuv420p", "-c:a", codec,
         str(late),
     )
-    out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.mov")
-    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=0.001)
+    out = media.mute(late, [(1.0, 1.5)], tmp_path / f"clean{suffix}")
+    tick = 0.001 if suffix == ".mov" else 0.0015
+    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=tick)
     # The loudest sample of each 1.5 ms block at 16 kHz, which always holds a
     # crest of the 440 Hz sine (one every 1.14 ms): its height.
     level = np.abs(_samples(out))
@@ -479,6 +492,34 @@ def test_mute_counts_from_the_first_sample_when_the_sound_starts_late(
     half = media.MUTE_FADE_S / 2
     assert longest[0] * 0.0015 == pytest.approx(1.0 - half, abs=0.005)
     assert (longest[-1] + 1) * 0.0015 == pytest.approx(1.5 + half, abs=0.005)
+
+
+def test_a_vorbis_sound_is_rendered_as_opus_with_the_span_silent(tmp_path: Path) -> None:
+    """A Vorbis sound comes back as Opus, which a .webm also holds (#227).
+
+    ffmpeg's own Vorbis encoder is experimental and aborts, and this ffmpeg
+    has no libvorbis.
+    """
+    late = tmp_path / "late.webm"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
+        "-itsoffset", "0.479", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=3:sample_rate=48000",
+        "-map", "0:v", "-map", "1:a", "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
+        "-c:a", "vorbis", "-strict", "experimental", "-ac", "2",
+        str(late),
+    )
+    out = media.mute(late, [(1.0, 1.5)], tmp_path / "clean.webm")
+    codec = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream=codec_name", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert codec == "opus"
+    assert _audio_start(out) == pytest.approx(_audio_start(late), abs=0.0015)
+    # The span, in the file's clock: the sound starts 0.479 s in.
+    assert _mean_volume(out, 1.53, 0.4) < _mean_volume(late, 1.53, 0.4) - 60
+    assert _mean_volume(out, 2.2, 0.5) == pytest.approx(_mean_volume(late, 2.2, 0.5), abs=0.5)
 
 
 def test_mute_reports_progress_in_seconds_written(ready_wav: Path, tmp_path: Path) -> None:
