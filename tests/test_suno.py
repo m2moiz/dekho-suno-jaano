@@ -2163,6 +2163,94 @@ def test_parakeet_never_decodes_a_loop_again(
     assert "retrying" not in states
 
 
+# --- parakeet decodes a long gap after a token again, alone (#228)
+
+
+def test_parakeet_writes_the_speech_its_decoder_skipped_after_a_full_stop(
+    fake_parakeet: Callable[..., FakeModel],
+    fake_media: Path,
+    tmp_path: Path,
+) -> None:
+    """A gap over REREAD_GAP_S after a token is decoded again on its own audio.
+
+    The fake decodes the whole chunk the way #228's call did: a sentence, then
+    nothing for 19.5 s, then the next. Handed only part of the audio, it reads
+    what was said there (FakeModel times it from the part's start). Before the
+    fix no part was ever handed to it, and the transcript went from "One." to
+    "Three."
+    """
+    from conftest import FakeModel as Model
+
+    rate = 16_000
+    model = fake_parakeet(
+        tokens=[FakeToken(0.0, 0.5, " One."), FakeToken(20.0, 20.5, " Three.")]
+    )
+    heard = Model(tokens=[FakeToken(10.0, 10.5, " Two.")])
+    whole = model.generate
+    handed: list[range] = []
+
+    def generate(mel: range, **kwargs: Any) -> Any:
+        handed.append(mel)
+        return (whole if mel.start == 0 else heard.generate)(mel, **kwargs)
+
+    model.generate = generate  # pyright: ignore[reportAttributeAccessIssue]
+
+    payload = transcribe(fake_media, tmp_path / "out.json", diarize=False)
+
+    tokens = [t for s in payload["sentences"] for t in s["tokens"]]
+    assert [(t["w"], t["t"]) for t in tokens] == [
+        (" One.", 0.0),
+        (" Two.", 10.0),
+        (" Three.", 20.0),
+    ]
+    # The gaps and nothing else: from the end of " One." to the start of
+    # " Three."; inside that, from the end of " Two." to the same start; then
+    # the tail after " Three.". The last two have nothing in them.
+    assert handed[1:] == [
+        range(round(0.5 * rate), 20 * rate),
+        range(round(10.5 * rate), 20 * rate),
+        range(round(20.5 * rate), 100 * rate),
+    ]
+
+
+def test_parakeet_reads_again_only_gaps_after_a_token_and_over_the_limit() -> None:
+    """Only a gap after a token and over REREAD_GAP_S is read again.
+
+    Not the gap before the first token (the decoder starts fresh there), nor
+    one of exactly REREAD_GAP_S; one just over it is. Gaps found inside a
+    re-read gap are read in turn, REREAD_DEPTH deep and no deeper.
+    """
+    from dsj.parakeet import (
+        REREAD_DEPTH,
+        REREAD_GAP_S,
+        _with_gaps_read,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    rate = 10
+    seen: list[range] = []
+
+    def at(start: float) -> AlignedToken:
+        return AlignedToken(id=0, text="x", start=start, duration=0.5)
+
+    def decode(samples: range) -> list[AlignedToken]:
+        seen.append(samples)
+        if samples.start == 0:
+            # 6 s before the first token; then exactly the limit; then just over it.
+            return [at(6.0), at(6.5 + REREAD_GAP_S), at(11.0 + REREAD_GAP_S + 0.1)]
+        # Any re-read finds one token at its start and a gap over the limit after it.
+        return [at(0.0)]
+
+    tokens = _with_gaps_read(decode, range(40 * rate), rate, 1)
+
+    # The whole; the 4.1 s gap from 11.0 to 15.1 s (its re-read leaves 3.6 s,
+    # under the limit); the tail from 15.6 s, and inside each tail re-read the
+    # tail again, 0.5 s later, until REREAD_DEPTH stops it. Never the 6 s
+    # before the first token, nor the 4.0 s gap from 6.5 to 10.5 s.
+    tail = [156 + 5 * k for k in range(REREAD_DEPTH)]
+    assert [r.start for r in seen] == [0, 110, *tail]
+    assert [t.start for t in tokens] == [6.0, 10.5, 11.0, 15.1, *(r / rate for r in tail)]
+
+
 # --- no two sentences overlap: whisper merges (#190), parakeet and sherpa split (#192)
 
 

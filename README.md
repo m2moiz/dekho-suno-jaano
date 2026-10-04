@@ -283,13 +283,14 @@ Turbo is the default here for that reason, and changing it means re-measuring.
 
 Word error rate against three public hand-checked references, whisper-large-v3-turbo,
 `--no-diarize`, two runs per whisper mode, 3 Oct 2026 (#184). The two figures are the two
-runs; whisper does not give the same answer twice.
+runs; whisper does not give the same answer twice. parakeet's column is from 4 Oct 2026,
+after #228.
 
 | speech | `--roman-urdu` | `--roman-urdu`, 30 s window | `--language ur` | whisper, language detected | parakeet |
 |---|---:|---:|---:|---:|---:|
-| Urdu and English in one sentence, #148's podcast, 14 min | 33.9 · 33.8% | 29.0 · 29.9% | 45.5 · 57.4% | 70.8 · 63.1% | 65.1% |
+| Urdu and English in one sentence, #148's podcast, 14 min | 33.9 · 33.8% | 29.0 · 29.9% | 45.5 · 57.4% | 70.8 · 63.1% | 57.7% |
 | Urdu, UrduSpeech's hand-checked set, 34 min | 40.8 · 42.7% | 47.1 · 48.7% | 20.7 · 23.3% | 25.8 · 25.2% | not run |
-| English, an Earnings-22 call, 30 min | 29.1 · 15.8% | 19.3 · 15.3% | 18.9 · 7.9% | 4.5 · 4.4% | 10.2% |
+| English, an Earnings-22 call, 30 min | 29.1 · 15.8% | 19.3 · 15.3% | 18.9 · 7.9% | 4.5 · 4.4% | 4.9% |
 
 Output and reference are both romanized with `uroman` and compared as consonant
 skeletons, so the same word in Roman and in Urdu script, or English written in Urdu
@@ -305,8 +306,9 @@ punishes. The scripts are in `scratch/accuracy/`.
 3. **The window stays at 120 s.** 30 s is 4 to 5 points better on the mixed recording
    and 6 points worse on Urdu, and on the owner's recordings it lost words (#100).
 4. **English:** `--roman-urdu` and `--language ur` both loop on English, `--roman-urdu`
-   for 140 to 284 s of the 30 minutes. parakeet skipped stretches of 11 to 46 s of the
-   call's speech without marking them, which is most of its 10% (#228).
+   for 140 to 284 s of the 30 minutes. parakeet used to skip stretches of 11 to 46 s of
+   the call's speech after a full stop, unmarked, for 10%. Each gap over 4 s is now
+   decoded again on its own (#228): missed words fell from 6.6% to 0.7%, whisper's 1.3%.
 
 The owner's own corrected 10 minutes (#182) is the check on his voice.
 
