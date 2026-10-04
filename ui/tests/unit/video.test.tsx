@@ -11,6 +11,7 @@ vi.hoisted(() => {
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import type { RecordingRow } from "../../src/features/library/types";
 import { Player } from "../../src/features/player/Player";
+import { PLAYER_HEIGHT } from "../../src/features/player/playhead";
 import { COOKIE, readVideoShown, saveVideoShown } from "../../src/features/player/video";
 import { read } from "../../src/features/transcript/document";
 import { installHighlights } from "./highlights";
@@ -96,6 +97,34 @@ describe("the picture", () => {
     cleanup();
     mount("h264");
     expect(screen.getByRole("button", { name: "Show picture" })).toBeTruthy();
+  });
+});
+
+describe("the page's scroll padding (#230)", () => {
+  it("is the player bar's height while the player is on the page, and gone after", () => {
+    // jsdom lays nothing out and the shared stub never calls back: this one
+    // calls back at once, with the bar's measured height made up here.
+    const stub = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      private readonly callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(target: Element) {
+        vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ height: 371 } as DOMRect);
+        this.callback([], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    };
+    try {
+      const { unmount } = mount("h264");
+      expect(document.documentElement.style.getPropertyValue(PLAYER_HEIGHT)).toBe("371px");
+      unmount();
+      expect(document.documentElement.style.getPropertyValue(PLAYER_HEIGHT)).toBe("");
+    } finally {
+      globalThis.ResizeObserver = stub;
+    }
   });
 });
 

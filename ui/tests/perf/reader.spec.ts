@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { readerUrl, scratchDir, seed } from "../e2e/seed.ts";
+import { CUTOFFS } from "../../src/features/transcript/confidence.ts";
 import { SHAPE, syntheticTranscript } from "./fixture.ts";
 import { FRAMES, P95_CEILING_MS, STEP_PX, scrollFrames, summarise } from "./sample.ts";
 
@@ -131,22 +132,39 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
 
 test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ page }) => {
   const dir = scratchDir();
-  // The fixture with a confidence on every token, one token in ten under
-  // whisper's cut-off, so about a tenth of the words are tinted, as on the real
-  // transcript the cut-off was measured on (#62).
+  // The fixture with a confidence on every token and every tenth word unsure,
+  // so a tenth of the words are tinted, about the 13 to 18% whisper's cut-off
+  // tints on the real references it was measured on (#62). Unsure is half the
+  // lowest engine's cut-off, clearly under it: a value typed to equal the
+  // cut-off tinted nothing once that cut-off moved to it (#232). A word opens
+  // at a token starting with a space, as document.ts reads them, and every
+  // piece of an unsure word is unsure, so the count below is exact.
+  const unsure = Math.min(...Object.values(CUTOFFS)) / 2;
   const fixture = syntheticTranscript();
-  let n = 0;
+  let word = -1;
+  let expected = 0;
   const sentences = fixture.sentences.map((s) => ({
     ...s,
-    tokens: s.tokens.map((t) => ({ ...t, c: n++ % 10 === 0 ? 0.3 : 0.95 })),
+    tokens: s.tokens.map((t) => {
+      if (/^\s/.test(t.w)) {
+        word += 1;
+        if (word % 10 === 0) expected += 1;
+      }
+      return { ...t, c: word % 10 === 0 ? unsure : 0.95 };
+    }),
   }));
+  // A tenth of the fixture's 12,877 words: the check measures a page with a
+  // thousand-odd ranges, or fails here rather than timing an untinted page.
+  expect(expected).toBeGreaterThan(1000);
   const seeded = seed(
     { ...fixture, model: "mlx-community/whisper-large-v3-turbo", sentences, audio: `${dir}/none.wav` },
     dir,
   );
   await page.goto(readerUrl(seeded));
   await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
-  await page.getByRole("button", { name: /^Unsure words/ }).click();
+  const toggle = page.getByRole("button", { name: /^Unsure words/ });
+  await expect(toggle).toHaveText(`Unsure words (${expected})`);
+  await toggle.click();
   const tinted = await page.evaluate(async () => {
     await document.fonts.ready;
     return {
@@ -155,7 +173,7 @@ test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ 
       viewport: window.innerHeight,
     };
   });
-  expect(tinted.ranges).toBeGreaterThan(1000);
+  expect(tinted.ranges).toBe(expected);
   const frames = Math.min(FRAMES, Math.floor((tinted.scrollHeight - tinted.viewport) / STEP_PX));
   expect(frames).toBeGreaterThanOrEqual(150);
   const result = { ...tinted, frames, ...summarise((await scrollFrames(page, frames)).slice(1)) };

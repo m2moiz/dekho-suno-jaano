@@ -94,3 +94,23 @@ export function tone(dir: string, seconds: number, name = "tone.wav"): string {
   if (run.status !== 0) throw new Error(`ffmpeg could not write ${file}: ${run.stderr}`);
   return file;
 }
+
+/**
+ * `seconds` of ffmpeg's test card at 640x360, the shape #230 measured with,
+ * and a tone: h264 and AAC in a .mov, made in `dir`.
+ */
+export function screenRecording(dir: string, seconds: number): string {
+  const file = path.join(dir, "screen.mov");
+  const run = spawnSync(
+    "ffmpeg",
+    [
+      "-y", "-loglevel", "error",
+      "-f", "lavfi", "-i", `testsrc2=size=640x360:rate=25:duration=${seconds}`,
+      "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", file,
+    ],
+    { encoding: "utf8" },
+  );
+  if (run.status !== 0) throw new Error(`ffmpeg could not write ${file}: ${run.stderr}`);
+  return file;
+}
