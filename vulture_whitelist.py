@@ -26,6 +26,7 @@ whitelist.fake_media  # tests/conftest.py
 whitelist.frozen_clock  # tests/conftest.py
 whitelist.already_extracted_media  # tests/conftest.py
 whitelist.no_real_diarizer  # tests/conftest.py
+whitelist.no_speech_detector  # tests/test_whisper.py
 whitelist.private_suno_lock  # tests/conftest.py
 whitelist.private_words  # tests/conftest.py
 whitelist.private_library  # tests/conftest.py, autouse

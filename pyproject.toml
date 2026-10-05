@@ -55,6 +55,10 @@ Issues = "https://github.com/m2moiz/dekho-suno-jaano/issues"
 # default engine never take.
 whisper = [
     "mlx-whisper>=0.4.3",
+    # The speech detector `--roman-urdu` cuts the audio with (#236,
+    # dsj/whisper.py VAD_SEGMENTS). Its models ship inside the package, 11 MB
+    # installed, and it brings torchaudio, 3.8 MB beside the torch above.
+    "silero-vad>=6.2.1",
 ]
 diarize = [
     "senko>=0.1.0,<0.2",
@@ -97,14 +101,6 @@ android = [
 ui = [
     "fastapi>=0.141.1",
     "uvicorn>=0.53.0",
-]
-# Silero's speech detector in front of whisper (#236), off by default
-# (dsj/whisper.py, VAD_SEGMENTS). Its own extra and in no bundle until the
-# measurement on #236 says it should ship: silero-vad imports torchaudio at the
-# top of its module, a weight no default run should carry for a switch that is
-# off. The 2 MB model ships inside the package; nothing is downloaded at run time.
-vad = [
-    "silero-vad>=6.2.1",
 ]
 
 [dependency-groups]

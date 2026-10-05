@@ -145,11 +145,10 @@ carries more than you want:
 | `dsj[mac]` | `parakeet`, `whisper`, `diarize`, `ui` | The working Mac setup |
 | `dsj[android]` | `sherpa` | The phone |
 | `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
-| `dsj[whisper]` | `mlx-whisper` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch |
+| `dsj[whisper]` | `mlx-whisper`, `silero-vad` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch. silero-vad is the speech detector `--roman-urdu` cuts the audio with |
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
 | `dsj[ui]` | `fastapi`, `uvicorn` | `dsj ui`, the app in a browser |
-| `dsj[vad]` | `silero-vad` | Silero's speech detector in front of whisper, off by default and in no bundle while it is measured (#236). Pulls torchaudio |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -264,6 +263,15 @@ set to 30 by `scratch/whisper_sweep.py`. A shorter window keeps more of the text
 in Latin and loses words, so the window stays at 120s: the goal is complete
 text, and Urdu script in the output is accepted.
 
+**Since #236, `--roman-urdu` first cuts the audio at speech.** Silero's speech
+detector (`silero-vad`, in the whisper extra) finds the speech, which is merged into
+clips of at most 30 s, and each clip is decoded alone with the prompt. whisper never
+decodes a long silence, and no clip's text is fed into the next. The 120 s windows above
+are what `--roman-urdu` does with the detector off (`VAD_SEGMENTS = "off"` in
+`dsj/whisper.py`). `--language ur` and language-detected runs do not use the detector:
+on the English call below, `--language ur` clips decoded alone got 91 to 96% of the
+words wrong, much of the call lost to repetition loops (#236).
+
 The model matters more than it looks. On the public Urdu-English fixture
 (`just urdu-fixture`, 854s), one run each with `--roman-urdu`
 (m2moiz/dekho-suno-jaano#33):
@@ -285,13 +293,13 @@ Turbo is the default here for that reason, and changing it means re-measuring.
 Word error rate against three public hand-checked references, whisper-large-v3-turbo,
 `--no-diarize`, two runs per whisper mode, 3 Oct 2026 (#184). The two figures are the two
 runs; whisper does not give the same answer twice. parakeet's column is from 4 Oct 2026,
-after #228.
+after #228, and the first column from 5 Oct 2026 (#236).
 
-| speech | `--roman-urdu` | `--roman-urdu`, 30 s window | `--language ur` | whisper, language detected | parakeet |
-|---|---:|---:|---:|---:|---:|
-| Urdu and English in one sentence, #148's podcast, 14 min | 33.9 · 33.8% | 29.0 · 29.9% | 45.5 · 57.4% | 70.8 · 63.1% | 57.7% |
-| Urdu, UrduSpeech's hand-checked set, 34 min | 40.8 · 42.7% | 47.1 · 48.7% | 20.7 · 23.3% | 25.8 · 25.2% | not run |
-| English, an Earnings-22 call, 30 min | 29.1 · 15.8% | 19.3 · 15.3% | 18.9 · 7.9% | 4.5 · 4.4% | 4.9% |
+| speech | `--roman-urdu`, cut at speech (since #236) | `--roman-urdu`, 120 s windows | `--roman-urdu`, 30 s window | `--language ur` | whisper, language detected | parakeet |
+|---|---:|---:|---:|---:|---:|---:|
+| Urdu and English in one sentence, #148's podcast, 14 min | 30.3 · 32.7% | 33.9 · 33.8% | 29.0 · 29.9% | 45.5 · 57.4% | 70.8 · 63.1% | 57.7% |
+| Urdu, UrduSpeech's hand-checked set, 34 min | 42.1 · 43.0% | 40.8 · 42.7% | 47.1 · 48.7% | 20.7 · 23.3% | 25.8 · 25.2% | not run |
+| English, an Earnings-22 call, 30 min | 7.9 · 7.9% | 29.1 · 15.8% | 19.3 · 15.3% | 18.9 · 7.9% | 4.5 · 4.4% | 4.9% |
 
 Output and reference are both romanized with `uroman` and compared as consonant
 skeletons, so the same word in Roman and in Urdu script, or English written in Urdu
@@ -304,10 +312,12 @@ punishes. The scripts are in `scratch/accuracy/`.
    the language writes the English and drops the Urdu.
 2. **Mostly Urdu:** `--engine whisper --language ur`, about half the errors of
    `--roman-urdu` (21 to 23% against 41 to 43%), in Urdu script.
-3. **The window stays at 120 s.** 30 s is 4 to 5 points better on the mixed recording
-   and 6 points worse on Urdu, and on the owner's recordings it lost words (#100).
-4. **English:** `--roman-urdu` and `--language ur` both loop on English, `--roman-urdu`
-   for 140 to 284 s of the 30 minutes. parakeet used to skip stretches of 11 to 46 s of
+3. **`--roman-urdu` cuts at speech (#236).** About 2 points better on the mixed
+   recording, 8 to 21 points better on English, and about 1 point worse on Urdu. The
+   owner accepted that point, because his recordings are Urdu and English mixed.
+4. **English:** use whisper with the language detected. `--language ur` loops on English,
+   21 to 92 s of the 30 minutes; `--roman-urdu` looped 140 to 284 s with 120 s windows
+   and 26 s cut at speech. parakeet used to skip stretches of 11 to 46 s of
    the call's speech after a full stop, unmarked, for 10%. Each gap over 4 s is now
    decoded again on its own (#228): missed words fell from 6.6% to 0.7%, whisper's 1.3%.
 
@@ -318,8 +328,8 @@ the `running` state starts over: it owns its own window loop and exposes no hook
 to bank from. Its finished result is banked beside `-o` the moment the decode
 ends and kept until speaker labelling is over, so a run stopped after that
 decodes nothing on the rerun (#171). How much
-progress it reports depends on the run. `--roman-urdu` cuts the audio into
-two-minute windows itself and reports after each one. Any other whisper run,
+progress it reports depends on the run. `--roman-urdu` cuts the audio itself,
+at speech into clips of up to 30 s, and reports after each one. Any other whisper run,
 `--prompt` and `--language` included, reports 0% and then **nothing until
 transcription ends**, because mlx-whisper takes no progress callback. It runs
 at about 1.7 to 3x realtime on Urdu with `--roman-urdu` and about 5 to 6x on

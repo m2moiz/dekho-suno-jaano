@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What Silero costs and what speech it would throw away, before any whisper run (#236).
 
-    uv run --extra vad --with uroman --with rapidfuzz --with num2words python scratch/accuracy/vad_recall.py
+    uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/vad_recall.py
 
 For each reference set, with dsj.whisper's VAD settings as they stand:
 

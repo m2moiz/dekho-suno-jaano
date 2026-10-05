@@ -26,9 +26,11 @@ language detected (`plain`), `--language ur` (`ur`), `--roman-urdu`
 ANCHOR_CHUNK_S = 30 (`roman30`, #184's "Roman 30 s"). Whisper modes run twice.
 
 `--plan 236` runs #236's instead: `roman_vad`, `ur_vad` and `plain_vad`, the
-same flags as `roman`, `ur` and `plain` with dsj.whisper.VAD_SEGMENTS on
-(Silero's speech detector in front of whisper). They run under `uv run
---extra vad`, which installs silero-vad if it is missing.
+same flags as `roman`, `ur` and `plain` with Silero's speech detector in front
+of whisper. Since #236 `--roman-urdu` has it on by default, so `roman` and
+`roman30` turn it off to stay #184's runs, and `ur_vad` and `plain_vad` turn
+it on for every mode (dsj.whisper.VAD_SEGMENTS = "all"). The 14 runs on #236
+were made on 34036c6, before that default, with VAD_SEGMENTS a bool set True.
 """
 
 from __future__ import annotations
@@ -59,11 +61,11 @@ MODES: dict[str, tuple[list[str], dict[str, Any]]] = {
     "parakeet": (["--engine", "parakeet"], {}),
     "plain": (["--engine", "whisper"], {}),
     "ur": (["--engine", "whisper", "--language", "ur"], {}),
-    "roman": (["--roman-urdu"], {}),
-    "roman30": (["--roman-urdu"], {"ANCHOR_CHUNK_S": 30.0}),
-    "roman_vad": (["--roman-urdu"], {"VAD_SEGMENTS": True}),
-    "ur_vad": (["--engine", "whisper", "--language", "ur"], {"VAD_SEGMENTS": True}),
-    "plain_vad": (["--engine", "whisper"], {"VAD_SEGMENTS": True}),
+    "roman": (["--roman-urdu"], {"VAD_SEGMENTS": "off"}),
+    "roman30": (["--roman-urdu"], {"ANCHOR_CHUNK_S": 30.0, "VAD_SEGMENTS": "off"}),
+    "roman_vad": (["--roman-urdu"], {"VAD_SEGMENTS": "roman"}),
+    "ur_vad": (["--engine", "whisper", "--language", "ur"], {"VAD_SEGMENTS": "all"}),
+    "plain_vad": (["--engine", "whisper"], {"VAD_SEGMENTS": "all"}),
 }
 # (set, mode, run). Run 1 of everything before any run 2, so a plan cut short
 # still has every cell once. parakeet reads Urdu as nothing useful; it runs on
@@ -154,10 +156,9 @@ def run_one(set_name: str, mode: str, run: int, dry: bool) -> None:
     # Kept out of the owner's app library: every finished `dsj suno` adds
     # itself to the library, and these are test runs on public audio.
     env = os.environ | {"DSJ_LIBRARY": str(RUNS / "library.db")}
-    extra = ["--extra", "vad"] if overrides.get("VAD_SEGMENTS") else []
     with (folder / f"{name}.log").open("w") as log:
         rc = subprocess.run(
-            ["uv", "run", *extra, "python", "-c", WRAPPER, json.dumps(overrides), str(side), *args],
+            ["uv", "run", "python", "-c", WRAPPER, json.dumps(overrides), str(side), *args],
             cwd=REPO, stdout=log, stderr=subprocess.STDOUT, env=env,
         ).returncode
     wall = time.monotonic() - started

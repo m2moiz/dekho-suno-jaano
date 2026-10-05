@@ -1,4 +1,4 @@
-"""Silero's speech detector in front of whisper (#236), off by default.
+"""Silero's speech detector in front of whisper (#236): on for `--roman-urdu`, off otherwise.
 
 `speech_segments` is the cut-and-merge that turns the detector's speech spans
 into the clips whisper decodes. It is pure, so most of these tests are about it
@@ -111,13 +111,17 @@ def _stub_vad_run(
     spans: list[tuple[float, float]],
     results: list[dict[str, Any]],
     detected: str = "hi",
-) -> tuple[list[dict[str, Any]], list[float]]:
-    """mlx-whisper, its loader and the detector stubbed; the VAD switch on.
+    mode: str | None = "all",
+) -> tuple[list[dict[str, Any]], list[float], list[int]]:
+    """mlx-whisper, its loader and the detector stubbed; VAD_SEGMENTS set to `mode`.
 
-    Returns the calls whisper got (samples handed it plus every keyword) and
-    the lengths of every clip language detection was asked about.
+    `mode=None` leaves VAD_SEGMENTS at its default. Returns the calls whisper
+    got (samples handed it plus every keyword), the lengths of every clip
+    language detection was asked about, and the length of every audio the
+    speech detector was run over.
     """
-    monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", True)
+    if mode is not None:
+        monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", mode)
     calls: list[dict[str, Any]] = []
 
     def fake_transcribe(audio: Any, **kwargs: Any) -> dict[str, Any]:
@@ -128,13 +132,17 @@ def _stub_vad_run(
     module.transcribe = fake_transcribe  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "mlx_whisper", module)
     audio_module = ModuleType("mlx_whisper.audio")
+
     def fake_load_audio(file: str, sr: int = SR) -> np.ndarray:
         return np.zeros(int(seconds * SR), dtype=np.float32)
 
     audio_module.load_audio = fake_load_audio  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "mlx_whisper.audio", audio_module)
 
+    detected_over: list[int] = []
+
     def fake_speech(data: Any) -> tuple[list[tuple[float, float]], list[float]]:
+        detected_over.append(len(data))
         return spans, []
 
     monkeypatch.setattr(whisper_mod, "_speech", fake_speech)
@@ -145,7 +153,7 @@ def _stub_vad_run(
         return detected
 
     monkeypatch.setattr(whisper_mod, "_detect_language", fake_detect)
-    return calls, asked
+    return calls, asked, detected_over
 
 
 def _seg(start: float, end: float, text: str) -> dict[str, Any]:
@@ -160,7 +168,7 @@ def _seg(start: float, end: float, text: str) -> dict[str, Any]:
 def test_each_segment_is_decoded_alone_and_timed_on_the_files_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls, asked = _stub_vad_run(
+    calls, asked, _ = _stub_vad_run(
         monkeypatch,
         seconds=100.0,
         spans=[(2.0, 12.0), (60.0, 70.0)],
@@ -186,26 +194,30 @@ def test_each_segment_is_decoded_alone_and_timed_on_the_files_clock(
 def test_roman_urdu_seeds_every_segment_and_no_anchor_windows_are_cut(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls, _ = _stub_vad_run(
+    """The default: `--roman-urdu` (a prompt and an anchor) goes through the detector."""
+    calls, _, speech = _stub_vad_run(
         monkeypatch,
         seconds=300.0,
         spans=[(0.0, 20.0), (100.0, 110.0), (200.0, 229.0)],
         results=[{"segments": []} for _ in range(3)],
+        mode=None,
     )
 
     transcribe_whisper(
         Path("a.wav"), language="ur", prompt=ROMAN_URDU_PROMPT, anchor_s=whisper_mod.ANCHOR_CHUNK_S
     )
 
+    assert speech == [300 * SR]
     assert [c["n_samples"] for c in calls] == [20 * SR, 10 * SR, 29 * SR]
     assert all(c["initial_prompt"] == ROMAN_URDU_PROMPT for c in calls)
+    assert all(c["condition_on_previous_text"] is False for c in calls)
 
 
 def test_a_language_left_to_whisper_is_detected_once_on_the_first_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Up to 30 s of speech, gaps left out, and every segment decodes in what it found."""
-    calls, asked = _stub_vad_run(
+    calls, asked, _ = _stub_vad_run(
         monkeypatch,
         seconds=200.0,
         spans=[(0.0, 20.0), (100.0, 120.0), (150.0, 160.0)],
@@ -237,7 +249,7 @@ def test_progress_is_reported_at_each_segments_end(monkeypatch: pytest.MonkeyPat
 
 
 def test_a_file_with_no_speech_decodes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls, asked = _stub_vad_run(monkeypatch, seconds=20.0, spans=[], results=[])
+    calls, asked, _ = _stub_vad_run(monkeypatch, seconds=20.0, spans=[], results=[])
 
     got = transcribe_whisper(Path("a.wav"))
 
@@ -247,31 +259,113 @@ def test_a_file_with_no_speech_decodes_nothing(monkeypatch: pytest.MonkeyPatch) 
     assert got.language is None
 
 
-def test_the_fingerprint_is_unchanged_with_the_detector_off_and_differs_with_it_on(
+@pytest.mark.parametrize(
+    ("language", "prompt", "anchor_s", "through_detector"),
+    [
+        pytest.param("ur", ROMAN_URDU_PROMPT, whisper_mod.ANCHOR_CHUNK_S, True, id="roman-urdu"),
+        pytest.param("ur", None, None, False, id="language-ur"),
+        pytest.param(None, None, None, False, id="language-detected"),
+    ],
+)
+def test_by_default_only_roman_urdu_goes_through_the_detector(
+    language: str | None,
+    prompt: str | None,
+    anchor_s: float | None,
+    through_detector: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Off, a checkpoint banked before #236 still resumes; on, it never does.
+    """The owner's call on #236: on for `--roman-urdu`, off for the other two whisper modes.
 
-    silero-vad's version is stubbed: the `vad` extra is not in CI's sync line.
+    Off, the run is whisper's own unchunked call: one call, handed the path.
     """
-    off = fingerprint_fields("ur", ROMAN_URDU_PROMPT, 120.0)
-    assert not any(k.startswith(("vad", "silero")) for k in off)
+    calls, asked, speech = _stub_vad_run(
+        monkeypatch,
+        seconds=60.0,
+        spans=[(1.0, 20.0)],
+        results=[{"segments": []}],
+        mode=None,
+    )
 
+    transcribe_whisper(Path("a.wav"), language=language, prompt=prompt, anchor_s=anchor_s)
+
+    assert whisper_mod.vad_applies(prompt, anchor_s) is through_detector
+    assert len(calls) == 1
+    if through_detector:
+        assert speech == [60 * SR]
+        assert calls[0]["n_samples"] == 19 * SR
+        assert calls[0]["condition_on_previous_text"] is False
+    else:
+        assert speech == []
+        assert asked == []
+        assert "condition_on_previous_text" not in calls[0]
+        assert calls[0]["n_samples"] == len("a.wav")  # the path, not samples
+
+
+def test_off_puts_roman_urdu_back_on_its_anchored_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls, _, speech = _stub_vad_run(
+        monkeypatch,
+        seconds=60.0,
+        spans=[(1.0, 20.0)],
+        results=[{"segments": []}],
+        mode="off",
+    )
+
+    transcribe_whisper(
+        Path("a.wav"), language="ur", prompt=ROMAN_URDU_PROMPT, anchor_s=whisper_mod.ANCHOR_CHUNK_S
+    )
+
+    assert speech == []
+    assert [c["n_samples"] for c in calls] == [60 * SR]
+    assert calls[0]["initial_prompt"] == ROMAN_URDU_PROMPT
+
+
+def _silero_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """silero-vad's version, stubbed so these tests do not depend on the extra being installed."""
     real = importlib.metadata.version
 
     def version(name: str) -> str:
         return "6.2.1" if name == "silero-vad" else real(name)
 
     monkeypatch.setattr(importlib.metadata, "version", version)
-    monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", True)
+
+
+def test_the_fingerprint_records_the_detector_where_it_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `--roman-urdu` result banked without the detector never resumes under it, nor back."""
+    _silero_version(monkeypatch)
     on = fingerprint_fields("ur", ROMAN_URDU_PROMPT, 120.0)
+    monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", "off")
+    off = fingerprint_fields("ur", ROMAN_URDU_PROMPT, 120.0)
 
     assert on != off
     assert on["vad_max_s"] == str(whisper_mod.VAD_MAX_S)
     assert on["vad_pad_ms"] == str(whisper_mod.VAD_PAD_MS)
+    assert on["silero_vad_version"] == "6.2.1"
     # The anchor is not used under the detector, so it is not part of the key.
     assert on["anchor_s"] == "None"
+    assert not any(k.startswith(("vad", "silero")) for k in off)
+    assert off["anchor_s"] == "120.0"
 
 
-def test_the_detector_is_off_by_default() -> None:
-    assert whisper_mod.VAD_SEGMENTS is False
+@pytest.mark.parametrize(("language", "prompt"), [("ur", None), (None, None)])
+def test_where_the_detector_does_not_apply_the_fingerprint_is_as_before_236(
+    language: str | None, prompt: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No VAD keys, so a `--language ur` or detected result banked before #236 still resumes."""
+    _silero_version(monkeypatch)
+    fields = fingerprint_fields(language, prompt, None)
+
+    assert not any(k.startswith(("vad", "silero")) for k in fields)
+
+
+def test_all_puts_every_whisper_mode_through_the_detector(monkeypatch: pytest.MonkeyPatch) -> None:
+    _silero_version(monkeypatch)
+    monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", "all")
+
+    assert whisper_mod.vad_applies(None, None)
+    assert "vad_max_s" in fingerprint_fields(None, None, None)
+
+
+def test_the_detector_is_on_for_roman_urdu_by_default() -> None:
+    assert whisper_mod.VAD_SEGMENTS == "roman"

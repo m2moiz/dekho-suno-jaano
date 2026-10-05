@@ -399,6 +399,7 @@ mac = [
     { name = "mlx-whisper" },
     { name = "parakeet-mlx" },
     { name = "senko" },
+    { name = "silero-vad" },
     { name = "uvicorn" },
 ]
 parakeet = [
@@ -412,11 +413,9 @@ ui = [
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
-vad = [
-    { name = "silero-vad" },
-]
 whisper = [
     { name = "mlx-whisper" },
+    { name = "silero-vad" },
 ]
 
 [package.dev-dependencies]
@@ -442,11 +441,11 @@ requires-dist = [
     { name = "senko", marker = "extra == 'diarize'", specifier = ">=0.1.0,<0.2" },
     { name = "sherpa-onnx", marker = "extra == 'sherpa'", specifier = ">=1.13.6" },
     { name = "sherpa-onnx-core", marker = "extra == 'sherpa'", specifier = ">=1.13.6" },
-    { name = "silero-vad", marker = "extra == 'vad'", specifier = ">=6.2.1" },
+    { name = "silero-vad", marker = "extra == 'whisper'", specifier = ">=6.2.1" },
     { name = "typer", specifier = ">=0.20" },
     { name = "uvicorn", marker = "extra == 'ui'", specifier = ">=0.53.0" },
 ]
-provides-extras = ["whisper", "diarize", "parakeet", "mac", "sherpa", "android", "ui", "vad"]
+provides-extras = ["whisper", "diarize", "parakeet", "mac", "sherpa", "android", "ui"]
 
 [package.metadata.requires-dev]
 dev = [
