@@ -149,6 +149,7 @@ carries more than you want:
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
 | `dsj[ui]` | `fastapi`, `uvicorn` | `dsj ui`, the app in a browser |
+| `dsj[vad]` | `silero-vad` | Silero's speech detector in front of whisper, off by default and in no bundle while it is measured (#236). Pulls torchaudio |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every

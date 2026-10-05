@@ -98,6 +98,14 @@ ui = [
     "fastapi>=0.141.1",
     "uvicorn>=0.53.0",
 ]
+# Silero's speech detector in front of whisper (#236), off by default
+# (dsj/whisper.py, VAD_SEGMENTS). Its own extra and in no bundle until the
+# measurement on #236 says it should ship: silero-vad imports torchaudio at the
+# top of its module, a weight no default run should carry for a switch that is
+# off. The 2 MB model ships inside the package; nothing is downloaded at run time.
+vad = [
+    "silero-vad>=6.2.1",
+]
 
 [dependency-groups]
 dev = [

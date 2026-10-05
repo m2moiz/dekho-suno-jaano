@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transcribe the public reference sets in every mode #184 compares, one run at a time.
 
-    uv run python scratch/accuracy/run.py [--only SET/MODE/RUN ...] [--dry-run]
+    uv run python scratch/accuracy/run.py [--plan 184|236] [--only SET/MODE/RUN ...] [--dry-run]
 
 Each run is `dsj suno <set audio> -o scratch/accuracy/runs/<set>/<mode>-r<N>.json`
 with the mode's flags and `--no-diarize`, in a fresh process. Like
@@ -24,6 +24,11 @@ Modes: parakeet (one run: it does not vary between runs), whisper with the
 language detected (`plain`), `--language ur` (`ur`), `--roman-urdu`
 (`roman`, anchored every ANCHOR_CHUNK_S = 120 s) and `--roman-urdu` with
 ANCHOR_CHUNK_S = 30 (`roman30`, #184's "Roman 30 s"). Whisper modes run twice.
+
+`--plan 236` runs #236's instead: `roman_vad`, `ur_vad` and `plain_vad`, the
+same flags as `roman`, `ur` and `plain` with dsj.whisper.VAD_SEGMENTS on
+(Silero's speech detector in front of whisper). They run under `uv run
+--extra vad`, which installs silero-vad if it is missing.
 """
 
 from __future__ import annotations
@@ -56,6 +61,9 @@ MODES: dict[str, tuple[list[str], dict[str, Any]]] = {
     "ur": (["--engine", "whisper", "--language", "ur"], {}),
     "roman": (["--roman-urdu"], {}),
     "roman30": (["--roman-urdu"], {"ANCHOR_CHUNK_S": 30.0}),
+    "roman_vad": (["--roman-urdu"], {"VAD_SEGMENTS": True}),
+    "ur_vad": (["--engine", "whisper", "--language", "ur"], {"VAD_SEGMENTS": True}),
+    "plain_vad": (["--engine", "whisper"], {"VAD_SEGMENTS": True}),
 }
 # (set, mode, run). Run 1 of everything before any run 2, so a plan cut short
 # still has every cell once. parakeet reads Urdu as nothing useful; it runs on
@@ -68,6 +76,17 @@ PLAN = [
     ("earnings_call", "parakeet", 1),
     ("earnings_call", "plain", 1),
 ]
+# #236: the detector on, beside #184's roman, ur and plain rows. Run 1 of
+# everything first; plain only on the English call, the one set it is for.
+PLAN_236 = [
+    (s, m, r)
+    for r in (1, 2)
+    for s, m in [
+        *[(s, m) for m in ("roman_vad", "ur_vad") for s in ("podcast", "urdu", "earnings")],
+        ("earnings", "plain_vad"),
+    ]
+]
+PLANS = {"184": PLAN, "236": PLAN_236}
 
 # Runs inside the child: saves what _retried was handed, then retries as usual.
 WRAPPER = """
@@ -135,9 +154,10 @@ def run_one(set_name: str, mode: str, run: int, dry: bool) -> None:
     # Kept out of the owner's app library: every finished `dsj suno` adds
     # itself to the library, and these are test runs on public audio.
     env = os.environ | {"DSJ_LIBRARY": str(RUNS / "library.db")}
+    extra = ["--extra", "vad"] if overrides.get("VAD_SEGMENTS") else []
     with (folder / f"{name}.log").open("w") as log:
         rc = subprocess.run(
-            ["uv", "run", "python", "-c", WRAPPER, json.dumps(overrides), str(side), *args],
+            ["uv", "run", *extra, "python", "-c", WRAPPER, json.dumps(overrides), str(side), *args],
             cwd=REPO, stdout=log, stderr=subprocess.STDOUT, env=env,
         ).returncode
     wall = time.monotonic() - started
@@ -151,11 +171,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--only", nargs="*", default=None, help="SET/MODE/RUN, e.g. urdu/roman/1")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--plan", choices=sorted(PLANS), default="184", help="whose runs: #184's or #236's")
     args = parser.parse_args()
-    plan = PLAN
+    plan = PLANS[args.plan]
     if args.only:
         wanted = {tuple(o.split("/")) for o in args.only}
-        plan = [p for p in PLAN if (p[0], p[1], str(p[2])) in wanted]
+        plan = [p for p in plan if (p[0], p[1], str(p[2])) in wanted]
     for missing in [s for s, path in SETS.items() if not path.exists()]:
         sys.exit(f"{SETS[missing]} is missing: build it first (scratch/accuracy/build_refs.py)")
     for set_name, mode, run in plan:
