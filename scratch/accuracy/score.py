@@ -36,13 +36,16 @@ so every word goes through the same three steps on both sides:
 2. Romanize: Urdu letters that Roman Urdu spells alike are folded first
    (URDU_FOLD: the three s letters, the four z letters, two t, two h,
    qaf to kaf, ain to a vowel at the start and nothing elsewhere, the Arabic forms of yeh, kaf and heh), then `uroman` writes
-   the word in Latin. Latin words pass through unchanged.
+   the word in Latin. Devanagari goes through uroman too, with the few
+   letters it spells apart from Urdu fixed (DEVANAGARI_SOUNDS, #240). Latin
+   words pass through unchanged.
 3. Key: a consonant skeleton that keeps the final vowel's class, because the
    Urdu function words differ only there (ka, ki, ke, ko) and Roman spellings
    differ mostly in the vowels inside (hamare, humare, hmarye). English
    spellings get a few sound rules first (tion, c, ph, x, dge) so English
    written in Urdu letters (پروڈکٹ, `prwddktt`) can meet its Latin spelling.
-   See `key`.
+   Last, the sounds a Hindi model may write without the nukta are folded on
+   both sides (NUKTA_FOLD: z to j, f to p, gh to g). See `key`.
 
 Two words match when their keys are equal. Alignment is word-level
 Levenshtein over the whole file (rapidfuzz), then every stretch between two
@@ -102,6 +105,29 @@ URDU_FOLD = str.maketrans({
     "\u064a": "\u06cc", "\u0643": "\u06a9", "\u0647": "\u06c1", "\u06c0": "\u06c1",
 })
 ARABIC = re.compile("[\u0600-\u06ff]")
+DEVANAGARI = re.compile("[\u0900-\u097f]")
+# Everything a scoring token may hold: letters and digits (`\w`), and
+# Devanagari's vowel signs, virama and nukta, which are combining marks, not
+# `\w`; without them \u091c\u093f\u0902\u0926\u0917\u0940 is \u091c\u0926\u0917. The two dandas are punctuation.
+NOT_TOKEN = re.compile("[^\\w\u0900-\u0963\u0966-\u097f]")
+# Devanagari letters uroman spells apart from the Urdu letter for the same
+# sound, rewritten before uroman (#240): anusvara and candrabindu to \u0928\u094d, because
+# Urdu writes the nasal as noon (\u0632\u0646\u062f\u06af\u06cc, \u0645\u06cc\u06ba) and uroman spells anusvara m
+# before d; \u0921\u093c and \u0922\u093c to \u0930 and \u0930\u094d\u0939, because uroman spells them dd and ddh, as it
+# does \u0921 and \u0922, where Urdu \u0691 is rr. \u091a is fixed after uroman (`romanize`).
+DEVANAGARI_SOUNDS = [
+    (re.compile("[\u0901\u0902]"), "\u0928\u094d"),
+    (re.compile("\u0921\u093c|\u095c"), "\u0930"),
+    (re.compile("\u0922\u093c|\u095d"), "\u0930\u094d\u0939"),
+]
+# #240: sounds Urdu writes with one letter and a Hindi model may write with
+# another, folded on the key of both sides after uroman. uroman spells
+# Devanagari \u091c\u093c z but \u091c j, \u092b\u093c f but \u092b ph (which the key makes p), and \u0917\u093c g,
+# where Urdu \u0632, \u0641 and \u063a are z, f and gh; Indian Hindi often writes them
+# without the nukta. So z to j, f to p, gh (G) to g. q to k and kh need no
+# fold: the key already writes q as k, and uroman spells both \u0916 and \u0916\u093c kh, as
+# it does Urdu \u062e.
+NUKTA_FOLD = str.maketrans({"z": "j", "f": "p", "G": "g"})
 DIACRITICS = re.compile("[\u064b-\u065f\u0670\u06d6-\u06ed]")
 TAG = re.compile(r"<[^>]*>")
 VOWELS = set("aeiouyw")
@@ -148,7 +174,7 @@ def pieces(text: str) -> list[str]:
     for raw in re.split(r"[\s\-\u2010-\u2015/]+", text):
         raw = raw.strip(".,;:!?\"'()[]")
         for part in (spoken(raw) if re.fullmatch(r"[\d,]*\.?\d+", raw) else [raw]):
-            token = re.sub(r"[^\w]", "", DIACRITICS.sub("", part)).replace("_", "").lower()
+            token = NOT_TOKEN.sub("", DIACRITICS.sub("", part)).replace("_", "").lower()
             if token and token not in FILLERS:
                 out.append(token)
     return out
@@ -156,7 +182,18 @@ def pieces(text: str) -> list[str]:
 
 @functools.cache
 def romanize(token: str) -> str:
-    """`token` in Latin letters: uroman over the folded Urdu letters, Latin as it is."""
+    """`token` in Latin letters: uroman over the folded Urdu letters or the Devanagari, Latin as it is."""
+    if DEVANAGARI.search(token):
+        for pattern, sound in DEVANAGARI_SOUNDS:
+            token = pattern.sub(sound, token)
+        latin = _uroman().romanize_string(token).lower()
+        # uroman spells च c and छ ch, where Urdu چ is tch and چھ tchh.
+        latin = re.sub(r"c(?!h)", "ch", latin)
+        # Hindi drops a word's final inherent vowel, which uroman keeps after
+        # a cluster (क़त्ल qatla, जांच jaancha) where Urdu and Roman have none.
+        if re.search("[क-हक़-य़]़?$", token):
+            latin = re.sub(r"(?<=[^aeiou])a$", "", latin)
+        return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", latin))
     if not ARABIC.search(token):
         return token
     # Ain: Roman Urdu writes a word-initial one as a vowel (aam) and drops the
@@ -201,11 +238,12 @@ def key(token: str) -> str:
     silent = len(token) > 1 and bool(re.search(r"[^\u06c1\u0647][\u06c1\u0647]$|\u0639$", token))
     if silent and s.endswith("h"):
         s = s[:-1]
-    if not ARABIC.search(token):
+    if not ARABIC.search(token) and not DEVANAGARI.search(token):
         s = _english(s)
     s = s.replace("tch", "C").replace("ch", "C").replace("sh", "S").replace("kh", "X")
     s = s.replace("gh", "G").replace("q", "k").replace("v", "w")
     s = s[:1] + s[1:].replace("h", "")
+    s = s.translate(NUKTA_FOLD)
     s = re.sub(r"(.)\1+", r"\1", s)
     if not s:
         return "_"
@@ -630,11 +668,13 @@ def cmd_english(pattern: str, show: int, seed: int) -> None:
 
     Every Latin reference word falls in one bucket by what is aligned to it:
     `english` (matched, written in Latin), `urdu letters` (matched, written in
-    Urdu script: the English word transliterated), `urdu word` (not matched,
-    an Urdu-script word in its place: translated, or wrong), `wrong latin`
-    (not matched, a Latin word in its place) and `missed` (nothing aligned).
-    `urdu word` cannot tell a translation from a mishearing, so `--show`
-    prints that many of its pairs, drawn at random, for a person to read.
+    Urdu script: the English word transliterated), `devanagari` (matched,
+    written in Devanagari, #240), `urdu word` and `devanagari word` (not
+    matched, a word in that script in its place: translated, or wrong),
+    `wrong latin` (not matched, a Latin word in its place) and `missed`
+    (nothing aligned). A wrong word in another script cannot tell a
+    translation from a mishearing, so `--show` prints that many of those
+    pairs, drawn at random, for a person to read.
     """
     for set_name, name, path in runs(pattern):
         if set_name != "podcast":
@@ -642,20 +682,24 @@ def cmd_english(pattern: str, show: int, seed: int) -> None:
         ref = reference_words(load(TRUTHS[set_name]))
         hyp = [w.text for w in transcript_words(load(path)["sentences"])]
         s = score(hyp, ref)
-        counts = {"english": 0, "urdu letters": 0, "urdu word": 0, "wrong latin": 0, "missed": 0}
+        counts = {"english": 0, "urdu letters": 0, "devanagari": 0, "urdu word": 0, "devanagari word": 0,
+                  "wrong latin": 0, "missed": 0}
         replaced: list[tuple[str, str]] = []
         for a, b in s.pairs:
             if b is None or is_urdu_script(ref[b]):
                 continue
             if a is None:
                 counts["missed"] += 1
-            elif s.correct_hyp[a]:
-                counts["urdu letters" if is_urdu_script(hyp[a]) else "english"] += 1
-            elif is_urdu_script(hyp[a]):
-                counts["urdu word"] += 1
-                replaced.append((ref[b], hyp[a]))
-            else:
+                continue
+            script = ("urdu letters" if is_urdu_script(hyp[a])
+                      else "devanagari" if DEVANAGARI.search(hyp[a]) else "english")
+            if s.correct_hyp[a]:
+                counts[script] += 1
+            elif script == "english":
                 counts["wrong latin"] += 1
+            else:
+                counts["urdu word" if script == "urdu letters" else "devanagari word"] += 1
+                replaced.append((ref[b], hyp[a]))
         total = sum(counts.values())
         print(f"{name}: {total} Latin reference words: "
               + ", ".join(f"{k} {v} ({v / total:.0%})" for k, v in counts.items()), flush=True)
