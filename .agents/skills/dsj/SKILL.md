@@ -118,7 +118,7 @@ class, the transcript is kept, and the exit code is still 0.
 parakeet runs at about 13x realtime and covers 25 languages, all European. For Urdu, or
 anything else outside that set, use whisper, which is about 1.7 to 3x realtime on Urdu with
 `--roman-urdu` and about 5 to 6x on English (measured per file in
-[references/engines.md](references/engines.md#whisper-speed)) and banks nothing until it has decoded the whole recording. A `--roman-urdu` run reports progress once per window of about two minutes;
+[references/engines.md](references/engines.md#whisper-speed)) and banks nothing until it has decoded the whole recording. A `--roman-urdu` run reports progress once per speech clip of up to 30 s;
 any other whisper run reports 0% and then nothing until transcription ends:
 
 ```bash

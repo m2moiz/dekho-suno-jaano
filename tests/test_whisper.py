@@ -35,6 +35,17 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+@pytest.fixture(autouse=True)
+def no_speech_detector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests are about whisper's own call and the anchored windows, so Silero is off.
+
+    Since #236 a prompt with an anchor (`--roman-urdu`) goes through the speech
+    detector by default, which would replace the windows tested here.
+    tests/test_whisper_vad.py holds that path, and which modes take it.
+    """
+    monkeypatch.setattr(whisper_mod, "VAD_SEGMENTS", "off")
+
+
 def _stub_mlx_whisper(
     monkeypatch: pytest.MonkeyPatch, result: dict[str, Any], seen: dict[str, Any] | None = None
 ) -> None:

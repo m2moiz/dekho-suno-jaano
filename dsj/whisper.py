@@ -66,17 +66,23 @@ __all__ = [
     "INSTALL_HINT",
     "ROMAN_URDU_PROMPT",
     "SAMPLE_RATE",
+    "VAD_SEGMENTS",
     "WhisperUnavailable",
     "available",
     "fingerprint_fields",
     "redecoder",
+    "speech_segments",
     "transcribe_whisper",
+    "vad_applies",
 ]
 
+import math
 import statistics
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+
+import numpy as np
 
 from dsj.asr import Transcription, with_char_offsets
 
@@ -123,6 +129,54 @@ ANCHOR_OVERLAP_S = 6.0
 # instead (#140). Kept as a constant, and plumbed through, so the setting can
 # be measured again: scratch/whisper_sweep.py sets it from outside per run.
 HALLUCINATION_SILENCE_S: float | None = None
+
+# Silero's speech detector in front of whisper (#236). Where it applies, the
+# file is cut at speech first and only the clips `speech_segments` makes of it
+# are decoded, so whisper is never handed a long silence to write over (#181's
+# 220 words over a 60 s gap). Measured on #236 (5 Oct 2026, two runs each,
+# commit 34036c6), WER with it against without:
+#
+# - `--roman-urdu`: mixed podcast 30.3, 32.7% against 33.9, 33.8%; English
+#   call 7.9, 7.9% against 29.1, 15.8%, loop seconds 26, 26 against 284, 140;
+#   Urdu 42.1, 43.0% against 40.8, 42.7%, about 1 point worse.
+# - `--language ur`: Urdu 1 to 4 points better, the English call broken (96.1
+#   and 91.0%): each clip decoded with no text before it loops, and every loop
+#   runs all six of mlx-whisper's fallback temperatures, 56 to 66 min for 30.
+# - language detected: the English call 4.7% against 4.5, 4.4%.
+#
+# So it is "roman": on for `--roman-urdu`, which is `anchor_s` with a prompt
+# (dsj.suno.roman_urdu), and off for every other whisper run. The owner chose
+# that on 5 Oct 2026, his speech being Urdu and English mixed, accepting the
+# point lost on pure Urdu. "all" puts every whisper run through it and "off"
+# none; scratch/accuracy/run.py sets those per run, as it does ANCHOR_CHUNK_S.
+# silero-vad rides in the whisper extra (model inside the package).
+VAD_SEGMENTS: Literal["off", "roman", "all"] = "roman"
+# The longest clip whisper is handed. WhisperX, arXiv 2303.00747 Table 3: a
+# 30 s cut-and-merge beat 15 s on TED-LIUM (WER 9.70 against 9.72), "maximum
+# context yields the most accurate transcription"; 30 s is also whisper's own
+# window, so a clip never spills into a second one.
+VAD_MAX_S = 30.0
+# Speech padded by this much each side, so a cut never clips the first or last
+# syllable (faster-whisper #925 saw first syllables lost at tight padding).
+# No published ablation exists: Silero's default is 30 ms and faster-whisper
+# overrides it to 400 ms. 300 ms sits just under faster-whisper's, unmeasured
+# here beyond the recall check on #236.
+VAD_PAD_MS = 300
+# Silero's own default; its docstring calls 0.5 "pretty good for most
+# datasets". Not measured on Urdu by anyone (#236, "Not known" 2); the recall
+# check on #236 is the only evidence that it does not drop quiet Urdu speech.
+VAD_THRESHOLD = 0.5
+# A pause must last this long before speech is split at it. Silero's default
+# is 100 ms, faster-whisper's 2000 ms. Splits only decide where a clip may end,
+# since the merge keeps the pauses inside a clip, so shorter means more places
+# to cut; 500 ms keeps those to pauses between phrases rather than between
+# words. A choice, not a measurement (#236).
+VAD_MIN_SILENCE_MS = 500
+# Speech shorter than this is dropped as a click. Silero's default, kept: a
+# shorter floor admits noise, a longer one risks a one-word "haan" (#236).
+VAD_MIN_SPEECH_MS = 250
+# Silero scores 512-sample frames at 16 kHz (utils_vad.get_speech_timestamps).
+VAD_FRAME_S = 512 / 16000
 
 # How long a word after a pause may last before its start is moved up to it
 # (#222): twice the median word length of its segment, the median taken as no
@@ -177,6 +231,13 @@ class WhisperUnavailable(RuntimeError):
     """The whisper engine was asked for and mlx-whisper is not installed."""
 
 
+def vad_applies(prompt: str | None, anchor_s: float | None) -> bool:
+    """Whether a run with this prompt and anchor goes through the speech detector (VAD_SEGMENTS)."""
+    if VAD_SEGMENTS == "all":
+        return True
+    return VAD_SEGMENTS == "roman" and anchor_s is not None and prompt is not None
+
+
 def fingerprint_fields(
     language: str | None, prompt: str | None, anchor_s: float | None
 ) -> dict[str, str]:
@@ -193,14 +254,30 @@ def fingerprint_fields(
     """
     from importlib.metadata import version
 
-    anchored = anchor_s is not None and prompt is not None
-    return {
+    # Under the speech detector no anchored windows are cut (`_vad_decoded`).
+    vad = vad_applies(prompt, anchor_s)
+    anchored = anchor_s is not None and prompt is not None and not vad
+    fields = {
         "mlx_whisper_version": version("mlx-whisper"),
         "language": str(language),
         "prompt": str(prompt),
         "anchor_s": str(anchor_s) if anchored else "None",
         "anchor_overlap_s": str(ANCHOR_OVERLAP_S) if anchored else "None",
         "hallucination_silence_s": str(HALLUCINATION_SILENCE_S),
+    }
+    if not vad:
+        # No VAD keys at all where it does not apply, so a `--language ur` or
+        # detected result banked before #236 still matches: fingerprints are
+        # compared whole (dsj/checkpoint.py). A `--roman-urdu` one does not,
+        # and should not: the detector changes what it writes.
+        return fields
+    return fields | {
+        "silero_vad_version": version("silero-vad"),
+        "vad_max_s": str(VAD_MAX_S),
+        "vad_pad_ms": str(VAD_PAD_MS),
+        "vad_threshold": str(VAD_THRESHOLD),
+        "vad_min_silence_ms": str(VAD_MIN_SILENCE_MS),
+        "vad_min_speech_ms": str(VAD_MIN_SPEECH_MS),
     }
 
 
@@ -539,6 +616,200 @@ def _owned(
     return out
 
 
+def speech_segments(
+    spans: Sequence[tuple[float, float]],
+    max_s: float,
+    probs: Sequence[float] = (),
+    frame_s: float = VAD_FRAME_S,
+) -> list[tuple[float, float]]:
+    """Cut and merge speech `spans` into clips of at most `max_s` seconds (#236).
+
+    `spans` are the detector's (start, end) in seconds, padded, in order and not
+    overlapping. A clip starts at a span's start and takes in each next span
+    while it would still end within `max_s` of that start, so the pauses between
+    the spans it took are decoded with them; WhisperX's cut-and-merge does the
+    same. Whether a long pause inside a clip should end it instead is not
+    settled (#236): this is what the podcast's gap count on #236 measures.
+
+    A span longer than `max_s` is cut first, at its least speech-like frame in
+    the back half of the reach (`probs[i]` scores the frame starting at
+    `i * frame_s`), so a cut does not leave a sliver; with no scores in reach,
+    evenly. Every second of every span lands in exactly one clip.
+    """
+    pieces: list[tuple[float, float]] = []
+    for a, b in spans:
+        while b - a > max_s:
+            lo, hi = a + max_s / 2, a + max_s
+            reach = [
+                i
+                for i in range(math.ceil(lo / frame_s), math.floor(hi / frame_s) + 1)
+                if i < len(probs) and a < i * frame_s <= hi
+            ]
+            if reach:
+                cut = min(reach, key=lambda i: probs[i]) * frame_s
+            else:
+                cut = a + (b - a) / math.ceil((b - a) / max_s)
+            pieces.append((a, cut))
+            a = cut
+        pieces.append((a, b))
+
+    segments: list[tuple[float, float]] = []
+    for a, b in pieces:
+        if segments and b - segments[-1][0] <= max_s:
+            segments[-1] = (segments[-1][0], b)
+        else:
+            segments.append((a, b))
+    return segments
+
+
+def _speech(data: Any) -> tuple[list[tuple[float, float]], list[float]]:
+    """Silero's padded speech spans over `data` (16 kHz samples), and its score per frame.
+
+    ONNX when onnxruntime imports, which is what Silero recommends for CPU; the
+    TorchScript model otherwise. Both ship inside silero-vad, so nothing is
+    fetched. The scores are recorded off the model as get_speech_timestamps
+    calls it, frame by frame, so one pass gives both.
+
+    Raises:
+        WhisperUnavailable: if silero-vad is not installed.
+    """
+    from importlib import import_module
+    from importlib.util import find_spec
+
+    # Neither ships type stubs; held as Any once here rather than suppressed
+    # at every use.
+    try:
+        silero_vad: Any = import_module("silero_vad")
+        torch: Any = import_module("torch")
+    except ImportError as exc:  # pragma: no cover - exercised by the extra being absent
+        raise WhisperUnavailable(
+            "--roman-urdu cuts the audio at speech with silero-vad (#236), which the "
+            f"whisper extra carries and this install lacks. Reinstall with {INSTALL_HINT}"
+        ) from exc
+
+    model: Any = silero_vad.load_silero_vad(onnx=find_spec("onnxruntime") is not None)
+    probs: list[float] = []
+
+    class _Scored:
+        """The model, with every frame's speech probability kept as it is returned."""
+
+        def reset_states(self) -> None:
+            model.reset_states()
+
+        def __call__(self, chunk: Any, sr: int) -> Any:
+            out: Any = model(chunk, sr)
+            probs.append(float(out.item()))
+            return out
+
+    stamps: list[dict[str, int]] = silero_vad.get_speech_timestamps(
+        torch.from_numpy(np.asarray(data, dtype=np.float32)),
+        _Scored(),
+        threshold=VAD_THRESHOLD,
+        sampling_rate=SAMPLE_RATE,
+        min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+        min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+        speech_pad_ms=VAD_PAD_MS,
+    )
+    return [(s["start"] / SAMPLE_RATE, s["end"] / SAMPLE_RATE) for s in stamps], probs
+
+
+def _detect_language(model_id: str, clip: Any) -> str:
+    """The language whisper would detect in `clip`, by mlx-whisper's own steps.
+
+    transcribe.py's detection, lifted: the log-mel of the clip padded or trimmed
+    to one 30 s window, then the model's language-token probabilities. The model
+    comes from mlx-whisper's own cache, so the decodes after this reuse it.
+    """
+    from importlib import import_module
+
+    mx: Any = import_module("mlx.core")
+    audio: Any = import_module("mlx_whisper.audio")
+    holder: Any = import_module("mlx_whisper.transcribe").ModelHolder
+
+    model: Any = holder.get_model(model_id, mx.float16)
+    mel: Any = audio.log_mel_spectrogram(
+        mx.array(np.asarray(clip, dtype=np.float32)),
+        n_mels=model.dims.n_mels,
+        padding=audio.N_SAMPLES,
+    )
+    segment: Any = audio.pad_or_trim(mel, audio.N_FRAMES, axis=-2).astype(mx.float16)
+    probs: dict[str, float]
+    _, probs = model.detect_language(segment)
+    return max(probs, key=lambda k: probs[k])
+
+
+def _vad_decoded(
+    transcribe: Callable[..., dict[str, Any]],
+    audio: Path,
+    *,
+    model_id: str,
+    language: str | None,
+    prompt: str | None,
+    on_progress: Callable[[float, float], None] | None,
+) -> Transcription:
+    """Decode only the speech in `audio`, clip by clip (#236, VAD_SEGMENTS).
+
+    The `--roman-urdu` path by default (`vad_applies`), and one path for every
+    whisper mode under VAD_SEGMENTS = "all". The audio is loaded once by the loader
+    `_anchored` uses; Silero finds the speech (`_speech`); `speech_segments`
+    cuts it into clips of at most VAD_MAX_S. Each clip is decoded alone, with
+    `condition_on_previous_text=False` as WhisperX does, so no clip's text,
+    invented or not, is fed to the next. `prompt` seeds every clip, which is
+    the anchoring `--roman-urdu` asks for at a 30 s window, and `anchor_s` has
+    nothing left to do.
+
+    With no language asked, it is detected once, on up to the first 30 s of
+    speech with the pauses left out, and every clip decodes in it: left to
+    detect per clip, whisper wrote Urdu in English on short clips (#229).
+    """
+    from mlx_whisper.audio import (
+        load_audio as _load_audio,  # pyright: ignore[reportUnknownVariableType]  # mlx has no stubs
+    )
+
+    data = cast("Any", _load_audio)(str(audio), sr=SAMPLE_RATE)
+    total = len(data)
+    spans, probs = _speech(data)
+    segments = speech_segments(spans, VAD_MAX_S, probs, VAD_FRAME_S)
+
+    if language is None and segments:
+        speech: list[Any] = []
+        need = int(VAD_MAX_S * SAMPLE_RATE)
+        for a, b in spans:
+            piece = np.asarray(data[int(a * SAMPLE_RATE) : int(b * SAMPLE_RATE)])[:need]
+            speech.append(piece)
+            need -= len(piece)
+            if need <= 0:
+                break
+        language = _detect_language(model_id, np.concatenate(speech))
+
+    sentences: list[dict[str, Any]] = []
+    for a, b in segments:
+        start, end = int(a * SAMPLE_RATE), min(int(b * SAMPLE_RATE), total)
+        result = transcribe(
+            data[start:end],
+            path_or_hf_repo=model_id,
+            language=language,
+            initial_prompt=prompt,
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
+            verbose=None,
+        )
+        sentences.extend(
+            _sentences_from(
+                cast("list[dict[str, Any]]", result.get("segments") or []), start / SAMPLE_RATE
+            )
+        )
+        if on_progress is not None:
+            on_progress(end / SAMPLE_RATE, total / SAMPLE_RATE)
+
+    return Transcription(
+        text=" ".join(str(s["text"]) for s in sentences).strip(),
+        sentences=sentences,
+        language=language,
+    )
+
+
 def transcribe_whisper(
     audio: Path,
     *,
@@ -566,7 +837,9 @@ def transcribe_whisper(
         prompt: Seeds the decoder. `ROMAN_URDU_PROMPT` is the measured one.
         anchor_s: Window length, in seconds, to re-seed `prompt` at. None
             leaves whisper's own window loop alone; ignored without a prompt,
-            there being nothing to anchor.
+            there being nothing to anchor. With a prompt, and VAD_SEGMENTS at
+            its default, the speech detector cuts the clips instead and
+            `prompt` seeds each one (`_vad_decoded`, #236).
         on_progress: Called after each anchored window with the seconds of
             audio finished and the seconds there are, both counted in the
             samples whisper decoded, so their ratio ends at exactly 1.0.
@@ -598,6 +871,16 @@ def transcribe_whisper(
         "Callable[..., dict[str, Any]]",
         mlx_whisper.transcribe,  # pyright: ignore[reportUnknownMemberType]
     )
+
+    if vad_applies(prompt, anchor_s):
+        return _vad_decoded(
+            transcribe,
+            audio,
+            model_id=model_id,
+            language=language,
+            prompt=prompt,
+            on_progress=on_progress,
+        )
 
     if anchor_s is not None and prompt is not None:
         sentences = _anchored(

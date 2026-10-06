@@ -8,6 +8,7 @@
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py split
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py seams
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py one RUN.json TRUTH.json
+    uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py wall
 
 `uroman` (isi-nlp's universal romanizer, PyPI `uroman`) and `rapidfuzz` ride
 in through `--with`: they are the scorer's, not dsj's, and never enter its
@@ -591,6 +592,33 @@ def cmd_seams() -> None:
               f"missed {miss_seam} in segments touching a seam, {len(miss) - miss_seam} elsewhere")
 
 
+def cmd_wall() -> None:
+    """Wall time per run from its `.bench.json`, and on the podcast the words in its three gaps (#236).
+
+    The gap count is scratch/real_bench.py's `fixture` measure (#181): words
+    starting inside the 10, 30 and 60 s stretches of noise with no speech,
+    plus a removed loop's words in proportion to its span inside one.
+    """
+    sys.path.insert(0, str(REPO))
+    from real_bench import measure_fixture
+
+    lines = ["| set | run | wall min | x realtime | words in 10 s gap | 30 s gap | 60 s gap |",
+             "|---|---|---:|---:|---:|---:|---:|"]
+    for set_name, name, path in runs():
+        bench = path.with_name(f"{name}.bench.json")
+        wall = float(load(bench)["wall_s"]) if bench.exists() else None
+        duration = float(load(TRUTHS[set_name])["duration_s"])
+        gaps = ["-", "-", "-"]
+        if set_name == "podcast":
+            gaps = [str(n) for n in measure_fixture(path, None).gap_words]
+        speed = f"{duration / wall:.2f}" if wall else "-"
+        minutes = f"{wall / 60:.1f}" if wall else "-"
+        lines.append(f"| {set_name} | {name} | {minutes} | {speed} | {' | '.join(gaps)} |")
+        print(lines[-1], flush=True)
+    with OUT.open("a") as fh:
+        fh.write("\n## wall and gaps\n\n" + "\n".join(lines) + "\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -603,6 +631,7 @@ def main() -> int:
     sub.add_parser("retry")
     sub.add_parser("seams")
     sub.add_parser("split")
+    sub.add_parser("wall")
     o = sub.add_parser("one")
     o.add_argument("run", type=Path)
     o.add_argument("truth", type=Path)
@@ -619,6 +648,8 @@ def main() -> int:
         cmd_seams()
     elif args.cmd == "split":
         cmd_split()
+    elif args.cmd == "wall":
+        cmd_wall()
     else:
         cmd_one(args.run, args.truth)
     return 0
