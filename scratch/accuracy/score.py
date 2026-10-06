@@ -9,6 +9,11 @@
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py seams
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py one RUN.json TRUTH.json
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py wall
+    uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py english [--runs PATTERN]
+
+`table` and `wall` take `--runs PATTERN` too (a name pattern such as
+`pakurdu_*` or `*roman_vad-r1`); with none they list every run there is,
+#235's model names included.
 
 `uroman` (isi-nlp's universal romanizer, PyPI `uroman`) and `rapidfuzz` ride
 in through `--with`: they are the scorer's, not dsj's, and never enter its
@@ -369,12 +374,13 @@ def load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def runs() -> list[tuple[str, str, Path]]:
-    """(set, mode-run, path) for every finished transcript, set order then name."""
+def runs(pattern: str = "*") -> list[tuple[str, str, Path]]:
+    """(set, mode-run, path) for every finished transcript whose name matches `pattern`, set order then name."""
     found = []
     for set_name in TRUTHS:
         for p in sorted((RUNS / set_name).glob("*-r[0-9].json")):
-            found.append((set_name, p.stem, p))
+            if Path(p.stem).match(pattern):
+                found.append((set_name, p.stem, p))
     return found
 
 
@@ -409,10 +415,10 @@ def by_script(s: Score, ref: list[str]) -> dict[str, tuple[int, int]]:
     return {k: (v[0], v[1]) for k, v in out.items()}
 
 
-def cmd_table() -> None:
+def cmd_table(pattern: str = "*") -> None:
     lines = ["| set | run | words out | WER | miss | ins | sub | strict WER | Urdu-ref err | Latin-ref err | loop s |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
-    for set_name, name, path in runs():
+    for set_name, name, path in runs(pattern):
         truth = load(TRUTHS[set_name])
         ref = reference_words(truth)
         doc = load(path)
@@ -592,7 +598,7 @@ def cmd_seams() -> None:
               f"missed {miss_seam} in segments touching a seam, {len(miss) - miss_seam} elsewhere")
 
 
-def cmd_wall() -> None:
+def cmd_wall(pattern: str = "*") -> None:
     """Wall time per run from its `.bench.json`, and on the podcast the words in its three gaps (#236).
 
     The gap count is scratch/real_bench.py's `fixture` measure (#181): words
@@ -604,7 +610,7 @@ def cmd_wall() -> None:
 
     lines = ["| set | run | wall min | x realtime | words in 10 s gap | 30 s gap | 60 s gap |",
              "|---|---|---:|---:|---:|---:|---:|"]
-    for set_name, name, path in runs():
+    for set_name, name, path in runs(pattern):
         bench = path.with_name(f"{name}.bench.json")
         wall = float(load(bench)["wall_s"]) if bench.exists() else None
         duration = float(load(TRUTHS[set_name])["duration_s"])
@@ -619,10 +625,49 @@ def cmd_wall() -> None:
         fh.write("\n## wall and gaps\n\n" + "\n".join(lines) + "\n")
 
 
+def cmd_english(pattern: str, show: int, seed: int) -> None:
+    """On the podcast: what each English (Latin-script) reference word came out as (#235).
+
+    Every Latin reference word falls in one bucket by what is aligned to it:
+    `english` (matched, written in Latin), `urdu letters` (matched, written in
+    Urdu script: the English word transliterated), `urdu word` (not matched,
+    an Urdu-script word in its place: translated, or wrong), `wrong latin`
+    (not matched, a Latin word in its place) and `missed` (nothing aligned).
+    `urdu word` cannot tell a translation from a mishearing, so `--show`
+    prints that many of its pairs, drawn at random, for a person to read.
+    """
+    for set_name, name, path in runs(pattern):
+        if set_name != "podcast":
+            continue
+        ref = reference_words(load(TRUTHS[set_name]))
+        hyp = [w.text for w in transcript_words(load(path)["sentences"])]
+        s = score(hyp, ref)
+        counts = {"english": 0, "urdu letters": 0, "urdu word": 0, "wrong latin": 0, "missed": 0}
+        replaced: list[tuple[str, str]] = []
+        for a, b in s.pairs:
+            if b is None or is_urdu_script(ref[b]):
+                continue
+            if a is None:
+                counts["missed"] += 1
+            elif s.correct_hyp[a]:
+                counts["urdu letters" if is_urdu_script(hyp[a]) else "english"] += 1
+            elif is_urdu_script(hyp[a]):
+                counts["urdu word"] += 1
+                replaced.append((ref[b], hyp[a]))
+            else:
+                counts["wrong latin"] += 1
+        total = sum(counts.values())
+        print(f"{name}: {total} Latin reference words: "
+              + ", ".join(f"{k} {v} ({v / total:.0%})" for k, v in counts.items()), flush=True)
+        for r, h in random.Random(seed).sample(replaced, min(show, len(replaced))):
+            print(f"    ref={r}  out={h} [{romanize(h)}]")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("table")
+    t = sub.add_parser("table")
+    t.add_argument("--runs", default="*", help="which runs, as a name pattern, e.g. 'pakurdu_*'")
     p = sub.add_parser("pairs")
     p.add_argument("--n", type=int, default=50)
     p.add_argument("--seed", type=int, default=184)
@@ -631,13 +676,18 @@ def main() -> int:
     sub.add_parser("retry")
     sub.add_parser("seams")
     sub.add_parser("split")
-    sub.add_parser("wall")
+    w = sub.add_parser("wall")
+    w.add_argument("--runs", default="*", help="which runs, as a name pattern")
+    e = sub.add_parser("english")
+    e.add_argument("--runs", default="*", help="which runs, as a name pattern")
+    e.add_argument("--show", type=int, default=20, help="Latin words replaced by an Urdu word, to read")
+    e.add_argument("--seed", type=int, default=235)
     o = sub.add_parser("one")
     o.add_argument("run", type=Path)
     o.add_argument("truth", type=Path)
     args = parser.parse_args()
     if args.cmd == "table":
-        cmd_table()
+        cmd_table(args.runs)
     elif args.cmd == "pairs":
         cmd_pairs(args.n, args.seed, args.runs)
     elif args.cmd == "cutoffs":
@@ -649,7 +699,9 @@ def main() -> int:
     elif args.cmd == "split":
         cmd_split()
     elif args.cmd == "wall":
-        cmd_wall()
+        cmd_wall(args.runs)
+    elif args.cmd == "english":
+        cmd_english(args.runs, args.show, args.seed)
     else:
         cmd_one(args.run, args.truth)
     return 0
