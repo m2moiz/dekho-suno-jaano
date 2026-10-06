@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transcribe the public reference sets in every mode #184 compares, one run at a time.
 
-    uv run python scratch/accuracy/run.py [--plan 184|235|236] [--only SET/MODE/RUN ...] [--dry-run]
+    uv run python scratch/accuracy/run.py [--plan 184|235|236|240] [--only SET/MODE/RUN ...] [--dry-run]
 
 Each run is `dsj suno <set audio> -o scratch/accuracy/runs/<set>/<mode>-r<N>.json`
 with the mode's flags and `--no-diarize`, in a fresh process. Like
@@ -36,6 +36,12 @@ were made on 34036c6, before that default, with VAD_SEGMENTS a bool set True.
 scratch/models/<name> (scratch/accuracy/convert_finetunes.py), as
 `<name>_roman_vad` and `<name>_ur`, run 1 only. A run 2 is asked for by hand
 with `--also SET/MODE/2`, which runs cells the plan does not hold.
+
+`--plan 240` runs Oriserve's Hinglish fine-tune of turbo (scratch/models/apex,
+convert_finetunes.py apex) as `apex_en_vad`, the decode its card uses
+(`--language en`) with the speech detector on (VAD_SEGMENTS = "all"), and
+`apex_roman_vad`, turbo's best mixed-speech mode with the model swapped. Run 1
+only; a run 2 is asked for with `--also`.
 
 `--min-speed 2` is the owner's floor from 6 Oct: speed is paramount, so a run
 that cannot finish at 2x realtime or faster is stopped (by the pid its status
@@ -91,6 +97,11 @@ for _name in FINETUNES:
     _model = ["--model", str(REPO / "scratch" / "models" / _name)]
     MODES[f"{_name}_roman_vad"] = (["--roman-urdu", *_model], {"VAD_SEGMENTS": "roman"})
     MODES[f"{_name}_ur"] = (["--engine", "whisper", "--language", "ur", *_model], {"VAD_SEGMENTS": "roman"})
+# #240: Oriserve Whisper-Hindi2Hinglish-Apex, a turbo fine-tune that writes
+# Hindustani in Roman script. Its card decodes with language "en".
+_apex = ["--model", str(REPO / "scratch" / "models" / "apex")]
+MODES["apex_en_vad"] = (["--engine", "whisper", "--language", "en", *_apex], {"VAD_SEGMENTS": "all"})
+MODES["apex_roman_vad"] = (["--roman-urdu", *_apex], {"VAD_SEGMENTS": "roman"})
 # (set, mode, run). Run 1 of everything before any run 2, so a plan cut short
 # still has every cell once. parakeet reads Urdu as nothing useful; it runs on
 # the podcast only for #198's seam count.
@@ -121,7 +132,9 @@ PLAN_235 = [
     for m in ("roman_vad", "ur")
     for s in ("podcast", "urdu", "earnings")
 ]
-PLANS = {"184": PLAN, "236": PLAN_236, "235": PLAN_235}
+# #240: run 1 of both Apex modes on all three sets.
+PLAN_240 = [(s, m, 1) for m in ("apex_en_vad", "apex_roman_vad") for s in ("podcast", "urdu", "earnings")]
+PLANS = {"184": PLAN, "236": PLAN_236, "235": PLAN_235, "240": PLAN_240}
 
 # Runs inside the child: saves what _retried was handed, then retries as usual.
 WRAPPER = """
@@ -186,6 +199,8 @@ def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | No
     folder.mkdir(parents=True, exist_ok=True)
     print(f"{set_name}/{name}: starting ({free_pct()}% memory free)", flush=True)
     started = time.monotonic()
+    # Other work on this Mac shares the GPU; the load average says how busy it was (#240).
+    load_before = [round(x, 1) for x in os.getloadavg()]
     side = folder / f"{name}.preretry.json"
     # Kept out of the owner's app library: every finished `dsj suno` adds
     # itself to the library, and these are test runs on public audio.
@@ -208,7 +223,9 @@ def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | No
         rc = child.returncode
     wall = time.monotonic() - started
     meta = {"wall_s": round(wall, 1), "returncode": rc, "args": args, "overrides": overrides,
-            "commit": commit(), **({"too_slow": too_slow} if too_slow else {})}
+            "commit": commit(), "loadavg_before": load_before,
+            "loadavg_after": [round(x, 1) for x in os.getloadavg()],
+            **({"too_slow": too_slow} if too_slow else {})}
     (folder / f"{name}.bench.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(f"{set_name}/{name}: exit {rc} in {wall / 60:.1f} min", flush=True)
     return too_slow is not None
@@ -250,7 +267,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--only", nargs="*", default=None, help="SET/MODE/RUN, e.g. urdu/roman/1")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--plan", choices=sorted(PLANS), default="184", help="whose runs: #184's, #235's or #236's")
+    parser.add_argument("--plan", choices=sorted(PLANS), default="184", help="whose runs: #184's, #235's, #236's or #240's")
     parser.add_argument("--also", nargs="*", default=[], help="SET/MODE/RUN to run after the plan, e.g. podcast/pakurdu_ur/2")
     parser.add_argument("--min-speed", type=float, default=None,
                         help="stop a run that cannot finish at this x realtime, and drop its mode (#235)")

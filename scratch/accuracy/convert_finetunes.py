@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Convert #235's two Urdu fine-tunes of whisper-large-v3-turbo to MLX, into scratch/models/<name>.
+"""Convert fine-tunes of whisper-large-v3-turbo to MLX, into scratch/models/<name> (#235, #240).
 
     uv run --with transformers --with peft --with accelerate \
-        python scratch/accuracy/convert_finetunes.py {kingabzpro,pakurdu}
+        python scratch/accuracy/convert_finetunes.py {kingabzpro,pakurdu,apex}
     uv run python scratch/accuracy/convert_finetunes.py heads scratch/models/<name>
 
 - `kingabzpro`: `kingabzpro/whisper-large-v3-turbo-urdu`, a full fine-tune,
@@ -10,6 +10,9 @@
 - `pakurdu`: `KhiredNetworks/PakUrdu-Conversational-ASR`, a LoRA (r=16) on
   `openai/whisper-large-v3-turbo` at the revision its card pins. Merged into
   that base with peft's `merge_and_unload` (float32), saved, then converted.
+- `apex` (#240): `Oriserve/Whisper-Hindi2Hinglish-Apex`, a full fine-tune of
+  turbo on about 700 h of Indian Hindi, written in Roman script. Stored in
+  bfloat16, converted as it is.
 
 Conversion is mlx-examples' whisper/convert.py at CONVERT_SHA, fetched into
 scratch/models/vendor/ (not tracked: it is Apple's script, used unchanged),
@@ -55,6 +58,7 @@ TURBO_MLX = "mlx-community/whisper-large-v3-turbo"
 KINGABZPRO = ("kingabzpro/whisper-large-v3-turbo-urdu", "62345c2e034f460f324be37033dc4bc4e694152b")
 TURBO_HF = ("openai/whisper-large-v3-turbo", "41f01f3fe87f28c78e2fbf8b568835947dd65ed9")
 PAKURDU = ("KhiredNetworks/PakUrdu-Conversational-ASR", "6bceff558eab82e5aa2c95aee63c6b03f164fcc6")
+APEX = ("Oriserve/Whisper-Hindi2Hinglish-Apex", "f3214eed20b4e4d4144e739982d911f87b9cb223")
 WEIGHTS_ONLY = ["*.json", "model.safetensors", "*.txt"]
 
 
@@ -130,13 +134,15 @@ def merge_pakurdu() -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
-    parser.add_argument("what", choices=["kingabzpro", "pakurdu", "heads"])
+    parser.add_argument("what", choices=["kingabzpro", "pakurdu", "apex", "heads"])
     parser.add_argument("folder", nargs="?", type=Path, help="for `heads`: a converted model folder")
     args = parser.parse_args()
     if args.what == "heads":
         heads(args.folder)
     elif args.what == "kingabzpro":
         convert(fetch(*KINGABZPRO, WEIGHTS_ONLY), "kingabzpro")
+    elif args.what == "apex":
+        convert(fetch(*APEX, WEIGHTS_ONLY), "apex")
     else:
         convert(merge_pakurdu(), "pakurdu")
     return 0
