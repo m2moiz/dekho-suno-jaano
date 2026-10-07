@@ -23,6 +23,7 @@ import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
 import { installHighlights, painted } from "./highlights";
+import { openBleepPanel } from "./menus";
 
 describe("spanReached", () => {
   const spans = [[1, 2], [3, 3.5]] as const;
@@ -359,7 +360,7 @@ describe("the words to bleep, on the transcript page", () => {
 
   async function panel(): Promise<HTMLElement> {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const section = await screen.findByRole("region", { name: "Words to bleep" });
+    const section = await openBleepPanel();
     await within(section).findByRole("list", { name: "Matches" });
     return section;
   }
@@ -388,7 +389,8 @@ describe("the words to bleep, on the transcript page", () => {
       fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     });
     expect(painted(registry, "dsj-muted")).toEqual([]);
-    expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", true);
+    // The open drawer hides the bar from the accessibility tree, so it is looked for there.
+    expect(screen.getByRole("button", { name: "Undo", hidden: true })).toHaveProperty("disabled", true);
   });
 
   it("adds a word to the user's list and mutes what the next pass finds of it", async () => {
@@ -406,7 +408,7 @@ describe("the words to bleep, on the transcript page", () => {
   it("says in words that nothing matched", async () => {
     listed = [];
     render(<TranscriptPage recording={2} transcript={7} />);
-    const section = await screen.findByRole("region", { name: "Words to bleep" });
+    const section = await openBleepPanel();
     expect((await within(section).findByRole("status")).textContent).toBe(
       "No word matched: 3 words searched against the en, ur, hi, pa lists.",
     );

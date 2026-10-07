@@ -1,4 +1,4 @@
-import { act, fireEvent } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 
 /**
  * Pick a Base UI menu or select item as a real click does. A click alone picks
@@ -10,4 +10,14 @@ export function choose(item: HTMLElement): void {
     fireEvent.pointerDown(item, { pointerType: "mouse" });
     fireEvent.click(item);
   });
+}
+
+/** Open the bleep drawer from the reader's menu, and return its panel. */
+export async function openBleepPanel(): Promise<HTMLElement> {
+  const more = await screen.findByRole("button", { name: "More" });
+  act(() => {
+    fireEvent.click(more);
+  });
+  choose(await screen.findByRole("menuitem", { name: /^Bleep/ }));
+  return screen.findByRole("region", { name: "Words to bleep" });
 }

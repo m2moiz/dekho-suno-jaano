@@ -64,3 +64,22 @@ export async function selectWord(page: Page, word: string, last: string = word):
 export function painted(page: Page, name: string): Promise<string[]> {
   return page.evaluate((name) => Array.from(CSS.highlights.get(name) ?? [], (r) => r.toString()), name);
 }
+
+/** Open the bleep drawer from the reader's menu, and return its panel. */
+export async function openBleep(page: Page) {
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: /^Bleep/ }).click();
+  const panel = page.getByRole("region", { name: "Words to bleep" });
+  await panel.waitFor();
+  return panel;
+}
+
+/**
+ * The Edit toolbar's save status. Looked for through the accessibility tree's
+ * hidden parts too, because an open bleep drawer hides the bar behind it.
+ */
+export function saveStatus(page: Page) {
+  return page
+    .getByRole("toolbar", { name: "Edit", includeHidden: true })
+    .getByRole("status", { includeHidden: true });
+}

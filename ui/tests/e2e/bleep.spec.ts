@@ -9,8 +9,8 @@ import path from "node:path";
 
 import { expect, type Page, test } from "@playwright/test";
 
-import { editableTranscript, painted } from "./editable.ts";
-import { readerUrl, scratchDir, seed } from "./seed.ts";
+import { editableTranscript, openBleep, painted, saveStatus } from "./editable.ts";
+import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
 
 // Where "foxtrot" is in the transcript below (editable.ts spaces the words),
 // and the span dsj.hatao.spans_to_mute makes of it: 0.1 s either side.
@@ -129,7 +129,7 @@ test("a word added from the app is matched, muted live where a render mutes, and
     dir,
   );
   await page.goto(readerUrl(seeded));
-  const panel = page.getByRole("region", { name: "Words to bleep" });
+  const panel = await openBleep(page);
   await expect(panel.getByRole("status")).toContainText("No word matched: 8 words searched");
 
   await panel.getByRole("textbox", { name: "A word to add to your list" }).fill(word);
@@ -140,7 +140,7 @@ test("a word added from the app is matched, muted live where a render mutes, and
   await expect(row).toContainText("muted");
   await expect.poll(() => painted(page, "dsj-muted")).toEqual([word]);
   expect(readFileSync(process.env["DSJ_WORDS"] ?? "", "utf8")).toContain(`roman = ["${word}"]`);
-  await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
+  await expect(saveStatus(page)).toHaveText("Saved");
 
   // Every frame, the time and whether the sound is off, while the match is auditioned.
   await page.evaluate(() => {
@@ -193,3 +193,63 @@ test("a word added from the app is matched, muted live where a render mutes, and
   await expect(row).toContainText("muted");
   await expect.poll(() => painted(page, "dsj-muted")).toEqual([word]);
 });
+
+for (const { width, height } of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test(`at ${width}x${height} the drawer comes from the ${width > 767 ? "right" : "bottom"}, badges the menu, and its buttons are tall enough`, async ({ page }, info) => {
+    const word = `sierra${width}${info.project.name}`;
+    const dir = scratchDir();
+    const seeded = seed(
+      editableTranscript(tone(dir, 9 + width / 10000 + info.project.name.length / 10, `drawer-${width}-${info.project.name}.wav`), [
+        ["alpha", "bravo", word, "delta"],
+      ]),
+      dir,
+    );
+    await page.setViewportSize({ width, height });
+    await page.goto(readerUrl(seeded));
+    await expect(page.locator("article")).toContainText(word);
+    // Nothing of the panel is on the page before the menu opens it.
+    await expect(page.getByRole("region", { name: "Words to bleep" })).toHaveCount(0);
+    const panel = await openBleep(page);
+    await panel.getByRole("textbox", { name: "A word to add to your list" }).fill(word);
+    await panel.getByRole("button", { name: "Add" }).click();
+    const row = panel.getByRole("listitem", { name: word });
+    await expect(row).toContainText("muted");
+
+    // Settled against the edge it slides in from, so measured after its transition.
+    const dialog = page.getByRole("dialog", { name: "Bleep" });
+    await expect
+      .poll(async () => {
+        const box = await dialog.boundingBox();
+        return box === null ? null : Math.round(width > 767 ? box.x + box.width : box.y + box.height);
+      })
+      .toBe(width > 767 ? width : height);
+
+    // Every target in the drawer is 44 px tall on the phone (F15).
+    if (width <= 767) {
+      const buttons = [
+        page.getByRole("button", { name: "Close" }),
+        panel.getByRole("button", { name: "Mute all" }),
+        panel.getByRole("textbox", { name: "A word to add to your list" }),
+        panel.getByRole("button", { name: "Add" }),
+        panel.getByRole("button", { name: "Render", exact: true }),
+        ...["Hear", "Render alone", "Dismiss"].map((name) => row.getByRole("button", { name })),
+      ];
+      for (const button of buttons) {
+        const box = await button.boundingBox();
+        if (box === null) throw new Error("a control is not on screen");
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+    }
+    await page.screenshot({ path: `/tmp/dsj-shots/t4/rows-${width}-${info.project.name}.png` });
+
+    // Closed again, the menu's Bleep item carries the count of what the lists found.
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await page.getByRole("button", { name: "More" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Bleep/ })).toHaveText("Bleep1");
+    await page.screenshot({ path: `/tmp/dsj-shots/t4/badge-${width}-${info.project.name}.png` });
+  });
+}

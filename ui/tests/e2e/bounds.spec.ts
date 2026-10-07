@@ -129,6 +129,13 @@ for (const { width, height } of [
       // Above the dock's top, below the bar: in sight while its edges are dragged.
       expect(box.bottom).toBeLessThanOrEqual(dock.y);
       expect(box.top).toBeGreaterThanOrEqual(bar.y + bar.height);
+      // On the phone the dock's buttons are 44 px tall (F15).
+      if (width <= 767) {
+        for (const name of ["Hear", "Done"]) {
+          const button = await strip.getByRole("button", { name }).boundingBox();
+          expect(button?.height ?? 0).toBeGreaterThanOrEqual(44);
+        }
+      }
       // Esc closes it and puts focus back on the word's paragraph, with the word selected.
       await page.keyboard.press("Escape");
       await expect(strip).toHaveCount(0);
@@ -136,3 +143,25 @@ for (const { width, height } of [
     }
   });
 }
+
+test("the reader's menu opens Timing for the one selected word, and says why it is off otherwise", async ({ page }, info) => {
+  const dir = scratchDir();
+  const seeded = seed(
+    editableTranscript(tone(dir, 11 + info.project.name.length / 10, `menu-${info.project.name}.wav`), [
+      ["alpha", "bravo", "charlie", "delta"],
+    ]),
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article")).toContainText("charlie");
+  await page.getByRole("button", { name: "More" }).click();
+  await expect(page.getByRole("menuitem", { name: /^Timing/ })).toContainText("select one word");
+  await expect(page.getByRole("menuitem", { name: /^Timing/ })).toBeDisabled();
+  await page.keyboard.press("Escape");
+
+  await selectWord(page, "charlie");
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: /^Timing/ }).click();
+  await expect(page.getByRole("region", { name: "Word timing" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Start of charlie" })).toBeFocused();
+});

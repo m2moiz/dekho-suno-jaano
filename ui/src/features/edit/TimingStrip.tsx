@@ -184,8 +184,8 @@ export function TimingStrip({ editor, content, edit, word, recordingId, controls
         onClose();
       }}
     >
-      <div className="mb-2 flex items-center gap-3">
-        <span>
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="whitespace-nowrap">
           <span dir="auto" className="font-medium">
             {text}
           </span>{" "}
@@ -193,7 +193,10 @@ export function TimingStrip({ editor, content, edit, word, recordingId, controls
             {start.toFixed(2)} to {end.toFixed(2)} s
           </span>
         </span>
-        <span className="text-xs text-muted-foreground">Drag an edge, or focus it and press ← →.</span>
+        {/* Under the row on a narrow screen, so the word's times keep their line. */}
+        <span className="order-last basis-full text-xs text-muted-foreground sm:order-none sm:basis-auto">
+          Drag an edge, or focus it and press ← →.
+        </span>
         <Button
           variant="outline"
           size="sm"

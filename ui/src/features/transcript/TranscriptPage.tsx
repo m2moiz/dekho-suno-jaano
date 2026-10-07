@@ -1,7 +1,10 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { BleepDrawer } from "@/features/bleep/BleepDrawer";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
+import type { RenderJob } from "@/features/bleep/render";
+import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
 import { type Correction, corrections, tokensOf } from "@/features/edit/corrections";
 import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
@@ -20,6 +23,7 @@ import { AppBar, BAR_HEIGHT } from "@/features/shell/AppBar";
 import { KeysItem } from "@/features/shell/KeySheet";
 import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
 import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
+import { MoreMenu } from "./MoreMenu";
 import { useReaderKeys } from "./readerKeys";
 import type { Names } from "./speakers";
 import { type ReviewMarks, TranscriptView } from "./TranscriptView";
@@ -185,6 +189,10 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const [timing, setTiming] = useState<number | null>(null);
   const dock = useRef<HTMLDivElement>(null);
   useTimingInSight(timing, edit.reading, article, dock);
+  // The bleep drawer, and the render it started, which outlives the drawer's closing.
+  const [bleeping, setBleeping] = useState(false);
+  const [rendering, setRendering] = useState<RenderJob | null>(null);
+  const matches = useMatches(transcriptId, editor, edit.reading);
   // The words being retyped in place (#83), while the field is open.
   const [correcting, setCorrecting] = useState<Picked | null>(null);
   // Where focus goes back to once Correct or Timing closes: these words, by
@@ -224,7 +232,17 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
       controls={controls}
       corrections={fixed}
       selectOnTap
-      tools={<EditBar editor={editor} saving={saving} />}
+      tools={
+        <>
+          <EditBar editor={editor} saving={saving} />
+          <MoreMenu
+            matchCount={matches.found?.matches.length ?? 0}
+            onBleep={() => setBleeping(true)}
+            timingWord={selected !== null && selected.first === selected.last ? selected.first : null}
+            onTiming={setTiming}
+          />
+        </>
+      }
     >
       <SelectionToolbar
         editor={editor}
@@ -275,15 +293,19 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
           />
         </div>
       )}
-      <BleepPanel
-        transcriptId={transcriptId}
-        editor={editor}
-        content={content}
-        edit={edit}
-        renderable={renderable}
-        padS={editable.padS}
-        controls={controls}
-      />
+      <BleepDrawer open={bleeping} onOpenChange={setBleeping}>
+        <BleepPanel
+          transcriptId={transcriptId}
+          editor={editor}
+          content={content}
+          renderable={renderable}
+          padS={editable.padS}
+          controls={controls}
+          matches={matches}
+          started={rendering}
+          onStarted={setRendering}
+        />
+      </BleepDrawer>
     </Page>
   );
 }

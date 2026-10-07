@@ -15,6 +15,7 @@ import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
 import { installHighlights } from "./highlights";
+import { openBleepPanel } from "./menus";
 
 function item(sourceStart: number, length: number, text: string, muted = false): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted, confidence: text ? 0.9 : null };
@@ -124,7 +125,7 @@ describe("the Render buttons", () => {
 
   it("renders the list as it is, follows the job, and links the file when done", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const panel = await screen.findByRole("region", { name: "Words to bleep" });
+    const panel = await openBleepPanel();
     await within(panel).findByRole("list", { name: "Matches" });
     expect(panel.textContent).toContain("with 2 spans silenced");
     fireEvent.click(within(panel).getByRole("button", { name: "Render" }));
@@ -133,9 +134,21 @@ describe("the Render buttons", () => {
     expect(await within(panel).findByRole("link", { name: "a.bleeped.wav" }, { timeout: 3000 })).toBeTruthy();
   });
 
+  it("shows the render where it is when the drawer is closed and opened again", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const panel = await openBleepPanel();
+    await within(panel).findByRole("list", { name: "Matches" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Render" }));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await vi.waitFor(() => expect(screen.queryByRole("region", { name: "Words to bleep" })).toBeNull());
+    const again = await openBleepPanel();
+    expect(await within(again).findByRole("status", { name: /^Render(ing|ed)$/ })).toBeTruthy();
+  });
+
   it("renders one match alone", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const panel = await screen.findByRole("region", { name: "Words to bleep" });
+    const panel = await openBleepPanel();
     await within(panel).findByRole("list", { name: "Matches" });
     fireEvent.click(within(panel).getByRole("button", { name: "Render alone" }));
     await vi.waitFor(() => expect(sent).toHaveLength(1));
