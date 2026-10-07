@@ -128,6 +128,11 @@ export class NotSaved extends Error {
   override name = "NotSaved";
 }
 
+/** The NotSaved that no retry can cure: the transcript was made again, and only a reload can (#249). */
+export class Outdated extends NotSaved {
+  override name = "Outdated";
+}
+
 /**
  * Save the list after every change: one request at a time, the newest list
  * each time, so a burst of edits is never saved out of order. A drag (#85)
@@ -195,9 +200,12 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
     };
     settling.current = async () => {
       if (editor.inGesture) throw new NotSaved("Let go of the word you are dragging, then export.");
-      if (outdated) throw new NotSaved("The transcript was made again since this page loaded. Reload the page.");
+      const reload = "The transcript was made again since this page loaded. Reload the page.";
+      if (outdated) throw new Outdated(reload);
       if (flight === null && editor.content === sent) return;
       if (!(await start())) {
+        // The save just refused may be the one that found the transcript made again.
+        if (outdated) throw new Outdated(reload);
         throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.");
       }
     };

@@ -11,7 +11,7 @@
 
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
-import { type Editable, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
+import { type Editable, Outdated, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
 import { speakerLabels } from "@/features/edit/readContent";
 import { newSpeakerLabel, speakerAt, speakerChange } from "@/features/edit/speaker";
 import type { PlayerControls } from "@/features/player/Player";
@@ -299,8 +299,12 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
         setLeaving(false);
         // The save's own failure is already on screen; this says why the page stayed.
         // Review's own words: the edit list's NotSaved messages speak of exporting.
-        void thrown;
-        setNotice("Still in Review: the last changes are not saved yet, for the reason shown. Esc tries again.");
+        // Once the transcript was made again no save can succeed: only a reload helps.
+        setNotice(
+          thrown instanceof Outdated
+            ? "Still in Review: the transcript was made again since this page opened, so nothing more saves here. Reload the page."
+            : "Still in Review: the last changes are not saved yet, for the reason shown. Esc tries again.",
+        );
       },
     );
     return () => {

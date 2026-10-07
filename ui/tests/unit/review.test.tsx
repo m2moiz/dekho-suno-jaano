@@ -331,6 +331,18 @@ describe("Review mode, fix round 1", () => {
     expect(screen.queryByText("Saved")).toBeNull();
   });
 
+  it("after a refused save, Esc says to reload, which is what works (Task 13 re-review minor)", async () => {
+    refuseEdits = true;
+    const went: string[] = [];
+    const field = await start((href) => went.push(href));
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    key(field, { key: "Escape", code: "Escape" });
+    await vi.waitFor(() => expect(screen.getByText(/^Still in Review/)).toBeTruthy());
+    expect(screen.getByText(/^Still in Review/).textContent).toMatch(/Reload the page/);
+    expect(screen.getByText(/^Still in Review/).textContent).not.toMatch(/Esc tries again/);
+    expect(went).toEqual([]);
+  });
+
   it("switching pass after one has finished leaves the done panel for the new pass's first sentence (I3)", async () => {
     withOther = true;
     render(<ReviewPage recording={2} transcript={7} />);

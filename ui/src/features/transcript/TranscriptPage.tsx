@@ -11,7 +11,7 @@ import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
 import { type Correction, corrections, tokensOf } from "@/features/edit/corrections";
 import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
-import { type Editable, loadEditable, saveNames, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
+import { type Editable, loadEditable, Outdated, saveNames, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { InlineCorrect } from "@/features/edit/InlineCorrect";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
@@ -74,8 +74,19 @@ export async function openTranscript(recordingId: number, transcriptId: number):
   return { recording, doc: parseTranscript(file.data), editable };
 }
 
+type Navigate = (href: string) => void;
+
 /** One transcript, opened from the library, to read (#58) and to edit (#66). */
-export function TranscriptPage({ recording, transcript }: { recording: number; transcript: number }) {
+export function TranscriptPage({
+  recording,
+  transcript,
+  navigate = (href) => window.location.assign(href),
+}: {
+  recording: number;
+  transcript: number;
+  /** Where opening Review goes; the tests pass their own. */
+  navigate?: Navigate;
+}) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   useEffect(() => {
     let live = true;
@@ -109,7 +120,7 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
     );
   }
   return "editor" in loaded.editable ? (
-    <EditablePage opened={loaded} editable={loaded.editable} transcriptId={transcript} />
+    <EditablePage opened={loaded} editable={loaded.editable} transcriptId={transcript} navigate={navigate} />
   ) : (
     <ReadOnlyPage opened={loaded} reason={loaded.editable.reason} transcriptId={transcript} />
   );
@@ -221,7 +232,7 @@ const EXPORTS: readonly (readonly [ExportFormat, string])[] = [
   ["txt", "Text"],
 ];
 
-function EditablePage({ opened, editable, transcriptId }: { opened: Opened; editable: Editable; transcriptId: number }) {
+function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Opened; editable: Editable; transcriptId: number; navigate: Navigate }) {
   const { editor } = editable;
   // 44 px menu rows where the reader has its touch layout, as MoreMenu's own (F15).
   const tall = useMediaQuery(TOUCH) ? "min-h-11" : "";
@@ -297,7 +308,28 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   useCorrectedPaint(edit.reading, fixed, article);
   const review = reviewHref(opened.recording.id, transcriptId);
   const marks = useReviewMarks(transcriptId, editable.sha);
-  useReaderKeys(controls, READER_SHEET, review);
+  // Review loads the edit list afresh and saves it whole, so it opens only
+  // once the server holds every edit made here: leaving with one in flight
+  // could open Review on the list without it, and Review's first save would
+  // then write it away (Task 13 re-review). If the save fails, the reader stays.
+  const openReview = () => {
+    settle().then(
+      () => navigate(review),
+      (thrown: unknown) =>
+        showError({
+          error: "NotSaved",
+          message:
+            thrown instanceof Outdated
+              ? `Review did not open: ${thrown.message}`
+              : "Review did not open, because the latest edits here are not saved yet. Try again once the bar says Saved.",
+          request: `/api/transcripts/${transcriptId}/edits`,
+        }),
+    );
+  };
+  const openReviewNow = useRef(openReview);
+  openReviewNow.current = openReview;
+  const onReview = useCallback(() => openReviewNow.current(), []);
+  useReaderKeys(controls, READER_SHEET, onReview);
   return (
     <Page
       opened={opened}
@@ -315,7 +347,16 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
         <>
           <EditBar editor={editor} saving={saving} />
           {/* The bar's one gold primary (Hashiya spec, Reader): the default variant is gold. */}
-          <a href={review} className={cn(buttonVariants(), "h-11 px-4 font-semibold")}>
+          <a
+            href={review}
+            className={cn(buttonVariants(), "h-11 px-4 font-semibold")}
+            onClick={(event) => {
+              // Cmd+click and the like keep the link's own new tab.
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+              event.preventDefault();
+              openReview();
+            }}
+          >
             Review
           </a>
           <MoreMenu

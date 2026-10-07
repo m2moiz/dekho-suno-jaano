@@ -278,6 +278,67 @@ describe("TranscriptPage, editing", () => {
     expect(currentError()).toBeNull();
   });
 
+  /** The edits PUT held until `release` is called, and what happened in what order. */
+  function holdSaves(answer: "ok" | "fail" = "ok") {
+    const log: string[] = [];
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const before = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
+        await held;
+        log.push("saved");
+        if (answer === "fail") return Response.json({ error: "Boom", message: "The disk is full.", request: path }, { status: 500 });
+      }
+      return (before as (r: Request) => Promise<Response>)(request);
+    });
+    return { log, release: () => release() };
+  }
+
+  it("R opens Review only once the edit in flight is saved, so Review starts from it (Task 13 re-review)", async () => {
+    const save = holdSaves();
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "r", code: "KeyR" });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Nothing has left yet: no navigation, so no browser "Leave site?" either.
+    expect(save.log).toEqual([]);
+    save.release();
+    await vi.waitFor(() => expect(save.log).toEqual(["saved", "went /?recording=2&transcript=7&review=1"]));
+    expect(currentError()).toBeNull();
+  });
+
+  it("the gold Review link waits the same way", async () => {
+    const save = holdSaves();
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    fireEvent.click(screen.getByRole("link", { name: "Review" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(save.log).toEqual([]);
+    save.release();
+    await vi.waitFor(() => expect(save.log).toEqual(["saved", "went /?recording=2&transcript=7&review=1"]));
+  });
+
+  it("stays in the reader and says so when the edit cannot be saved", async () => {
+    const save = holdSaves("fail");
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "r", code: "KeyR" });
+    });
+    save.release();
+    await vi.waitFor(() => expect(currentError()?.message).toMatch(/^Review did not open/));
+    expect(save.log).toEqual(["saved"]);
+  });
+
   it("offers Unmute in place of Mute once every selected word is muted, and it takes the mute away", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });

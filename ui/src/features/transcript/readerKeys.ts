@@ -25,8 +25,8 @@ export function isOurs(event: KeyboardEvent): boolean {
   return !(press && target?.closest?.(PRESSABLE));
 }
 
-/** The reader's keys; with `review`, the address R opens (an editable transcript's). */
-export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet: Sheet, review?: string): void {
+/** The reader's keys; with `onReview`, what R does (an editable transcript's: open Review once saved). */
+export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet: Sheet, onReview?: () => void): void {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (!isOurs(event)) return;
@@ -36,14 +36,14 @@ export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet:
       } else if (event.code === "Slash" && event.shiftKey) {
         event.preventDefault();
         showKeys(sheet);
-      } else if (event.code === "KeyR" && !event.shiftKey && review !== undefined) {
+      } else if (event.code === "KeyR" && !event.shiftKey && onReview !== undefined) {
         event.preventDefault();
-        window.location.assign(review);
+        onReview();
       } else if (event.key === "Escape") {
         window.getSelection()?.removeAllRanges();
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [controls, sheet, review]);
+  }, [controls, sheet, onReview]);
 }
