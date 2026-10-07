@@ -166,6 +166,12 @@ def test_the_picker_lists_the_three_engines_and_nothing_else() -> None:
     assert typing.get_args(EngineName.__value__) == asr.ENGINES
 
 
+def test_every_engine_says_whether_it_is_a_cloud_one_and_what_an_hour_costs() -> None:
+    """The seam for a cloud engine (#247), which the Transcribe dialog draws: no local one is."""
+    listed = page().get("/api/engines").json()
+    assert [(e["cloud"], e["usd_per_hour"]) for e in listed] == [(False, None)] * len(asr.ENGINES)
+
+
 def test_an_engine_that_cannot_run_is_listed_with_its_own_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -500,3 +506,33 @@ def test_a_running_job_keeps_the_server_from_stopping_idle() -> None:
     # The idle minute starts when the run ends, not when the page last beat.
     now[0] = 1010.0
     assert beats.idle_s() == 10.0
+
+
+def test_a_roman_urdu_run_and_an_urdu_run_of_one_recording_keep_their_own_transcripts() -> None:
+    """Both are whisper in language "ur"; their words differ, so their files must (#246)."""
+    model = "mlx-community/whisper-large-v3-turbo"
+    urdu = jobs_mod.transcript_path(3, "whisper", model, "ur")
+    roman = jobs_mod.transcript_path(3, "whisper", model, "ur", roman_urdu=True)
+    assert urdu.name == "3-whisper-whisper-large-v3-turbo-ur.json"
+    assert roman.name == "3-whisper-whisper-large-v3-turbo-ur-roman.json"
+
+
+def test_a_roman_urdu_run_from_the_page_writes_to_its_own_name(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Jobs.start hands roman_urdu on to transcript_path, so the page's run is kept apart (#246)."""
+    engine()
+    outs: list[Path] = []
+
+    def transcribe(**arguments: Any) -> None:
+        outs.append(arguments["out"])
+        raise RuntimeError("stopped here: only where the run writes is under test")
+
+    monkeypatch.setattr(suno, "transcribe", transcribe)
+    client = page()
+    body = {"engine": "whisper", "roman_urdu": True, "diarize": False}
+    reply = client.post(f"/api/recordings/{recording[1]}/transcribe", json=body)
+    assert reply.status_code == 202, reply.text
+    last_job(client, finished)
+    expected = f"{recording[1]}-whisper-whisper-large-v3-turbo-ur-roman.json"
+    assert [out.name for out in outs] == [expected]

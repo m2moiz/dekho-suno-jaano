@@ -121,6 +121,10 @@ class Engine(BaseModel):
     # The sentence the engine's own available() wrote when it cannot run, else None.
     reason: str | None
     default_model: str
+    # True when it sends the audio off this Mac (#247); the dialog marks it "cloud".
+    cloud: bool
+    # What an hour of audio costs on it in US dollars, or None when it costs nothing.
+    usd_per_hour: float | None
 
 
 class TranscribeRequest(BaseModel):

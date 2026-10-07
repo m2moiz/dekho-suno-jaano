@@ -84,6 +84,12 @@ class EngineChoice:
     # Why it cannot run here, in the sentence its own available() wrote, or None.
     reason: str | None
     default_model: str
+    # The seam for a cloud engine (#247, Hashiya spec, Transcribe): one that
+    # sends the audio off this Mac says so, and what an hour of audio costs on
+    # it, and the Transcribe dialog marks it and prices the recording. The
+    # three engines dsj has run here and cost nothing.
+    cloud: bool = False
+    usd_per_hour: float | None = None
 
 
 def engine_choices() -> list[EngineChoice]:
@@ -104,7 +110,9 @@ def engine_choices() -> list[EngineChoice]:
     return choices
 
 
-def transcript_path(recording_id: int, engine: str, model: str, language: str | None) -> Path:
+def transcript_path(
+    recording_id: int, engine: str, model: str, language: str | None, *, roman_urdu: bool = False
+) -> Path:
     """Where a run from the page writes its transcript: one file per recording and settings.
 
     Beside the library, not beside the recording: the page never writes into
@@ -112,9 +120,16 @@ def transcript_path(recording_id: int, engine: str, model: str, language: str | 
     second run with other settings keeps the first one's file, and a run
     repeated with the same settings writes the same path, where its checkpoint
     lets it resume (dsj/checkpoint.py keys that file to `out`).
+
+    A Roman Urdu run is whisper in language "ur" with a prompt, so without its
+    own suffix it took the same name as a plain Urdu run and replaced it
+    (#246): the Transcribe dialog offers both, and Review's second opinion
+    needs both kept. A Roman Urdu run started before this fix resumes from
+    nothing once, under the new name.
     """
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(model).name or model).strip("._") or "model"
     stem = f"{recording_id}-{engine}-{name}" + (f"-{language}" if language else "")
+    stem += "-roman" if roman_urdu else ""
     return library_path().parent / "transcripts" / f"{stem}.json"
 
 
@@ -321,7 +336,7 @@ class Jobs:
         get_engine(engine)  # EngineUnavailable with its remedy, before any lock is taken
         model: str = arguments["model_id"]
         language: str | None = arguments["language"]
-        out = transcript_path(recording_id, engine, model, language)
+        out = transcript_path(recording_id, engine, model, language, roman_urdu=request.roman_urdu)
         out.parent.mkdir(parents=True, exist_ok=True)
         with self._start_lock:
             job_id = len(self._jobs) + 1

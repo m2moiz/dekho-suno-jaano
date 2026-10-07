@@ -503,6 +503,10 @@ export interface components {
             reason: string | null;
             /** Default Model */
             default_model: string;
+            /** Cloud */
+            cloud: boolean;
+            /** Usd Per Hour */
+            usd_per_hour: number | null;
         };
         /** @enum {string} */
         EngineName: "parakeet" | "whisper" | "sherpa";
