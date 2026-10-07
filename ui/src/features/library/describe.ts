@@ -65,3 +65,8 @@ export function pictureNote(videoCodec: string | null): string | null {
   if (videoCodec === null || DRAWN_EVERYWHERE.has(videoCodec)) return null;
   return `Its picture (${videoCodec}) does not show in every browser. Its sound always plays.`;
 }
+
+/** "2 Oct 2026, 18:05 · whisper": how the version picker tells one transcript of a recording from another. */
+export function versionLabel(t: TranscriptRow): string {
+  return `${whenLabel(t.finished_at)} · ${t.engine ?? "unknown engine"}`;
+}

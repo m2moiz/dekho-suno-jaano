@@ -1,6 +1,7 @@
 import { ErrorBoundary } from "@/features/errors/ErrorBoundary";
 import { ShownErrorDialog } from "@/features/errors/ErrorDialog";
 import { LibraryPage } from "@/features/library/LibraryPage";
+import { KeySheet } from "@/features/shell/KeySheet";
 import { TranscriptPage } from "@/features/transcript/TranscriptPage";
 import { readRoute } from "@/lib/route";
 
@@ -21,6 +22,7 @@ export function App() {
         )}
       </ErrorBoundary>
       <ShownErrorDialog />
+      <KeySheet />
     </div>
   );
 }

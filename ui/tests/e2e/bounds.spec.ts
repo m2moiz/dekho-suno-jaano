@@ -12,7 +12,7 @@ const TARGET = 1.95;
 async function openTiming(page: Page, word: string) {
   await expect(page.locator("article")).toContainText(word);
   await selectWord(page, word);
-  await page.getByRole("button", { name: "Timing…" }).click();
+  await page.getByRole("toolbar", { name: "Selection" }).getByRole("button", { name: "Timing" }).click();
   return page.getByRole("region", { name: "Word timing" });
 }
 

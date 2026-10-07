@@ -1,5 +1,5 @@
 // Retyping a stretch of words, bound to the same audio (#83).
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -158,17 +158,19 @@ describe("the Correct button", () => {
     document.dispatchEvent(new Event("selectionchange"));
   }
 
-  it("retypes the selected words in a dialog, and the reader and the saved list show it", async () => {
+  it("retypes the selected words in place, and the reader and the saved list show it", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
     act(() => select("the the", "the the"));
-    // Enabled once the page's effects have read the selection: a click
-    // before that, in the frame after the toolbar appears, does nothing.
-    const correct = screen.getByRole("button", { name: "Correct…" }) as HTMLButtonElement;
+    // The Selection toolbar appears once the page's effects have read the selection.
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    const correct = within(tools).getByRole("button", { name: "Correct" }) as HTMLButtonElement;
     await vi.waitFor(() => expect(correct.disabled).toBe(false));
     fireEvent.click(correct);
     const field = await screen.findByRole("textbox", { name: "What was said" });
     expect((field as HTMLInputElement).value).toBe("the the");
+    // In place, over the words: no dialog.
+    expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.change(field, { target: { value: "the" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await vi.waitFor(() => expect(document.querySelector("article p")?.textContent).toBe(" I have assigned the role"));

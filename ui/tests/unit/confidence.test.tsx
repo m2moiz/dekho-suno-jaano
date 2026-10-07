@@ -13,7 +13,7 @@ import {
 } from "../../src/features/transcript/confidence";
 import { read, type Sentence, type TranscriptDoc } from "../../src/features/transcript/document";
 import { TranscriptView } from "../../src/features/transcript/TranscriptView";
-import { UnsureToggle } from "../../src/features/transcript/UnsureToggle";
+import { UnsureNav } from "../../src/features/transcript/UnsureNav";
 import { contrast, pair } from "./contrast";
 import { type FakeHighlight, installHighlights, painted } from "./highlights";
 
@@ -63,7 +63,7 @@ describe("a word's confidence", () => {
   });
 });
 
-describe("UnsureToggle", () => {
+describe("UnsureNav", () => {
   let registry: Map<string, FakeHighlight>;
   beforeEach(() => {
     registry = installHighlights();
@@ -77,7 +77,7 @@ describe("UnsureToggle", () => {
     const article = createRef<HTMLElement>();
     render(
       <>
-        <UnsureToggle reading={reading} model={model} article={article} />
+        <UnsureNav reading={reading} model={model} article={article} />
         <TranscriptView reading={reading} articleRef={article} />
       </>,
     );
@@ -87,13 +87,41 @@ describe("UnsureToggle", () => {
 
   it("is off until switched on, then paints every unsure word, and clears when switched off", () => {
     mount(WHISPER, SHAKY);
-    const toggle = screen.getByRole("button", { name: "Unsure words (2)" });
+    const toggle = screen.getByRole("button", { name: "2 unsure" });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     expect(registry.has(UNSURE)).toBe(false);
     act(() => fireEvent.click(toggle));
     expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
     act(() => fireEvent.click(toggle));
     expect(registry.has(UNSURE)).toBe(false);
+  });
+
+  it("selects the next unsure word with its arrow, and the previous one, wrapping round, switching the tint on", () => {
+    mount(WHISPER, SHAKY);
+    const next = screen.getByRole("button", { name: "Next unsure word" });
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("two");
+    expect(screen.getByRole("button", { name: "2 unsure" }).getAttribute("aria-pressed")).toBe("true");
+    expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("three");
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Previous unsure word" })));
+    expect(window.getSelection()?.toString()).toBe("three");
+  });
+
+  it("answers ] and [ from the page, but not from inside a text field", () => {
+    mount(WHISPER, SHAKY);
+    act(() => fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.keyDown(document.body, { key: "[", code: "BracketLeft" }));
+    expect(window.getSelection()?.toString()).toBe("three");
+    const field = document.createElement("input");
+    document.body.append(field);
+    act(() => fireEvent.keyDown(field, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("three");
+    field.remove();
   });
 
   it("is not offered for a transcript with no confidence, or from an engine it has no cut-off for", () => {

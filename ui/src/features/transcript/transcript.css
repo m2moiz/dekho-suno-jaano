@@ -17,7 +17,6 @@
 @import "@fontsource-variable/noto-nastaliq-urdu/wght.css";
 
 .transcript {
-  max-width: 68ch;
   font-family: var(--font-reading);
   font-size: 1.125rem;
   line-height: 1.7;
@@ -25,14 +24,83 @@
   hyphens: manual;
 }
 
-.transcript section + section {
-  margin-top: 1.25em;
+.transcript .turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.transcript h2 {
-  font: 500 0.8125rem/1.4 system-ui, sans-serif;
+/* The margin (Hashiya spec, "Signature move: the margin"): who and when, on
+   the left for Urdu and English turns alike, so the eye finds them in one
+   place. The grid runs left to right whatever the paragraph's direction; the
+   paragraph sets its own. The text column is the 68 character measure. */
+.transcript .turn {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 68ch);
+  column-gap: 1.75rem;
+  direction: ltr;
+}
+
+.transcript .turn + .turn {
+  margin-top: 1.4em;
+}
+
+.transcript .margin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.45em;
+  font: 500 0.8125rem/1.35 var(--font-sans);
   color: var(--muted-foreground);
-  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript .nameplate {
+  max-width: 100%;
+  color: var(--speaker, var(--muted-foreground));
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* How long the turn lasted, to scale: a minute fills the margin. */
+.transcript .tick {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  inline-size: max(3px, var(--tick, 0%));
+  background: var(--speaker, var(--muted-foreground));
+  opacity: 0.55;
+}
+
+.transcript .correction {
+  max-width: 100%;
+  font: 400 0.875rem/1.4 var(--font-reading);
+  overflow-wrap: anywhere;
+}
+
+.transcript .correction del {
+  color: var(--correction);
+  text-decoration-thickness: 1.5px;
+}
+
+/* The phone: the margin folds into one slim line above the turn. */
+@media (max-width: 767px) {
+  .transcript .turn {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .transcript .margin {
+    flex-flow: row wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    padding: 0 0 0.2rem;
+  }
+
+  .transcript .tick {
+    inline-size: calc(max(3px, var(--tick, 0%)) * 0.6);
+  }
 }
 
 .transcript p {
@@ -77,4 +145,12 @@
   color: var(--muted-foreground);
   text-decoration: line-through 2px;
   background-color: light-dark(oklch(0.93 0.01 260), oklch(0.3 0.01 260));
+}
+
+/* Words a person corrected (#83): a thin red underline, the margin's red. */
+::highlight(dsj-corrected) {
+  text-decoration-line: underline;
+  text-decoration-color: light-dark(#b8402a, #e5806a);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.3em;
 }

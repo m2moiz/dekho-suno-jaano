@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -202,16 +202,16 @@ describe("TranscriptPage, editing", () => {
   });
 
   /**
-   * Select `word` and wait until Mute takes it, as a person waits for an
-   * enabled button. findByRole returns once the toolbar is in the page, which
-   * can be before React has run the effects that listen for the selection:
-   * a click in that gap, less than a frame, found Mute still disabled and did
-   * nothing (3 of 30 runs on 2026-10-03; every run when the click is made in
-   * the commit itself).
+   * Select `word` and wait for the Selection toolbar's `button`, as a person
+   * waits for the tools to appear beside the words. The toolbar appears only
+   * once React has run the effects that read the selection, so finding it is
+   * the wait (a click made in the commit itself, before those effects, did
+   * nothing on 2026-10-03).
    */
   async function selectReady(word: string, button = "Mute"): Promise<HTMLButtonElement> {
     act(() => selectWord(word));
-    const found = screen.getByRole("button", { name: button }) as HTMLButtonElement;
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    const found = within(tools).getByRole("button", { name: button }) as HTMLButtonElement;
     await vi.waitFor(() => expect(found.disabled).toBe(false));
     return found;
   }
@@ -255,6 +255,28 @@ describe("TranscriptPage, editing", () => {
     expect(currentError()).toBeNull();
   });
 
+  it("offers Unmute in place of Mute once every selected word is muted, and it takes the mute away", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    expect(painted(registry, "dsj-muted")).toEqual(["there."]);
+    const tools = screen.getByRole("toolbar", { name: "Selection" });
+    expect(within(tools).queryByRole("button", { name: "Mute" })).toBeNull();
+    fireEvent.click(within(tools).getByRole("button", { name: "Unmute" }));
+    expect(painted(registry, "dsj-muted")).toEqual([]);
+    await vi.waitFor(() => expect(saved).toHaveLength(2));
+  });
+
+  it("keeps Undo, Redo and whether it is saved in the Edit toolbar, and nothing for the selection there", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const bar = await screen.findByRole("toolbar", { name: "Edit" });
+    expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Undo", "Redo"]);
+    // "Saved" says nothing before there is an edit for it to be about.
+    expect(within(bar).getByRole("status").textContent).toBe("");
+    fireEvent.click(await selectReady("there"));
+    await vi.waitFor(() => expect(within(bar).getByRole("status").textContent).toBe("Saved"));
+  });
+
   it("leaves Cmd+Z to a text field being typed in", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
@@ -295,9 +317,14 @@ describe("TranscriptPage, editing", () => {
     expect(painted(registry, "dsj-muted")).toEqual(["there."]);
   });
 
-  it("says that edits are kept and their undo history is not", async () => {
+  it("says, in the key sheet, that edits are kept and their undo history is not", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const bar = await screen.findByRole("toolbar", { name: "Edit" });
-    expect(bar.textContent).toContain("closing or reloading it keeps the edits and forgets their undo");
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => fireEvent.keyDown(document.body, { key: "?", code: "Slash", shiftKey: true }));
+    // KeySheet is App's; this page only asks for it, so the request is read back here.
+    const { KeySheet, hideKeys } = await import("../../src/features/shell/KeySheet");
+    render(<KeySheet />);
+    expect((await screen.findByRole("dialog")).textContent).toContain("closing or reloading it keeps the edits and forgets their undo");
+    act(() => hideKeys());
   });
 });

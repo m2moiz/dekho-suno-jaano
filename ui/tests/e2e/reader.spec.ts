@@ -52,29 +52,30 @@ test("a transcript opened from the library reads as typeset paragraphs", async (
     " Pretty much the the role. Yes.",
     " Fine then.",
   ]);
-  expect(await article.locator("h2").allTextContents()).toEqual([
-    "Speaker 1 · 0:00",
-    "Speaker 2 · 0:03",
-    "Speaker 1 · 0:08",
-  ]);
+  // Who and when, in the margin beside each turn (Hashiya spec, "The margin").
+  expect(await article.locator(".nameplate").allTextContents()).toEqual(["Speaker 1", "Speaker 2", "Speaker 1"]);
+  expect(await article.locator("[data-margin] time").allTextContents()).toEqual(["0:00", "0:03", "0:08"]);
+  await expect(article.getByRole("listitem")).toHaveCount(3);
 
   const layout = await page.evaluate(async () => {
     await document.fonts.ready;
-    const p = document.querySelector("article p");
-    const art = document.querySelector("article");
-    if (p === null || art === null) throw new Error("no transcript on the page");
+    const p = document.querySelector<HTMLElement>("article p");
+    const turn = p?.parentElement;
+    if (p === null || turn == null) throw new Error("no transcript on the page");
     const style = getComputedStyle(p);
-    // 68 zeros in the transcript's own face: what `68ch` means.
+    // 68 zeros in the turn's own face: what the text column's `68ch` means.
+    // Out of flow, so the turn's grid does not squeeze it into a column.
     const probe = document.createElement("span");
     probe.textContent = "0".repeat(68);
     probe.style.whiteSpace = "pre";
-    art.append(probe);
+    probe.style.position = "absolute";
+    turn.append(probe);
     const measure = probe.getBoundingClientRect().width;
     probe.remove();
     return {
       wordElements: document.querySelectorAll("article p *").length,
       lineHeight: parseFloat(style.lineHeight) / parseFloat(style.fontSize),
-      maxWidth: parseFloat(getComputedStyle(art).maxWidth),
+      width: p.getBoundingClientRect().width,
       measure,
       align: style.textAlign,
       // Loaded, not merely asked for: a face that never arrived falls back silently.
@@ -84,7 +85,7 @@ test("a transcript opened from the library reads as typeset paragraphs", async (
   });
   expect(layout.wordElements).toBe(0);
   expect(layout.lineHeight).toBeCloseTo(1.7, 2);
-  expect(Math.abs(layout.maxWidth - layout.measure)).toBeLessThan(1);
+  expect(Math.abs(layout.width - layout.measure)).toBeLessThan(1);
   expect(layout.align).toBe("start");
   // WebKit drops the quotes when it serialises the name; Chromium keeps them.
   expect(layout.family).toMatch(/^"?Literata Variable"?,/);

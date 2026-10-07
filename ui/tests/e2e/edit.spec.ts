@@ -19,7 +19,7 @@ test("Cmd+Z undoes a mute and nothing else; the mute is saved and its undo is no
   await expect(bar.getByRole("button", { name: "Undo" })).toBeDisabled();
 
   await selectWord(page, "charlie");
-  await bar.getByRole("button", { name: "Mute", exact: true }).click();
+  await page.getByRole("toolbar", { name: "Selection" }).getByRole("button", { name: "Mute", exact: true }).click();
   await expect.poll(() => painted(page, "dsj-muted")).toEqual(["charlie"]);
   await expect(bar.getByRole("status")).toHaveText("Saved");
 
@@ -39,5 +39,7 @@ test("Cmd+Z undoes a mute and nothing else; the mute is saved and its undo is no
   await page.reload();
   await expect.poll(() => painted(page, "dsj-muted")).toEqual(["charlie"]);
   await expect(bar.getByRole("button", { name: "Undo" })).toBeDisabled();
-  await expect(bar).toContainText("keeps the edits and forgets their undo");
+  // The key sheet behind `?` says so.
+  await page.keyboard.press("Shift+Slash");
+  await expect(page.getByRole("dialog")).toContainText("forgets their undo");
 });

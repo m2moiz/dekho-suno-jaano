@@ -47,8 +47,9 @@ function play(element: HTMLMediaElement): void {
 }
 
 // Keys that scroll the page. Pressing one means the reader wants to look
-// somewhere else, so the view stops following the playhead.
-const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "]);
+// somewhere else, so the view stops following the playhead. Not Space: in the
+// reader it plays and pauses (readerKeys.ts) and scrolls nothing.
+const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"]);
 
 const MEDIA_ERRORS: Record<number, string> = {
   1: "loading was stopped",

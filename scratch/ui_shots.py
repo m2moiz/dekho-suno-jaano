@@ -133,6 +133,9 @@ QUERIES = {
     "reader": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "reader-urdu": lambda ids: "?recording={}&transcript={}".format(*ids["urdu"]),
     "reader-english": lambda ids: "?recording={}&transcript={}".format(*ids["english"]),
+    "reader-tools": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
+    "reader-correct": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
+    "keys": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "review": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["mixed"]),
 }
 
@@ -148,7 +151,23 @@ KEYS = {
     # Backwards from the page's start: the rail's speed, its waveform, then its Play button.
     "reader-focus": ["Shift+Tab", "Shift+Tab", "Shift+Tab"],
 }
+# Select one word of the transcript, as a double-click would (Task 3).
+SELECT = (
+    "const select = (word) => { for (const p of document.querySelectorAll('article p')) {"
+    " const text = p.firstChild; const at = text.data.indexOf(word); if (at < 0) continue;"
+    " const range = document.createRange(); range.setStart(text, at); range.setEnd(text, at + word.length);"
+    " getSelection().removeAllRanges(); getSelection().addRange(range); return; } };"
+)
 ACTIONS = {
+    # A word selected: its tools beside it, or above the rail on a phone (Task 3).
+    "reader-tools": SELECT + "select('slides');",
+    # Then Correct: the field laid over the word (Task 3).
+    "reader-correct": PRESS + SELECT + "select('slides');"
+    "setTimeout(() => press(Array.from(document.querySelectorAll('[role=toolbar][aria-label=Selection] button'))"
+    ".find((b) => b.textContent.trim() === 'Correct')), 300);",
+    # The key sheet behind `?` (Task 3).
+    "keys": "document.body.dispatchEvent(new KeyboardEvent('keydown',"
+    " { key: '?', code: 'Slash', shiftKey: true, bubbles: true }));",
     # The bar's settings menu, open (Task 2).
     "settings": PRESS + "press(document.querySelector('button[aria-label=Settings]'));",
     # The untranscribed recording's Transcribe dialog (Task 9).

@@ -1,16 +1,18 @@
-import { type ReactNode, type RefObject, useEffect, useState } from "react";
+import { Redo2, Undo2 } from "lucide-react";
+import { type RefObject, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { atLabel } from "@/features/bleep/matches";
+import { FIELD_BUTTON } from "@/features/shell/field";
 import { unsureHighlight as wordsHighlight } from "@/features/transcript/confidence";
-import { type Content, type Editor, HISTORY_LIMIT, muteRange } from "@/lib/editOps";
-import { correction, textOf } from "./correct";
-import { CorrectDialog } from "./CorrectDialog";
+import type { Reading } from "@/features/transcript/document";
+import type { Content, Editor } from "@/lib/editOps";
+import type { Correction } from "./corrections";
+import type { SaveState } from "./editing";
 import type { EditReading } from "./readContent";
 import { type Selected, selectedWords } from "./selection";
-import type { SaveState } from "./editing";
 
 export const MUTED = "dsj-muted";
+export const CORRECTED = "dsj-corrected";
 
 /** The paragraphs' text nodes, by turn: the article's `p[data-turn]` children. */
 export function turnTexts(root: Element): Text[] {
@@ -100,148 +102,60 @@ const SAVE_TEXT: Record<SaveState, string> = {
   failed: "Not saved",
 };
 
-/** Where entries [start, stop) begin and end in the recording, in seconds. */
-function spanOf(content: Content, { start, stop }: { start: number; stop: number }): { from: number; to: number } {
-  let from = Number.POSITIVE_INFINITY;
-  let to = 0;
-  for (const entry of content.slice(start, stop)) {
-    if (entry.kind !== "item") continue;
-    from = Math.min(from, entry.sourceStart);
-    to = Math.max(to, entry.sourceStart + entry.length);
-  }
-  return { from: Number.isFinite(from) ? from : 0, to };
+/** Underline every corrected word (`::highlight(dsj-corrected)`), again after each change. */
+export function useCorrectedPaint(reading: Reading, fixed: readonly Correction[], article: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const root = article.current;
+    if (root === null) return;
+    const words: number[] = [];
+    for (const c of fixed) for (let w = c.first; w <= c.last; w += 1) words.push(w);
+    const highlight = wordsHighlight(reading, words, turnTexts(root));
+    CSS.highlights.set(CORRECTED, highlight);
+    return () => {
+      if (CSS.highlights.get(CORRECTED) === highlight) CSS.highlights.delete(CORRECTED);
+    };
+  }, [reading, fixed, article]);
 }
-
-/** A press on a button that acts on the selection must not clear it first. */
-function keepSelection(event: { preventDefault: () => void }): void {
-  event.preventDefault();
-}
-
-type Props = {
-  editor: Editor;
-  content: Content;
-  edit: EditReading;
-  selected: Selected | null;
-  saving: SaveState;
-  /** Open the timing strip for one word (#85). */
-  onTiming: (word: number) => void;
-  /** Shown under the buttons, in the bar: the timing strip while it is open. */
-  children?: ReactNode;
-};
 
 /**
- * Undo, Redo, and what can be done to the words selected: above the
- * transcript, and in reach as it scrolls.
+ * Undo, Redo and whether the edits are saved, in the bar where they are
+ * always in reach. The tools for selected words are the Selection toolbar's.
+ * "Saved" shows once there is something it is about (critique: "Saved shows
+ * before any edit"); the status element is always there, so a screen reader
+ * hears it change. The save message is neutral, never green (green is "checked").
  */
-export function EditBar({ editor, content, edit, selected, saving, onTiming, children }: Props) {
-  const [correcting, setCorrecting] = useState<{ start: number; stop: number } | null>(null);
+export function EditBar({ editor, saving }: { editor: Editor; saving: SaveState }) {
   const undo = editor.undoLabel();
   const redo = editor.redoLabel();
-  const range =
-    selected === null
-      ? null
-      : { start: edit.first[selected.first] ?? 0, stop: edit.stop[selected.last] ?? 0 };
-  const words = selected === null ? 0 : selected.last - selected.first + 1;
-  // A correction stays inside one paragraph of the reader: one speaker's turn.
-  const { turn } = edit.reading.words;
-  const oneTurn = selected !== null && turn[selected.first] === turn[selected.last];
+  const said = saving !== "saved" || undo !== null || redo !== null;
+  const quiet = `size-11 ${FIELD_BUTTON}`;
   return (
-    <div
-      role="toolbar"
-      aria-label="Edit"
-      className="sticky top-0 z-10 -mx-2 mb-6 flex flex-wrap items-center gap-2 bg-background/95 px-2 py-2 backdrop-blur"
-    >
+    <div role="toolbar" aria-label="Edit" className="flex items-center">
       <Button
-        variant="outline"
-        size="sm"
-        disabled={undo === null}
+        variant="ghost"
+        size="icon"
+        aria-label="Undo"
         title={undo === null ? "Nothing to undo" : `Undo ${undo} (⌘Z)`}
+        disabled={undo === null}
+        className={quiet}
         onClick={() => editor.undo()}
       >
-        Undo
+        <Undo2 aria-hidden />
       </Button>
       <Button
-        variant="outline"
-        size="sm"
-        disabled={redo === null}
+        variant="ghost"
+        size="icon"
+        aria-label="Redo"
         title={redo === null ? "Nothing to redo" : `Redo ${redo} (⇧⌘Z)`}
+        disabled={redo === null}
+        className={quiet}
         onClick={() => editor.redo()}
       >
-        Redo
+        <Redo2 aria-hidden />
       </Button>
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden />
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={range === null}
-        onMouseDown={keepSelection}
-        title="Silence the selected words in the edit list; the recording is never changed"
-        onClick={() => {
-          if (range !== null) editor.applyEdit(muteRange(content, range.start, range.stop, true));
-        }}
-      >
-        Mute{words > 1 ? ` ${words} words` : ""}
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={range === null}
-        onMouseDown={keepSelection}
-        onClick={() => {
-          if (range !== null) editor.applyEdit(muteRange(content, range.start, range.stop, false));
-        }}
-      >
-        Unmute
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={range === null || !oneTurn}
-        onMouseDown={keepSelection}
-        title={
-          range !== null && !oneTurn
-            ? "A correction stays inside one speaker's paragraph"
-            : "Retype the selected words; they keep their stretch of the recording"
-        }
-        onClick={() => {
-          if (range !== null && oneTurn) setCorrecting(range);
-        }}
-      >
-        Correct…
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={selected === null || selected.first !== selected.last}
-        onMouseDown={keepSelection}
-        title="Drag the selected word's edges where the recogniser put them wrong"
-        onClick={() => {
-          if (selected !== null && selected.first === selected.last) onTiming(selected.first);
-        }}
-      >
-        Timing…
-      </Button>
-      {correcting !== null && (
-        <CorrectDialog
-          heard={textOf(content, correcting.start, correcting.stop)}
-          from={atLabel(spanOf(content, correcting).from)}
-          to={atLabel(spanOf(content, correcting).to)}
-          onClose={() => setCorrecting(null)}
-          onSave={(text) => {
-            editor.applyEdit(correction(content, correcting.start, correcting.stop, text));
-            setCorrecting(null);
-            window.getSelection()?.removeAllRanges();
-          }}
-        />
-      )}
-      <span className="ml-auto text-sm text-muted-foreground" role="status">
-        {SAVE_TEXT[saving]}
+      <span role="status" className="min-w-16 px-1 text-sm text-field-muted">
+        {said ? SAVE_TEXT[saving] : ""}
       </span>
-      {children}
-      <p className="basis-full text-xs text-muted-foreground">
-        Edits are saved as you make them. Undo goes back up to {HISTORY_LIMIT.toLocaleString("en")} steps
-        while this page is open; closing or reloading it keeps the edits and forgets their undo.
-      </p>
     </div>
   );
 }

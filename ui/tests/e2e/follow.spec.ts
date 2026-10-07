@@ -96,7 +96,9 @@ for (const { width, height, covered } of [
       },
       { word: WORD, at: AT, placed: PLACED },
     );
-    expect(placed.top).toBe(PLACED);
+    // Within a pixel: WebKit scrolls by whole pixels and the line sits at a
+    // fraction of one (measured 400.83 at 800x600 under the margin grid).
+    expect(Math.abs(placed.top - PLACED)).toBeLessThanOrEqual(1);
     // Long enough for a smooth scroll to finish.
     await page.waitForTimeout(1500);
     const seeked = await playing(page);

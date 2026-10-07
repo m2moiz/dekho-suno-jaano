@@ -1,0 +1,163 @@
+// The reader in the Hashiya world: turns as list items with a margin, tools on
+// selection, Correct in place, and the corrected words shown struck through.
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchMock = vi.hoisted(() => {
+  const mock = vi.fn<(request: Request) => Promise<Response>>();
+  globalThis.fetch = mock as unknown as typeof fetch;
+  return mock;
+});
+
+import { dismissError } from "../../src/features/errors/appError";
+import { takeToken } from "../../src/features/session/session";
+import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
+import type { Content, Entry, Item } from "../../src/lib/editOps";
+import { installHighlights } from "./highlights";
+import { stubMatchMedia } from "./media";
+
+function item(sourceStart: number, length: number, text: string, confidence: number | null = 0.95): Item {
+  return { kind: "item", source: "0", sourceStart, length, text, muted: false, confidence };
+}
+const para = (speaker: string): Entry => ({ kind: "paragraph", speaker, language: null });
+
+// Contiguous, the gaps held by items with no words, as the dev linter that
+// loadEditable installs requires (lib/linter.ts).
+const CONTENT: Content = [
+  para("SPEAKER_00"),
+  item(0, 0.2, "", null),
+  item(0.2, 0.3, " alpha"),
+  item(0.5, 0.1, "", null),
+  item(0.6, 0.3, " bravo"),
+  item(0.9, 0.1, "", null),
+  item(1.0, 0.3, " charlie", 0.3),
+  item(1.3, 0.7, "", null),
+  para("SPEAKER_01"),
+  item(2.0, 0.4, " delta"),
+];
+const DOC = {
+  audio: "/rec/a.wav",
+  model: "mlx-community/parakeet-tdt-0.6b-v3",
+  speakers: ["SPEAKER_00", "SPEAKER_01"],
+  sentences: [
+    { start: 0.2, end: 1.3, speaker: 0, text: " alpha bravo charlie", tokens: [
+      { t: 0.2, w: " alpha", e: 0.5, c: 0.95 }, { t: 0.6, w: " bravo", e: 0.9, c: 0.95 }, { t: 1.0, w: " charlie", e: 1.3, c: 0.3 },
+    ] },
+    { start: 2.0, end: 2.4, speaker: 1, text: " delta", tokens: [{ t: 2.0, w: " delta", e: 2.4, c: 0.95 }] },
+  ],
+};
+
+let saved: Content[] = [];
+
+beforeEach(() => {
+  installHighlights();
+  stubMatchMedia();
+  window.history.replaceState(null, "", "/?recording=2&transcript=7#t=a-token");
+  takeToken();
+  saved = [];
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (request: Request) => {
+    const path = new URL(request.url).pathname;
+    if (path === "/api/recordings") {
+      return Response.json([{
+        id: 2, path: "/rec/a.wav", size_bytes: 1, duration_s: 3, content_id: "c", audio_codec: "pcm",
+        video_codec: null, first_seen: "x", missing: false, unreadable: null,
+        transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: true, speaker_count: 2, mark_count: null, language: null, last_edited_at: null }],
+      }]);
+    }
+    if (path === "/api/transcripts/7") return Response.json(DOC);
+    if (path === "/api/transcripts/7/edits") {
+      const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
+      if (request.method === "PUT") saved.push(content);
+      return Response.json({ content, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+    }
+    if (path === "/api/transcripts/7/matches") return Response.json({ matches: [], words_searched: 4, lists: ["en"], recall: "recall: x" });
+    if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+    return Response.json({ detail: "Not Found" }, { status: 404 });
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  act(() => dismissError());
+});
+
+function select(word: string): void {
+  const p = Array.from(document.querySelectorAll("article p")).find((x) => x.textContent?.includes(word)) as HTMLElement;
+  const text = p.firstChild as Text;
+  const range = document.createRange();
+  range.setStart(text, text.data.indexOf(word));
+  range.setEnd(text, text.data.indexOf(word) + word.length);
+  window.getSelection()?.removeAllRanges();
+  window.getSelection()?.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+}
+
+describe("the reader", () => {
+  it("draws each turn as a list item with its speaker, time and duration in the margin, under one heading", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const article = await screen.findByRole("article", { name: "Transcript" });
+    const turns = within(article).getAllByRole("listitem");
+    expect(turns).toHaveLength(2);
+    expect(within(turns[0] as HTMLElement).getByText("Speaker 1")).toBeTruthy();
+    expect(within(turns[1] as HTMLElement).getByText("0:02")).toBeTruthy();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(article.querySelectorAll("h2")).toHaveLength(0);
+    // The words are still one text node a paragraph (#58).
+    expect(article.querySelectorAll("p *")).toHaveLength(0);
+  });
+
+  it("shows the tools for a selection only while there is one", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
+    act(() => select("bravo"));
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    for (const name of ["Correct", "Hear", "Timing", "Mute"]) expect(within(tools).getByRole("button", { name })).toBeTruthy();
+  });
+
+  it("corrects in place, saves it, and strikes the original through in the margin", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => select("charlie"));
+    const correct = within(await screen.findByRole("toolbar", { name: "Selection" })).getByRole("button", { name: "Correct" });
+    fireEvent.click(correct);
+    const field = (await screen.findByRole("textbox", { name: "What was said" })) as HTMLInputElement;
+    expect(field.value).toBe("charlie");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.change(field, { target: { value: "Charles Darwin" } });
+    fireEvent.submit(field.form as HTMLFormElement);
+    await vi.waitFor(() => expect(document.querySelector("article p")?.textContent).toBe(" alpha bravo Charles Darwin"));
+    await vi.waitFor(() => expect(saved).toHaveLength(1));
+    const margin = document.querySelector("article li [data-margin]") as HTMLElement;
+    expect(margin.querySelector("del")?.textContent).toBe("charlie");
+  });
+
+  it("offers the recording's other transcripts in a version picker only when it has more than one", async () => {
+    const { unmount } = render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    expect(screen.queryByRole("combobox", { name: "Version" })).toBeNull();
+    unmount();
+    const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
+    fetchMock.mockImplementation(async (request: Request) => {
+      if (new URL(request.url).pathname !== "/api/recordings") return answer(request);
+      const [row] = (await (await answer(request)).json()) as [{ transcripts: object[] }];
+      const second = { ...row.transcripts[0], id: 8, engine: "whisper", finished_at: "2026-10-02T18:05:00+00:00" };
+      return Response.json([{ ...row, transcripts: [...row.transcripts, second] }]);
+    });
+    render(<TranscriptPage recording={2} transcript={7} />);
+    expect(await screen.findByRole("combobox", { name: "Version" })).toBeTruthy();
+  });
+
+  it("opens the key sheet with ?, and it says the undo history does not outlive the page", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    // On the page's body, where a key lands with nothing focused; it bubbles to the window.
+    act(() => fireEvent.keyDown(document.body, { key: "?", code: "Slash", shiftKey: true }));
+    // KeySheet is App's; this page only asks for it, so the request is read back here.
+    const { KeySheet, hideKeys } = await import("../../src/features/shell/KeySheet");
+    render(<KeySheet />);
+    expect((await screen.findByRole("dialog")).textContent).toContain("forgets their undo");
+    act(() => hideKeys());
+  });
+});

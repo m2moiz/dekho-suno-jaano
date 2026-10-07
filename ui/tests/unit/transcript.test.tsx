@@ -217,7 +217,10 @@ describe("TranscriptPage", () => {
   it("opens the transcript under its recording's name, with the token on both requests", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByText(" Hello there.", { normalizer: (s) => s })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "review.m4a" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "review.m4a" })).toBeTruthy();
+    // Speaker turns are list items under that one heading, not headings of their own.
+    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     // The library, the transcript, its edit list and the waveform; the
     // recording itself is the <audio> element's own request, with the token in
     // its query (#59).

@@ -60,7 +60,7 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
   await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
   await expect.poll(() => page.evaluate(() => document.querySelector("audio")?.readyState ?? 0)).toBeGreaterThan(0);
 
-  // Mute every other paragraph of the first forty through the edit bar, so
+  // Mute every other paragraph of the first forty through the Selection toolbar, so
   // the live mute (#84) has spans to look through on every tick.
   for (let turn = 0; turn < 40; turn += 2) {
     await page.evaluate((turn) => {
@@ -72,7 +72,7 @@ test("the playhead's tick stays under 5 ms at p95 while it follows the fixture",
       selection?.removeAllRanges();
       selection?.addRange(range);
     }, turn);
-    await page.getByRole("toolbar", { name: "Edit" }).getByRole("button", { name: /^Mute( \d+ words)?$/ }).click();
+    await page.getByRole("toolbar", { name: "Selection" }).getByRole("button", { name: /^Mute( \d+ words)?$/ }).click();
   }
   await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
@@ -162,8 +162,8 @@ test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ 
   );
   await page.goto(readerUrl(seeded));
   await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
-  const toggle = page.getByRole("button", { name: /^Unsure words/ });
-  await expect(toggle).toHaveText(`Unsure words (${expected})`);
+  const toggle = page.getByRole("button", { name: / unsure$/ });
+  await expect(toggle).toHaveText(`${expected} unsure`);
   await toggle.click();
   const tinted = await page.evaluate(async () => {
     await document.fonts.ready;

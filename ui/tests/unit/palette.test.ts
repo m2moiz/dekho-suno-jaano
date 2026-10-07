@@ -81,6 +81,12 @@ describe("the Hashiya palette", () => {
     expect(dark).toBe(token(theme, "--playhead", "dark"));
   });
 
+  it("the corrected words' underline is --correction, the margin's red, light and dark", () => {
+    const [light, dark] = pair(transcriptCss, "::highlight(dsj-corrected)", "text-decoration-color");
+    expect(light).toBe(token(theme, "--correction", "light"));
+    expect(dark).toBe(token(theme, "--correction", "dark"));
+  });
+
   it("shell text and gold read at 4.5:1 or more on the blue field", () => {
     for (const name of ["--field-foreground", "--field-muted", "--gold"]) {
       expect(measured(name, "--field", "light")).toBeGreaterThanOrEqual(4.5);
