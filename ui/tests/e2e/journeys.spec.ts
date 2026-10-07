@@ -65,28 +65,35 @@ test.afterAll(async () => {
 });
 
 test.describe("journey 1: see the library", () => {
-  test("both recordings are listed, each transcript with its date, engine and model", async ({ page }) => {
+  test("both recordings are listed by title, each with its date, engine and model under Details", async ({ page }) => {
     await page.goto(server.url);
     const rows = page.getByRole("list", { name: "Recordings" }).getByRole("listitem", { name: /\.wav$/ });
     await expect(rows).toHaveCount(2);
     // A date as the reader's own clock writes it: the year, at least, and a time.
     const date = /\b20\d\d\b.*\d{1,2}:\d{2}/;
-    const standup = page.getByRole("listitem", { name: "standup.wav" }).getByRole("link");
-    await expect(standup).toHaveText(date);
-    await expect(standup).toContainText("parakeet");
-    await expect(standup).toContainText("mlx-community/parakeet-tdt-0.6b-v3");
-    await expect(standup).toContainText("2 speakers");
-    const review = page.getByRole("listitem", { name: "review.wav" }).getByRole("link");
-    await expect(review).toHaveText(date);
-    await expect(review).toContainText("whisper");
-    await expect(review).toContainText("mlx-community/whisper-large-v3-turbo");
+    const standup = page.getByRole("listitem", { name: "standup.wav" });
+    await expect(standup.getByRole("link", { name: "standup.wav" })).toBeVisible();
+    await expect(standup.getByLabel("2 speakers")).toBeVisible();
+    // The model is a detail, not the row's subtitle (critique: "model repo ID as subtitle").
+    await expect(standup).not.toContainText("mlx-community");
+    await standup.getByRole("button", { name: "Details" }).click();
+    const made = standup.locator("dt", { hasText: "Made" }).locator("+ dd");
+    await expect(made).toHaveText(date);
+    await expect(made).toContainText("parakeet");
+    await expect(standup.locator("dt", { hasText: "Model" }).locator("+ dd")).toHaveText("mlx-community/parakeet-tdt-0.6b-v3");
+    await expect(standup.locator("dt", { hasText: "Speakers" }).locator("+ dd")).toHaveText("2 speakers");
+    const review = page.getByRole("listitem", { name: "review.wav" });
+    await review.getByRole("button", { name: "Details" }).click();
+    await expect(review.locator("dt", { hasText: "Made" }).locator("+ dd")).toHaveText(date);
+    await expect(review.locator("dt", { hasText: "Made" }).locator("+ dd")).toContainText("whisper");
+    await expect(review.locator("dt", { hasText: "Model" }).locator("+ dd")).toHaveText("mlx-community/whisper-large-v3-turbo");
   });
 });
 
 /** Open the standup's transcript the way a person does: from its line in the library. */
 async function openStandup(page: Page) {
   await page.goto(server.url);
-  await page.getByRole("listitem", { name: "standup.wav" }).getByRole("link").click();
+  await page.getByRole("listitem", { name: "standup.wav" }).getByRole("link", { name: "standup.wav" }).click();
   await expect(page).toHaveURL(new RegExp(`recording=${ids.standup.recording}&transcript=${ids.standup.transcript}$`));
   await expect(page.getByRole("article", { name: "Transcript" }).locator("p")).toHaveCount(3);
 }

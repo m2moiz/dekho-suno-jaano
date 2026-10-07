@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Installed before the imports below run: the generated client keeps the
@@ -19,6 +19,7 @@ import {
   speakersLabel,
 } from "../../src/features/library/describe";
 import { LibraryPage } from "../../src/features/library/LibraryPage";
+import { displayTitle } from "../../src/features/library/title";
 import type { RecordingRow, TranscriptRow } from "../../src/features/library/types";
 import { takeToken } from "../../src/features/session/session";
 import { stubMatchMedia } from "./media";
@@ -54,7 +55,7 @@ const ROWS: RecordingRow[] = [
     duration_s: 3725,
     video_codec: "h264",
     first_seen: "2026-09-20T17:00:00+00:00",
-    transcripts: [transcript({ id: 7, engine: "whisper", language: "ur" })],
+    transcripts: [transcript({ id: 7, engine: "whisper", language: "ur", language_tag: "urdu" })],
   },
   {
     id: 1,
@@ -107,26 +108,30 @@ describe("the library page", () => {
     expect(request?.headers.get("Authorization")).toBe("Bearer a-token");
   });
 
-  it("shows date, engine and model for each transcript", async () => {
+  it("keeps date, engine and model under Details, and tags the row's language", async () => {
     serve(ROWS);
     render(<LibraryPage />);
     const review = await screen.findByRole("listitem", { name: "review.mov" });
-    const line = within(review).getByText(/whisper/).textContent ?? "";
-    expect(line).toContain("2026");
-    expect(line).toContain("mlx-community/parakeet-tdt-0.6b-v3");
-    expect(line).toContain("ur");
-    expect(line).toContain("speakers not labelled");
+    expect(within(review).getByText("Urdu")).toBeTruthy();
+    // No model id on the row itself (critique: "model repo ID as subtitle").
+    expect(within(review).queryByText(/mlx-community/)).toBeNull();
+    fireEvent.click(within(review).getByRole("button", { name: "Details" }));
+    const made = within(review).getByText("Made").nextElementSibling?.textContent ?? "";
+    expect(made).toContain("2026");
+    expect(made).toContain("whisper");
+    expect(within(review).getByText("Model").nextElementSibling?.textContent).toBe("mlx-community/parakeet-tdt-0.6b-v3");
+    expect(within(review).getByText("Speakers").nextElementSibling?.textContent).toBe("speakers not labelled");
   });
 
   it("shows an adopted transcript's engine as unknown, and one speaker as 1 speaker", async () => {
     serve(ROWS);
     render(<LibraryPage />);
     const standup = await screen.findByRole("listitem", { name: "standup.m4a" });
-    const line = within(standup).getByText(/speaker/).textContent ?? "";
-    expect(line).toContain("unknown");
-    expect(line).toContain("1 speaker");
-    expect(line).not.toContain("1 speakers");
-    expect(line).toContain("0 marks");
+    expect(within(standup).getByLabelText("1 speaker")).toBeTruthy();
+    fireEvent.click(within(standup).getByRole("button", { name: "Details" }));
+    expect(within(standup).getByText("Made").nextElementSibling?.textContent).toMatch(/unknown engine$/);
+    expect(within(standup).getByText("Speakers").nextElementSibling?.textContent).toBe("1 speaker");
+    expect(within(standup).getByText("Marks").nextElementSibling?.textContent).toBe("0 marks");
   });
 
   it("keeps a missing recording, greyed out, with its last known path", async () => {
@@ -134,25 +139,119 @@ describe("the library page", () => {
     render(<LibraryPage />);
     const standup = await screen.findByRole("listitem", { name: "standup.m4a" });
     expect(standup.getAttribute("data-missing")).toBe("true");
-    expect(standup.className).toContain("opacity-50");
+    expect(within(standup).getByRole("link", { name: "standup.m4a" }).className).toContain("text-muted-foreground");
+    expect(within(standup).getByText("Not where it was last seen.")).toBeTruthy();
+    fireEvent.click(within(standup).getByRole("button", { name: "Details" }));
     expect(within(standup).getByText("/Volumes/Old disk/standup.m4a")).toBeTruthy();
     const review = screen.getByRole("listitem", { name: "review.mov" });
     expect(review.getAttribute("data-missing")).toBeNull();
   });
 
-  it("links every transcript to its own page in the reader", async () => {
+  it("opens each recording's latest transcript from its title", async () => {
     serve(ROWS);
     render(<LibraryPage />);
     const review = await screen.findByRole("listitem", { name: "review.mov" });
-    expect(within(review).getByRole("link").getAttribute("href")).toBe("/?recording=2&transcript=7");
+    expect(within(review).getByRole("link", { name: "review.mov" }).getAttribute("href")).toBe("/?recording=2&transcript=7");
     const standup = screen.getByRole("listitem", { name: "standup.m4a" });
-    expect(within(standup).getByRole("link").getAttribute("href")).toBe("/?recording=1&transcript=3");
+    expect(within(standup).getByRole("link", { name: "standup.m4a" }).getAttribute("href")).toBe("/?recording=1&transcript=3");
   });
 
-  it("says the library is empty when it is", async () => {
+  it("offers Transcribe only on a recording with no transcript, and Transcribe again under Details", async () => {
+    serve([...ROWS, { ...ROWS[0], id: 5, path: "/r/fresh.wav", transcripts: [] }]);
+    render(<LibraryPage />);
+    const fresh = await screen.findByRole("listitem", { name: "fresh.wav" });
+    expect(within(fresh).getByRole("button", { name: "Transcribe" })).toBeTruthy();
+    expect(within(fresh).queryByRole("link")).toBeNull();
+    const review = screen.getByRole("listitem", { name: "review.mov" });
+    expect(within(review).queryByRole("button", { name: /^Transcribe/ })).toBeNull();
+    fireEvent.click(within(review).getByRole("button", { name: "Details" }));
+    expect(within(review).getByRole("button", { name: "Transcribe again" })).toBeTruthy();
+  });
+
+  it("says the library is empty when it is, and offers Add recording there too", async () => {
     serve([]);
     render(<LibraryPage />);
-    expect(await screen.findByText("The library is empty.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "No recordings yet" })).toBeTruthy();
+    const adds = screen.getAllByRole("button", { name: "Add recording" });
+    expect(adds).toHaveLength(2);
+    // One gold action on the screen (rulings F23): the bar's.
+    expect(adds.filter((b) => b.className.includes("bg-gold"))).toHaveLength(1);
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("titles a recording from its file's timestamp, and renames it inline", async () => {
+    const seen = serve([{ ...ROWS[0], path: "/r/20250920_094234.m4a" }]);
+    seen.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/jobs") return Response.json([]);
+      if (request.method === "PATCH") return Response.json({ ...ROWS[0], title: "Sunday call" });
+      return Response.json([{ ...ROWS[0], path: "/r/20250920_094234.m4a" }]);
+    });
+    render(<LibraryPage />);
+    const row = await screen.findByRole("listitem", { name: /^Sat 20 Sep/ });
+    fireEvent.click(within(row).getByRole("button", { name: /^Rename/ }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    fireEvent.change(field, { target: { value: "Sunday call" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await vi.waitFor(() => expect(seen.mock.calls.some(([r]) => r.method === "PATCH")).toBe(true));
+    const patch = seen.mock.calls.map(([r]) => r).find((r) => r.method === "PATCH");
+    expect(new URL(patch?.url ?? "").pathname).toBe("/api/recordings/2");
+    expect(await patch?.json()).toEqual({ title: "Sunday call" });
+  });
+
+  it("sends an empty title when the default is typed back, and nothing when Escape leaves", async () => {
+    const seen = serve([{ ...ROWS[0], path: "/r/20250920_094234.m4a", title: "Sunday call" }]);
+    render(<LibraryPage />);
+    const row = await screen.findByRole("listitem", { name: "Sunday call" });
+    const rename = within(row).getByRole("button", { name: /^Rename/ });
+    fireEvent.click(rename);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Title" }), { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    // Focus goes back to the pencil, not to the page's start.
+    expect(document.activeElement).toBe(within(row).getByRole("button", { name: /^Rename/ }));
+    fireEvent.click(within(row).getByRole("button", { name: /^Rename/ }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    fireEvent.change(field, { target: { value: displayTitle({ title: null, path: "/r/20250920_094234.m4a" }) } });
+    fireEvent.blur(field);
+    await vi.waitFor(() => expect(seen.mock.calls.filter(([r]) => r.method === "PATCH")).toHaveLength(1));
+    const patch = seen.mock.calls.map(([r]) => r).find((r) => r.method === "PATCH");
+    expect(await patch?.json()).toEqual({ title: "" });
+  });
+
+  it("filters by title as you type, and says when nothing matches", async () => {
+    serve(ROWS);
+    render(<LibraryPage />);
+    await screen.findByRole("listitem", { name: "review.mov" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search titles" }), { target: { value: "stand" } });
+    expect(screen.queryByRole("listitem", { name: "review.mov" })).toBeNull();
+    expect(screen.getByRole("listitem", { name: "standup.m4a" })).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search titles" }), { target: { value: "zzz" } });
+    expect(screen.getByText(/No title has/)).toBeTruthy();
+  });
+
+  it("shows review progress, and older versions folded", async () => {
+    serve([
+      {
+        ...ROWS[0],
+        transcripts: [
+          { ...transcript({ id: 9 }), review_checked: 212, review_total: 252 },
+          transcript({ id: 8 }),
+          transcript({ id: 7 }),
+        ],
+      },
+    ]);
+    render(<LibraryPage />);
+    const row = await screen.findByRole("listitem", { name: "review.mov" });
+    expect(within(row).getByText("212 of 252 checked")).toBeTruthy();
+    const versions = within(row).getByRole("button", { name: "2 earlier versions" });
+    expect(within(row).getByRole("link", { name: "review.mov" }).getAttribute("href")).toBe("/?recording=2&transcript=9");
+    expect(within(row).getAllByRole("link")).toHaveLength(1);
+    fireEvent.click(versions);
+    expect(
+      within(row)
+        .getAllByRole("link")
+        .map((a) => a.getAttribute("href")),
+    ).toEqual(["/?recording=2&transcript=9", "/?recording=2&transcript=8", "/?recording=2&transcript=7"]);
   });
 
   it("sends a failed read to the error dialog with the server's own words", async () => {
@@ -195,6 +294,11 @@ describe("bringing a recording in (#110)", () => {
     return fetchMock;
   }
 
+  /** The empty library's own Add recording, in the page rather than the bar. */
+  function emptyAdd(): HTMLButtonElement {
+    return within(screen.getByRole("main")).getByRole("button", { name: "Add recording" }) as HTMLButtonElement;
+  }
+
   function asked(path: string): Request[] {
     return fetchMock.mock.calls.map((c) => c[0]).filter((r) => new URL(r.url).pathname === path);
   }
@@ -206,13 +310,15 @@ describe("bringing a recording in (#110)", () => {
       return Response.json(ADDED);
     });
     render(<LibraryPage />);
-    expect(await screen.findByText("The library is empty.")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Add recording" }).click());
+    expect(await screen.findByRole("heading", { name: "No recordings yet" })).toBeTruthy();
+    act(() => emptyAdd().click());
     const row = await screen.findByRole("listitem", { name: "demo.mov" });
     expect(asked("/api/recordings/import").map((r) => r.method)).toEqual(["POST"]);
     // Nothing about where the file is goes up: the server asks the Mac.
     expect(await asked("/api/recordings/import")[0]?.text()).toBe("");
     expect(within(row).getByText("1:01")).toBeTruthy();
+    expect(within(row).getByText("Not transcribed yet")).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Details" }));
     expect(within(row).getByText("373 MB")).toBeTruthy();
     expect(within(row).getByText(/Its picture \(prores\) does not show in every browser/)).toBeTruthy();
     expect(currentError()).toBeNull();
@@ -221,11 +327,11 @@ describe("bringing a recording in (#110)", () => {
   it("does nothing at all when the dialog is cancelled", async () => {
     library([], () => Response.json(null));
     render(<LibraryPage />);
-    await screen.findByText("The library is empty.");
-    act(() => screen.getByRole("button", { name: "Add recording" }).click());
+    await screen.findByRole("heading", { name: "No recordings yet" });
+    act(() => emptyAdd().click());
     await vi.waitFor(() => expect(asked("/api/recordings/import")).toHaveLength(1));
     await vi.waitFor(() =>
-      expect((screen.getByRole("button", { name: "Add recording" }) as HTMLButtonElement).disabled).toBe(false),
+      expect(emptyAdd().disabled).toBe(false),
     );
     expect(asked("/api/recordings")).toHaveLength(1);
     expect(currentError()).toBeNull();
@@ -235,8 +341,8 @@ describe("bringing a recording in (#110)", () => {
     const busy = { error: "PickerBusy", message: "a file dialog from dsj is already open.", request: "x" };
     library([], () => Response.json(busy, { status: 409 }));
     render(<LibraryPage />);
-    await screen.findByText("The library is empty.");
-    act(() => screen.getByRole("button", { name: "Add recording" }).click());
+    await screen.findByRole("heading", { name: "No recordings yet" });
+    act(() => emptyAdd().click());
     await vi.waitFor(() =>
       expect(currentError()).toEqual({ ...busy, request: "/api/recordings/import" }),
     );
@@ -262,11 +368,11 @@ describe("bringing a recording in (#110)", () => {
     });
     render(<LibraryPage />);
     const row = await screen.findByRole("listitem", { name: "demo.mov" });
-    expect(screen.getAllByRole("button", { name: "Find this file" })).toHaveLength(1);
-    act(() => within(row).getByRole("button", { name: "Find this file" }).click());
+    expect(screen.getAllByRole("button", { name: "Relink" })).toHaveLength(1);
+    act(() => within(row).getByRole("button", { name: "Relink" }).click());
     const found = await screen.findByRole("listitem", { name: "demo-renamed.mov" });
     expect(found.getAttribute("data-missing")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Find this file" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Relink" })).toBeNull();
   });
 });
 

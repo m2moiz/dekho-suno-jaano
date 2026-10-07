@@ -29,18 +29,20 @@ function transcript(audio: string) {
   };
 }
 
-test("a transcript opened from the library reads as typeset paragraphs", async ({ page }) => {
+test("a transcript opened from the library reads as typeset paragraphs", async ({ page }, info) => {
   const dir = scratchDir();
-  const seeded = seed(transcript(tone(dir, 12)), dir);
+  // A recording of this browser's own, so its row's title link is this
+  // transcript: a length of its own, since the library knows a recording by
+  // its contents, and the run's library is shared.
+  const name = `reader-${info.project.name}.wav`;
+  const seeded = seed(transcript(tone(dir, 14 + info.project.name.length / 10, name)), dir);
   const library = new URL(readerUrl(seeded));
   library.search = "";
   await page.goto(library.toString());
 
-  // By its address: each browser's run seeds the same tone, so the library
-  // lists both transcripts under one recording, with the same model.
   const href = `/?recording=${seeded.recording}&transcript=${seeded.transcript}`;
-  const link = page.locator(`a[href="${href}"]`);
-  await expect(link).toContainText("parakeet-tdt-0.6b-v3");
+  const link = page.getByRole("listitem", { name }).getByRole("link", { name });
+  await expect(link).toHaveAttribute("href", href);
   await link.click();
   await expect(page).toHaveURL(new RegExp(`\\${href.slice(1)}$`));
 

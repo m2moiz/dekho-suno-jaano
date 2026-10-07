@@ -54,6 +54,15 @@ SENTENCES: dict[str, list[list[str]]] = {
 }
 # Words given a low confidence, so the unsure count has something to count.
 UNSURE = {"scene", "منصوبہ", "moved"}
+# File names in the shapes a real library holds, made up here: phone
+# recorders' stamps, which the library page turns into titles, and one file a
+# person named.
+NAMES = {
+    "english": "recording-20260918-091512.wav",
+    "urdu": "recording-20261003-201540.wav",
+    "mixed": "budget call.wav",
+}
+BARE = "recording-20261006-110204.wav"
 MODELS = {
     "english": ("parakeet", "mlx-community/parakeet-tdt-0.6b-v3"),
     "urdu": ("whisper", "mlx-community/whisper-large-v3-turbo"),
@@ -103,7 +112,7 @@ def seed(root: Path) -> dict[str, tuple[int, int]]:
     ids: dict[str, tuple[int, int]] = {}
     # A second apart, or the library would rightly file equal tones as one recording.
     for seconds, kind in enumerate(SENTENCES, start=60):
-        audio = root / f"{kind}.wav"
+        audio = root / NAMES[kind]
         tone(audio, seconds)
         path = root / f"{kind}.json"
         path.write_text(json.dumps(transcript(audio, kind), ensure_ascii=False), encoding="utf-8")
@@ -115,7 +124,7 @@ def seed(root: Path) -> dict[str, tuple[int, int]]:
             assert found is not None
             ids[kind] = (found.recording_id, found.id)
     # A recording nobody has transcribed: the library page offers Transcribe on it.
-    bare = root / "untranscribed.wav"
+    bare = root / BARE
     tone(bare, 60 + len(SENTENCES))
     with Library.open() as library:
         library.add_recording(bare)

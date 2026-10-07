@@ -17,7 +17,7 @@ import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
 import { type Picked, SelectionToolbar } from "@/features/edit/SelectionToolbar";
 import { TimingStrip } from "@/features/edit/TimingStrip";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
-import { fileName } from "@/features/library/describe";
+import { displayTitle } from "@/features/library/title";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
 import { PLAYER_HEIGHT } from "@/features/player/playhead";
@@ -290,7 +290,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
                       onClick={() =>
                         // The server exports its own copy of the list, so it is brought up to date first.
                         settle()
-                          .then(() => exportTranscript(transcriptId, format, fileName(opened.recording.path)))
+                          .then(() => exportTranscript(transcriptId, format, displayTitle(opened.recording)))
                           .catch((thrown: unknown) =>
                             showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/export/${format}`)),
                           )
@@ -397,7 +397,7 @@ function Page({ opened, transcriptId, reading, article, children, tools, muteSpa
   return (
     <>
       <AppBar back settings={<KeysItem sheet={sheet} />}>
-        <h1 className="min-w-0 flex-1 truncate font-reading text-lg font-semibold">{fileName(recording.path)}</h1>
+        <h1 className="min-w-0 flex-1 truncate font-reading text-lg font-semibold">{displayTitle(recording)}</h1>
         <VersionPicker recording={recording} transcript={transcriptId} />
         <UnsureNav reading={reading} model={doc.model} article={article} />
         {tools}

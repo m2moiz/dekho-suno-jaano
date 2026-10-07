@@ -52,7 +52,8 @@ test("a retyped word reads as retyped, loses its tint, undoes in one step and is
   await expect(page.locator("article p").first()).toHaveText(" alpha bravo Charles Darwin delta");
   await page.getByRole("link", { name: "Library" }).click();
   const recording = page.getByRole("listitem", { name });
-  await expect(recording.getByRole("link", { name: /parakeet-tdt-0\.6b-v3/ })).toContainText("edited");
+  await recording.getByRole("button", { name: "Details" }).click();
+  await expect(recording.locator("dt", { hasText: "Edited" }).locator("+ dd")).toHaveText(/\d{1,2}:\d{2}/);
 });
 
 for (const { width, height, least } of [

@@ -70,3 +70,16 @@ export function pictureNote(videoCodec: string | null): string | null {
 export function versionLabel(t: TranscriptRow): string {
   return `${whenLabel(t.finished_at)} · ${t.engine ?? "unknown engine"}`;
 }
+
+const LANGUAGES = { urdu: "Urdu", mixed: "Mixed", english: "English" } as const;
+
+/** "Urdu", "Mixed" or "English" (Hashiya spec, Library), or null when nothing says. */
+export function languageLabel(tag: TranscriptRow["language_tag"]): string | null {
+  return tag === null ? null : LANGUAGES[tag];
+}
+
+/** "212 of 252 checked", or null when nobody has reviewed it. */
+export function progressLabel(t: TranscriptRow): string | null {
+  if (t.review_checked === null || t.review_total === null) return null;
+  return `${t.review_checked.toLocaleString("en")} of ${t.review_total.toLocaleString("en")} checked`;
+}
