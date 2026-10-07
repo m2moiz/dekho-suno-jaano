@@ -1,16 +1,25 @@
 // Review mode's desk by keyboard alone (Hashiya spec, "Keyboard-complete on
 // the Mac"), in a real browser against the real `dsj ui`: entering from the
 // reader with R, picking the pass with Enter (F13), the Ctrl+F flag menu
-// (F12), and Option+Tab out of the box to the bar's pass switch.
+// (F12), Option+Tab out of the box to the bar's pass switch, and a whole
+// review start to finish, saved as an answer key (Hashiya spec, Testing).
+import { existsSync, readFileSync } from "node:fs";
+
 import { expect, type Page, test } from "@playwright/test";
 
 import { editableTranscript, selectWord } from "./editable.ts";
-import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
+import { readerUrl, type Seeded, scratchDir, seed, tone } from "./seed.ts";
 
-async function openReview(page: Page, name: string): Promise<void> {
+/**
+ * Open Review from the reader with R, on a made-up transcript of three
+ * sentences over a tone of `seconds`, at its pass chooser. Two tones of one
+ * length are one recording to the library, and the other's transcript would
+ * be this one's second opinion: a test that minds gives a length of its own.
+ */
+async function openReview(page: Page, name: string, seconds = 8): Promise<Seeded> {
   const dir = scratchDir();
   const seeded = seed(
-    editableTranscript(tone(dir, 8, `${name}.wav`), [
+    editableTranscript(tone(dir, seconds, `${name}.wav`), [
       ["alpha", "bravo", "charlie"],
       ["delta", "echo"],
       ["foxtrot", "golf"],
@@ -22,6 +31,7 @@ async function openReview(page: Page, name: string): Promise<void> {
   // R in the reader opens Review (keys.ts, READER_SHEET).
   await page.locator("body").press("r");
   await expect(page.getByRole("heading", { name: "Which sentences?" })).toBeVisible();
+  return seeded;
 }
 
 test("enters by R, picks the pass with Enter, and the flag menu works by keyboard (F12, F13)", async ({ page }, info) => {
@@ -106,4 +116,61 @@ test("Review opens from the reader only once a slow save of a correction has lan
   await expect(page.getByRole("textbox", { name: "What was said" })).toHaveValue("alpha bravo Charles");
   // No "Leave site?" on the way: the page left with nothing unsaved.
   expect(dialogs).toEqual([]);
+});
+
+test("a transcript is reviewed by keyboard from R to the answer key, and the reader shows the correction (Task 15)", async ({ page }, info) => {
+  const seeded = await openReview(page, `review-journey-${info.project.name}`, 8.3 + info.project.name.length / 1000);
+  await page.keyboard.press("Enter");
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue("alpha bravo charlie");
+
+  // A correction: "charlie" was "Charles".
+  await box.fill("alpha bravo Charles");
+  await box.press("Enter");
+  await expect(box).toHaveValue("delta echo");
+  await expect(page.getByText("1 of 3 checked")).toBeVisible();
+
+  // Said by the first speaker, not the second (editableTranscript alternates them).
+  await box.press("Control+1");
+  await expect(page.getByText("Said by Speaker 1")).toBeVisible();
+
+  // Split after "delta", check the first half, and merge the second back into it.
+  await box.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 5));
+  await box.press("Control+s");
+  await expect(box).toHaveValue("delta");
+  await expect(page.getByText("1 of 4 checked")).toBeVisible();
+  await box.press("Enter");
+  await expect(box).toHaveValue("echo");
+  await box.press("Control+m");
+  await expect(box).toHaveValue("delta echo");
+  await expect(page.getByText(/of 3 checked$/)).toBeVisible();
+  await box.press("Enter");
+
+  // Can't make it out.
+  await expect(box).toHaveValue("foxtrot golf");
+  await box.press("Control+u");
+  await box.press("Enter");
+
+  await expect(page.getByRole("heading", { name: "This pass is done" })).toBeVisible();
+  await page.getByRole("button", { name: "Save as answer key" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "beside the transcript" })).toBeVisible();
+  const keyFile = seeded.transcriptPath.replace(/\.json$/, ".reference.json");
+  expect(existsSync(keyFile)).toBe(true);
+  expect(existsSync(keyFile.replace(/\.json$/, ".txt"))).toBe(true);
+  const key = JSON.parse(readFileSync(keyFile, "utf8")) as {
+    complete: boolean;
+    segments: { text: string; speaker: string; flags: string[] }[];
+  };
+  expect(key.complete).toBe(true);
+  expect(key.segments.map((s) => s.text)).toEqual(["alpha bravo Charles", "delta echo", "foxtrot golf"]);
+  // By name: the second sentence was Speaker 2's until Ctrl+1.
+  expect(key.segments.map((s) => s.speaker)).toEqual(["Speaker 1", "Speaker 1", "Speaker 1"]);
+  expect(key.segments[2]?.flags).toEqual(["unclear"]);
+
+  // Back in the reader the correction shows, and the margin strikes through
+  // only the word it replaced, not the sentence (F4).
+  await page.getByRole("link", { name: "Back to the transcript" }).last().click();
+  await expect(page.locator("article p").first()).toContainText("alpha bravo Charles");
+  await expect(page.locator("article li [data-margin] del")).toHaveText(["charlie"]);
 });

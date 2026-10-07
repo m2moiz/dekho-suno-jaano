@@ -12,6 +12,14 @@
 
 export const SHAPE = { sentences: 1038, tokens: 21847, turns: 238, speakers: 2 } as const;
 
+export type Shape = { sentences: number; tokens: number; turns: number; speakers: number };
+
+// A 2.5 h call (Hashiya spec, "Long recordings": about 1,500 sentences): the
+// same mean of 21 tokens a sentence and the same share of turns (238 of 1,038)
+// as SHAPE, with four speakers (PRODUCT.md: "two to four or more").
+// 31,500 tokens at SECONDS_PER_TOKEN is 9,091 s, 2 h 31 min.
+export const LONG_SHAPE: Shape = { sentences: 1500, tokens: 31500, turns: 344, speakers: 4 };
+
 const SEED = 108;
 const SECONDS_PER_TOKEN = 0.2886; // 6,304.7 s over 21,847 tokens in the original
 const WORD_START = 0.57;
@@ -67,12 +75,12 @@ const CODAS = ["", "", "", "", "n", "r", "s"] as const;
 
 // Tokens per sentence: skewed like speech, most short, a few very long. A
 // log-normal with median 14 and mean 21, then nudged to the exact total.
-function sentenceLengths(rand: () => number): number[] {
-  const lengths = Array.from({ length: SHAPE.sentences }, () => {
+function sentenceLengths(rand: () => number, shape: Shape): number[] {
+  const lengths = Array.from({ length: shape.sentences }, () => {
     const gauss = Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
     return Math.min(412, Math.max(2, Math.round(Math.exp(Math.log(14) + 0.9 * gauss))));
   });
-  let excess = lengths.reduce((a, b) => a + b, 0) - SHAPE.tokens;
+  let excess = lengths.reduce((a, b) => a + b, 0) - shape.tokens;
   for (let i = 0; excess !== 0; i = (i + 1) % lengths.length) {
     const length = lengths[i] ?? 0;
     if (excess > 0 && length > 2) {
@@ -86,22 +94,22 @@ function sentenceLengths(rand: () => number): number[] {
   return lengths;
 }
 
-// Which sentences open a new speaker turn: the first, and 237 others.
-function turnStarts(rand: () => number): Set<number> {
+// Which sentences open a new speaker turn: the first, and (in SHAPE) 237 others.
+function turnStarts(rand: () => number, shape: Shape): Set<number> {
   const starts = new Set<number>([0]);
-  while (starts.size < SHAPE.turns) starts.add(1 + Math.floor(rand() * (SHAPE.sentences - 1)));
+  while (starts.size < shape.turns) starts.add(1 + Math.floor(rand() * (shape.sentences - 1)));
   return starts;
 }
 
-export function syntheticTranscript(): Transcript {
+export function syntheticTranscript(shape: Shape = SHAPE): Transcript {
   const rand = random(SEED);
-  const lengths = sentenceLengths(rand);
-  const starts = turnStarts(rand);
+  const lengths = sentenceLengths(rand, shape);
+  const starts = turnStarts(rand, shape);
   const sentences: Sentence[] = [];
   let index = 0;
   let speaker = 0;
   for (const [i, length] of lengths.entries()) {
-    if (i > 0 && starts.has(i)) speaker = (speaker + 1) % SHAPE.speakers;
+    if (i > 0 && starts.has(i)) speaker = (speaker + 1) % shape.speakers;
     const tokens: Token[] = [];
     for (let k = 0; k < length; k += 1) {
       const syllable = pick(rand, ONSETS) + pick(rand, VOWELS) + pick(rand, CODAS);
@@ -127,7 +135,7 @@ export function syntheticTranscript(): Transcript {
   return {
     audio: "synthetic-perf.wav",
     model: "synthetic",
-    speakers: ["SPEAKER_00", "SPEAKER_01"],
+    speakers: Array.from({ length: shape.speakers }, (_, i) => `SPEAKER_${String(i).padStart(2, "0")}`),
     diarization: "synthetic",
     text: sentences.map((sentence) => sentence.text).join(""),
     unclear: [],

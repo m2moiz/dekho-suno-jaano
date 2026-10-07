@@ -2,7 +2,7 @@
 // touch-first"), in a real browser against the real `dsj ui`: the card below
 // 768 px or on a touch screen, every target on it 44 px or more (F15), the
 // desk's keys on it when a keyboard is there (F14), and the swipes.
-import { expect, type Page, test } from "@playwright/test";
+import { type CDPSession, expect, type Page, test } from "@playwright/test";
 
 import { editableTranscript } from "./editable.ts";
 import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
@@ -57,6 +57,18 @@ function undersized(page: Page): Promise<string[]> {
     }
     return out;
   }, LEAST);
+}
+
+/**
+ * A finger's drag of `dx` by `dy` px from `at`, through the DevTools protocol:
+ * Playwright's touchscreen only taps, so a real touch drag needs chromium.
+ */
+async function swipe(cdp: CDPSession, at: { x: number; y: number }, dx: number, dy = 8): Promise<void> {
+  const { x, y } = at;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx / 2, y: y + dy / 2 }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx, y: y + dy }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
 test.describe("on a phone, 390 px wide, with a keyboard", () => {
@@ -235,24 +247,55 @@ test.describe("on a tablet, a touch screen 820 px wide", () => {
     // From the card's margin line, not the text box.
     const from = await card.locator("p").first().boundingBox();
     if (from === null) throw new Error("the card's margin line is not on the page");
+    const at = { x: from.x + 200, y: from.y + from.height / 2 };
     const cdp = await page.context().newCDPSession(page);
-    const swipe = async (dx: number, dy = 8) => {
-      const x = from.x + 200;
-      const y = from.y + from.height / 2;
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx / 2, y: y + dy / 2 }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx, y: y + dy }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    };
-    await swipe(-160);
+    await swipe(cdp, at, -160);
     await expect(box).toHaveValue("delta echo");
     await expect(page.getByText("1 of 3 checked")).toBeVisible();
-    await swipe(160);
+    await swipe(cdp, at, 160);
     await expect(box).toHaveValue("alpha bravo charlie");
     // A steep drag is a scroll, not a swipe.
-    await swipe(-100, 90);
+    await swipe(cdp, at, -100, 90);
     await page.waitForTimeout(300);
     await expect(box).toHaveValue("alpha bravo charlie");
     await cdp.detach();
+  });
+});
+
+test.describe("on a phone, 390 px wide, a touch screen", () => {
+  test.use({ viewport: PHONE, hasTouch: true });
+
+  test("a swipe left checks and goes on, a swipe right goes back, a speaker chip reassigns, every target 44 px (Task 15)", async ({ page, browserName }, info) => {
+    test.skip(browserName !== "chromium", "a finger's drag goes through the DevTools protocol, which only chromium has");
+    await openReview(page, `review-phone-touch-${info.project.name}`, 9.3 + info.project.name.length / 1000);
+    await page.getByRole("button", { name: /^Every sentence/ }).tap();
+    const card = page.getByRole("article", { name: "Sentence being checked" });
+    const box = page.getByRole("textbox", { name: "What was said" });
+    await expect(box).toHaveValue("alpha bravo charlie");
+    // Nothing takes the focus, so the screen's keyboard stays down.
+    await expect(box).not.toBeFocused();
+    expect(await undersized(page)).toEqual([]);
+
+    // From the card's margin line, not the text box, which keeps drags for selecting words.
+    const from = await card.locator("p").first().boundingBox();
+    if (from === null) throw new Error("the card's margin line is not on the page");
+    const at = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+    const cdp = await page.context().newCDPSession(page);
+    await swipe(cdp, at, -160);
+    await expect(box).toHaveValue("delta echo");
+    await expect(page.getByText("1 of 3 checked")).toBeVisible();
+    await swipe(cdp, at, 160);
+    await expect(box).toHaveValue("alpha bravo charlie");
+    await swipe(cdp, at, -160);
+    await expect(box).toHaveValue("delta echo");
+    await cdp.detach();
+
+    // "delta echo" is the second speaker's (editableTranscript alternates them); a tap on the first's chip reassigns it.
+    const chips = page.getByRole("group", { name: "Who said it" });
+    await expect(chips.getByRole("button", { name: "Speaker 2" })).toHaveAttribute("aria-pressed", "true");
+    await chips.getByRole("button", { name: "Speaker 1" }).tap();
+    await expect(page.getByText("Said by Speaker 1")).toBeVisible();
+    await expect(chips.getByRole("button", { name: "Speaker 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(await undersized(page)).toEqual([]);
   });
 });

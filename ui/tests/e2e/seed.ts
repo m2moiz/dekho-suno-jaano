@@ -30,7 +30,7 @@ with Library.open() as library:
     print(json.dumps({"recording": found.recording_id, "transcript": found.id}))
 `;
 
-export type Seeded = { recording: number; transcript: number; dir: string };
+export type Seeded = { recording: number; transcript: number; dir: string; transcriptPath: string };
 
 function env(name: string): string {
   const value = process.env[name];
@@ -58,7 +58,7 @@ function put(library: string, transcript: object, dir: string, script: string, .
     encoding: "utf8",
   });
   if (run.status !== 0) throw new Error(`putting ${file} in ${library} failed: ${run.stderr}`);
-  return { ...(JSON.parse(run.stdout) as { recording: number; transcript: number }), dir };
+  return { ...(JSON.parse(run.stdout) as { recording: number; transcript: number }), dir, transcriptPath: file };
 }
 
 let seeded = 0;

@@ -271,10 +271,24 @@ for (const { width, height } of [
 
     if (phone) {
       // Modal: Tab and Shift+Tab circle inside the sheet, however many times. Focus
-      // passes a guard on the way round, so it is read once it has settled.
+      // passes a guard on the way round, so it is read once it has settled: the
+      // same element for 100 ms running, not the first sample that happens to
+      // be inside, which a focus on its way out would pass (Task 4 review).
+      const settled = () =>
+        dialog.evaluate(async (el) => {
+          let last = document.activeElement;
+          let still = 0;
+          for (let n = 0; n < 100 && still < 5; n += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            if (document.activeElement === last) still += 1;
+            else [last, still] = [document.activeElement, 0];
+          }
+          if (still < 5) throw new Error("focus never settled in 2 s");
+          return el.contains(last);
+        });
       for (const key of [...Array(14).fill("Tab"), ...Array(4).fill("Shift+Tab")]) {
         await page.keyboard.press(key);
-        await expect.poll(() => dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+        expect(await settled()).toBe(true);
       }
     } else {
       // Non-modal: the bar stays in the accessibility tree and in reach, and a click on the transcript does not close the drawer.
