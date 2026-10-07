@@ -587,6 +587,11 @@ def test_a_plain_urdu_run_moves_an_earlier_roman_run_off_its_name_with_its_edits
     edits = jobs_mod.edits.edits_path(plain)
     edits.parent.mkdir(parents=True, exist_ok=True)
     edits.write_text('{"made up": "edit list"}', encoding="utf-8")
+    # The note of what it was made from (#249) goes with it, or at its new
+    # name the list would have nothing saying it still fits.
+    note = jobs_mod.edits.source_path(edits)
+    made_from = json.dumps({"transcript_sha": jobs_mod.edits.transcript_sha(plain)})
+    note.write_text(made_from, encoding="utf-8")
 
     assert run_plain_urdu(monkeypatch, recording_id) == [""]
 
@@ -597,6 +602,11 @@ def test_a_plain_urdu_run_moves_an_earlier_roman_run_off_its_name_with_its_edits
     moved_edits = jobs_mod.edits.edits_path(roman)
     assert moved_edits.read_text(encoding="utf-8") == '{"made up": "edit list"}'
     assert not edits.exists()
+    # And it still matches the transcript beside it: moved is not stale.
+    moved_note = jobs_mod.edits.source_path(moved_edits)
+    assert moved_note.read_text(encoding="utf-8") == made_from
+    assert made_from == json.dumps({"transcript_sha": jobs_mod.edits.transcript_sha(roman)})
+    assert not note.exists()
     with Library.open() as library:
         paths = [t.json_path for t in library.transcripts(recording_id)]
     assert paths == [roman.resolve()]

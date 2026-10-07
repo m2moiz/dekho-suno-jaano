@@ -33,8 +33,17 @@ __all__ = [
     "NamesUpdate",
     "ParagraphEntry",
     "Recording",
+    "ReferenceRequest",
+    "ReferenceWritten",
     "RenderJob",
     "RenderState",
+    "Review",
+    "ReviewCorrection",
+    "ReviewDocument",
+    "ReviewFlag",
+    "ReviewPass",
+    "ReviewSegment",
+    "SegmentState",
     "TitleUpdate",
     "TranscribeRequest",
     "Transcript",
@@ -221,6 +230,8 @@ class Edits(BaseModel):
     # rendered, and `unrenderable` says why.
     spans: list[tuple[float, float]] | None
     unrenderable: str | None
+    # Why the saved list was put aside and this one built fresh, or None (#249).
+    replaced: str | None
 
 
 class EditsUpdate(BaseModel):
@@ -289,3 +300,75 @@ class RenderJob(BaseModel):
     error: str | None
     # What it could not do, though it finished.
     notes: list[str]
+
+
+# Review mode (Hashiya spec, #248). No field below has a default, on purpose:
+# a model that is both sent and accepted with defaults is split by FastAPI into
+# "-Input" and "-Output" schemas, and the page would have two types for one
+# document. The page always sends every field.
+
+# What a person can say about a sentence besides its words (spec, Ctrl+U and Ctrl+F).
+type ReviewFlag = Literal["unclear", "not_speech", "overlap", "cut_off"]
+# Every sentence in order (for answer keys), or only the likely errors.
+type ReviewPass = Literal["every", "likely"]
+type SegmentState = Literal["unchecked", "checked"]
+
+
+class ReviewSegment(BaseModel):
+    """One sentence of a review, by its span of the recording, which every edit keeps."""
+
+    start: float
+    end: float
+    state: SegmentState
+    flags: list[ReviewFlag]
+    # The speaker label a person set for it in Review (Ctrl+1 to Ctrl+9), else None.
+    speaker: str | None
+    # Whether a person changed its words in Review.
+    edited: bool
+
+
+class ReviewCorrection(BaseModel):
+    """One change of words made in Review, before and after: sub-project C's learning data."""
+
+    at: str
+    start: float
+    end: float
+    before: str
+    after: str
+
+
+class ReviewDocument(BaseModel):
+    """A transcript's review: its sentences and their state, the pass, and where the person was."""
+
+    version: Literal[1]
+    # The sha256 of the transcript JSON the review was made against: when the
+    # transcript is made again, the page re-checks the sentences by span.
+    transcript_sha: str
+    review_pass: ReviewPass
+    # Where the person was, in seconds, so leaving and coming back resumes there.
+    cursor_s: float
+    started_at: str
+    updated_at: str
+    segments: list[ReviewSegment]
+    corrections: list[ReviewCorrection]
+
+
+class Review(BaseModel):
+    """A transcript's review, or None, and the sha of the transcript as it is now."""
+
+    document: ReviewDocument | None
+    transcript_sha: str
+
+
+class ReferenceRequest(BaseModel):
+    """Save the answer key; with `allow_partial`, even while sentences are unchecked."""
+
+    allow_partial: bool = False
+
+
+class ReferenceWritten(BaseModel):
+    """The answer key's files (names only, beside the transcript), and how much of it is checked."""
+
+    files: list[str]
+    segments: int
+    unchecked: int

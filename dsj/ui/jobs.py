@@ -136,6 +136,11 @@ def transcript_path(
     return library_path().parent / "transcripts" / f"{stem}.json"
 
 
+def _edits_source(json_path: Path) -> Path:
+    """Where the note of the transcript an edit list was made from is kept (#249)."""
+    return edits.source_path(edits.edits_path(json_path))
+
+
 def keep_earlier_roman_run(out: Path, roman: Path) -> Path | None:
     """Move a Roman Urdu transcript found at a plain Urdu run's `out` to its own name (#246).
 
@@ -168,13 +173,20 @@ def keep_earlier_roman_run(out: Path, roman: Path) -> Path | None:
     beside = [p for p in out.parent.glob(f"{glob.escape(out.stem)}.*") if p != out]
     moves = [(out, target)]
     moves += [(p, target.with_name(target.stem + p.name[len(out.stem) :])) for p in beside]
-    moves += [(where(out), where(target)) for where in (edits.edits_path, review_path)]
-    for source, dest in moves:
-        if source.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            source.replace(dest)
-    with Library.open() as library:
-        library.move_transcript(out, target)
+    # The edit list's note of the transcript it was made from goes with it
+    # (#249): the transcript's bytes do not change, so at its new name the
+    # list still matches, and is never taken for a stale one.
+    kept = (edits.edits_path, _edits_source, review_path)
+    moves += [(where(out), where(target)) for where in kept]
+    # Under the lock the page's saves take, so a save landing now cannot
+    # write an edit list or a review back under the name being left.
+    with edits.WRITING:
+        for source, dest in moves:
+            if source.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(dest)
+        with Library.open() as library:
+            library.move_transcript(out, target)
     logging.getLogger("dsj.suno").warning(
         "kept an earlier Roman Urdu transcript of this recording: it was at %s and is now at %s",
         out.name,

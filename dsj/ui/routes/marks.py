@@ -10,7 +10,7 @@ terminal cannot disagree.
 
 from __future__ import annotations
 
-__all__ = ["entries", "router"]
+__all__ = ["entries", "router", "transcript_number"]
 
 import math
 
@@ -34,7 +34,7 @@ from dsj.ui.schemas import (
 router = APIRouter(prefix="/api")
 
 
-def _id(transcript_id: str) -> int:
+def transcript_number(transcript_id: str) -> int:
     """The id as a number, or the same 404 the transcript route gives for anything else."""
     if not (transcript_id.isascii() and transcript_id.isdigit()):
         raise HTTPException(404, f"There is no transcript {transcript_id!r} in the library.")
@@ -78,6 +78,7 @@ def _wire(opened: edits.Opened) -> Edits:
         edited_at=opened.edited_at,
         spans=spans,
         unrenderable=unrenderable,
+        replaced=opened.replaced,
     )
 
 
@@ -100,19 +101,19 @@ def read_edits(transcript_id: str) -> Edits:
     import) has none, and is answered 422 with the reason: it still reads,
     but cannot be edited without guessing where each word stops.
     """
-    return _wire(edits.open_edits(_id(transcript_id)))
+    return _wire(edits.open_edits(transcript_number(transcript_id)))
 
 
 @router.put("/transcripts/{transcript_id}/edits")
 def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
-    return _wire(edits.save_edits(_id(transcript_id), entries(update)))
+    return _wire(edits.save_edits(transcript_number(transcript_id), entries(update)))
 
 
 @router.put("/transcripts/{transcript_id}/names")
 def save_names(transcript_id: str, update: NamesUpdate) -> Edits:
     """Save the speakers' names in the transcript's edit list, the words untouched (#243)."""
-    return _wire(edits.save_names(_id(transcript_id), update.names))
+    return _wire(edits.save_names(transcript_number(transcript_id), update.names))
 
 
 @router.get(
@@ -130,7 +131,7 @@ def export(transcript_id: str, fmt: str) -> Response:
     if write is None:
         known = ", ".join(sorted(likho.EXPORTERS))
         raise HTTPException(404, f"There is no export format {fmt!r}; there are {known}.")
-    found = _id(transcript_id)
+    found = transcript_number(transcript_id)
     text = write(edits.as_payload(edits.open_edits(found)))
     return Response(
         content=text,
@@ -146,10 +147,10 @@ def find_matches(transcript_id: str, update: EditsUpdate) -> Matches:
     The page sends its list as it is now, so a word it has just retyped
     (#83) is matched as retyped. Nothing is saved.
     """
-    opened = edits.open_edits(_id(transcript_id))
+    opened = edits.open_edits(transcript_number(transcript_id))
     doc = hatao.validate(hatao.Document(opened.doc.sources, entries(update)))
     found = hatao.find(doc, hatao.load_words(hatao.word_lists()))
-    engine = edits.engine_of(_id(transcript_id))
+    engine = edits.engine_of(transcript_number(transcript_id))
     return Matches(
         matches=[
             Match(

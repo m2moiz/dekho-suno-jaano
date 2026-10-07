@@ -72,12 +72,12 @@ beforeEach(() => {
     if (path === "/api/transcripts/7/edits") {
       const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
       if (request.method === "PUT") saved.push(content);
-      return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+      return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null });
     }
     if (path === "/api/transcripts/7/names" && request.method === "PUT") {
       const body = (await request.json()) as { names: Record<string, string> };
       named.push(body.names);
-      return Response.json({ content: CONTENT, names: body.names, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+      return Response.json({ content: CONTENT, names: body.names, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null });
     }
     if (path === "/api/transcripts/7/matches") return Response.json({ matches: [], words_searched: 4, lists: ["en"], recall: "recall: x" });
     if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
@@ -238,7 +238,7 @@ describe("the reader", () => {
     const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
     fetchMock.mockImplementation(async (request: Request) =>
       new URL(request.url).pathname === "/api/transcripts/7/edits" && request.method === "GET"
-        ? Response.json({ content: sure, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null })
+        ? Response.json({ content: sure, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null })
         : answer(request),
     );
     render(<TranscriptPage recording={2} transcript={7} />);

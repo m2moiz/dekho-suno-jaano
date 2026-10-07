@@ -414,6 +414,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Review
+         * @description The transcript's review, or none, and the sha of the transcript as it is now.
+         */
+        get: operations["read_review_api_transcripts__transcript_id__review_get"];
+        /**
+         * Save Review
+         * @description Save the page's review in place of the last one, or refuse it whole, naming the segment.
+         */
+        put: operations["save_review_api_transcripts__transcript_id__review_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write Reference
+         * @description Write the answer key beside the transcript; refused while unchecked, unless allow_partial.
+         */
+        post: operations["write_reference_api_transcripts__transcript_id__reference_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -484,6 +528,8 @@ export interface components {
             ][] | null;
             /** Unrenderable */
             unrenderable: string | null;
+            /** Replaced */
+            replaced: string | null;
         };
         /**
          * EditsUpdate
@@ -673,6 +719,29 @@ export interface components {
             transcripts: components["schemas"]["Transcript"][];
         };
         /**
+         * ReferenceRequest
+         * @description Save the answer key; with `allow_partial`, even while sentences are unchecked.
+         */
+        ReferenceRequest: {
+            /**
+             * Allow Partial
+             * @default false
+             */
+            allow_partial: boolean;
+        };
+        /**
+         * ReferenceWritten
+         * @description The answer key's files (names only, beside the transcript), and how much of it is checked.
+         */
+        ReferenceWritten: {
+            /** Files */
+            files: string[];
+            /** Segments */
+            segments: number;
+            /** Unchecked */
+            unchecked: number;
+        };
+        /**
          * RenderJob
          * @description A bleep render started from the page (#215), as the worker last left it.
          */
@@ -699,6 +768,78 @@ export interface components {
         };
         /** @enum {string} */
         RenderState: "starting" | "rendering" | "done" | "failed";
+        /**
+         * Review
+         * @description A transcript's review, or None, and the sha of the transcript as it is now.
+         */
+        Review: {
+            document: components["schemas"]["ReviewDocument"] | null;
+            /** Transcript Sha */
+            transcript_sha: string;
+        };
+        /**
+         * ReviewCorrection
+         * @description One change of words made in Review, before and after: sub-project C's learning data.
+         */
+        ReviewCorrection: {
+            /** At */
+            at: string;
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            /** Before */
+            before: string;
+            /** After */
+            after: string;
+        };
+        /**
+         * ReviewDocument
+         * @description A transcript's review: its sentences and their state, the pass, and where the person was.
+         */
+        ReviewDocument: {
+            /**
+             * Version
+             * @constant
+             */
+            version: 1;
+            /** Transcript Sha */
+            transcript_sha: string;
+            review_pass: components["schemas"]["ReviewPass"];
+            /** Cursor S */
+            cursor_s: number;
+            /** Started At */
+            started_at: string;
+            /** Updated At */
+            updated_at: string;
+            /** Segments */
+            segments: components["schemas"]["ReviewSegment"][];
+            /** Corrections */
+            corrections: components["schemas"]["ReviewCorrection"][];
+        };
+        /** @enum {string} */
+        ReviewFlag: "unclear" | "not_speech" | "overlap" | "cut_off";
+        /** @enum {string} */
+        ReviewPass: "every" | "likely";
+        /**
+         * ReviewSegment
+         * @description One sentence of a review, by its span of the recording, which every edit keeps.
+         */
+        ReviewSegment: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            state: components["schemas"]["SegmentState"];
+            /** Flags */
+            flags: components["schemas"]["ReviewFlag"][];
+            /** Speaker */
+            speaker: string | null;
+            /** Edited */
+            edited: boolean;
+        };
+        /** @enum {string} */
+        SegmentState: "unchecked" | "checked";
         /**
          * TitleUpdate
          * @description A recording's title; empty or None takes it away, so the page derives one again.
@@ -1377,6 +1518,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WordAdded"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_review_api_transcripts__transcript_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Review"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_review_api_transcripts__transcript_id__review_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDocument"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_reference_api_transcripts__transcript_id__reference_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceWritten"];
                 };
             };
             /** @description Validation Error */

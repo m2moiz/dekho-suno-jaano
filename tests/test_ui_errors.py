@@ -25,6 +25,7 @@ from dsj.ui.edits import NoSuchTranscript
 from dsj.ui.errors import STATUS, describe, status_of
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
+from dsj.ui.review import InvalidReview, ReviewIncomplete
 from dsj.ui.server import create_app
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
@@ -94,9 +95,11 @@ def build(cls: type[BaseException]) -> BaseException:
         (InvalidDocument, 422),
         (WordListError, 422),
         (RenderRefused, 422),
+        (InvalidReview, 422),
         (NoSuchTranscript, 404),
         (AlreadyRunning, 409),
         (PickerBusy, 409),
+        (ReviewIncomplete, 409),
         (MediaError, 500),
     ],
 )
@@ -121,6 +124,7 @@ def test_the_table_above_is_the_whole_table() -> None:
         UIUnavailable, NoAudioStream, NoVideoStream, MarkError, NotATranscript,
         NotTheSameRecording, NotStarted, AlreadyRunning, MediaError, NoFilePicker, PickerBusy,
         TranscriptUnusable, InvalidDocument, NoSuchTranscript, WordListError, RenderRefused,
+        InvalidReview, ReviewIncomplete,
     }
     assert set(STATUS) == tested
 

@@ -198,7 +198,7 @@ describe("TranscriptPage, editing", () => {
       if (path === "/api/recordings") return Response.json([RECORDING]);
       if (path === "/api/transcripts/7") return Response.json(TRANSCRIPT);
       if (path === "/api/transcripts/7/edits" && request.method === "GET") {
-        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null });
       }
       if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
         const body = (await request.json()) as { content: Content };
@@ -210,6 +210,7 @@ describe("TranscriptPage, editing", () => {
           edited_at: "2026-10-03T00:00:00+00:00",
           spans: [],
           unrenderable: null,
+          replaced: null,
         });
       }
       if (path === "/api/transcripts/7/matches") {

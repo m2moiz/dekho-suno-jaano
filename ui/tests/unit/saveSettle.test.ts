@@ -20,7 +20,7 @@ const CONTENT: Content = [
   { kind: "item", source: "0", sourceStart: 0.5, length: 0.3, text: " there", muted: false, confidence: 0.9 },
 ];
 
-const SAVED = { content: [], names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null };
+const SAVED = { content: [], names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null, replaced: null };
 
 function editable(): Editable {
   return {

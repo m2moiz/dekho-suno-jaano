@@ -1,0 +1,219 @@
+"""Review mode's backend (#248): review document, answer key, stale edit list (#249).
+
+The recording and transcript are tests/conftest.py's `seeded`: two seconds of
+tone ffmpeg makes and two sentences written there, " Hello there." from 0.2 to
+0.9 s by SPEAKER_00 and " Fine." from 1.2 to 1.6 s by SPEAKER_01.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+from conftest import page, tokens
+
+from dsj import hatao
+from dsj.ui.edits import edits_path, source_path
+from dsj.ui.review import review_path
+
+
+def sha(seeded: dict[str, Any]) -> str:
+    return hashlib.sha256(seeded["json"].read_bytes()).hexdigest()
+
+
+def document(digest: str, *states: str, flags: tuple[list[str], ...] = ([], [])) -> dict[str, Any]:
+    spans = [(0.2, 0.9), (1.2, 1.6)]
+    return {
+        "version": 1,
+        "transcript_sha": digest,
+        "review_pass": "every",
+        "cursor_s": 1.2,
+        "started_at": "2026-10-07T10:00:00+00:00",
+        "updated_at": "2026-10-07T10:05:00+00:00",
+        "segments": [
+            {"start": a, "end": b, "state": state, "flags": flag, "speaker": None, "edited": False}
+            for (a, b), state, flag in zip(spans, states, flags, strict=False)
+        ],
+        "corrections": [],
+    }
+
+
+def transcribe_again(seeded: dict[str, Any]) -> None:
+    """Write the transcript again at the same path, "there" heard as "world" this time."""
+    payload = dict(seeded["payload"])
+    payload["sentences"] = [
+        {"start": 0.2, "end": 0.9, "speaker": 0, "text": " Hello world.",
+         "tokens": tokens((0.2, 0.5, " Hello", 0.99), (0.56, 0.8, " world", 0.9),
+                          (0.8, 0.88, ".", 0.97))},
+        {"start": 1.2, "end": 1.6, "speaker": 1, "text": " Fine.",
+         "tokens": tokens((1.2, 1.5, " Fine", 0.9), (1.5, 1.6, ".", 0.95))},
+    ]
+    seeded["json"].write_text(json.dumps(payload))
+
+
+def correct_there(seeded: dict[str, Any]) -> None:
+    """Retype " there" as " their" in the transcript's edit list, through the page's route."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    content = client.get(route).json()["content"]
+    next(e for e in content if e.get("text") == " there")["text"] = " their"
+    assert client.put(route, json={"content": content}).status_code == 200
+
+
+def test_a_transcript_with_no_review_says_so_and_names_its_own_sha(
+    seeded: dict[str, Any],
+) -> None:
+    reply = page().get(f"/api/transcripts/{seeded['id']}/review")
+    assert reply.status_code == 200, reply.text
+    assert reply.json() == {"document": None, "transcript_sha": sha(seeded)}
+
+
+def test_a_saved_review_comes_back_and_lives_beside_the_library(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/review"
+    saved = client.put(route, json=document(sha(seeded), "checked", "unchecked"))
+    assert saved.status_code == 200, saved.text
+    assert client.get(route).json()["document"]["segments"][0]["state"] == "checked"
+    assert review_path(seeded["json"]).is_file()
+    assert sorted(p.name for p in seeded["audio"].parent.iterdir()) == ["talk.json", "talk.wav"]
+    # And the library row shows how far it got.
+    listed = client.get("/api/recordings").json()[0]["transcripts"][0]
+    assert (listed["review_checked"], listed["review_total"]) == (1, 2)
+
+
+def test_overlapping_segments_are_refused_by_name(seeded: dict[str, Any]) -> None:
+    broken = document(sha(seeded), "unchecked", "unchecked")
+    broken["segments"][1]["start"] = 0.5
+    reply = page().put(f"/api/transcripts/{seeded['id']}/review", json=broken)
+    assert reply.status_code == 422
+    assert reply.json()["error"] == "InvalidReview"
+    assert "segment 1" in reply.json()["message"]
+    assert not review_path(seeded["json"]).exists()
+
+
+def test_a_review_of_a_transcript_not_in_the_library_is_404() -> None:
+    reply = page().get("/api/transcripts/99/review")
+    assert reply.status_code == 404
+    assert reply.json()["error"] == "NoSuchTranscript"
+
+
+def test_an_answer_key_is_refused_while_sentences_are_unchecked_and_says_how_many(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    client.put(f"{route}/review", json=document(sha(seeded), "checked", "unchecked"))
+    reply = client.post(f"/api/transcripts/{seeded['id']}/reference", json={})
+    assert reply.status_code == 409
+    assert reply.json()["error"] == "ReviewIncomplete"
+    assert "1 of 2 sentences are not checked" in reply.json()["message"]
+    assert not (seeded["json"].parent / "talk.reference.json").exists()
+    partial = client.post(f"{route}/reference", json={"allow_partial": True})
+    assert partial.status_code == 200, partial.text
+    assert partial.json() == {
+        "files": ["talk.reference.json", "talk.reference.txt"], "segments": 2, "unchecked": 1,
+    }
+    key = json.loads((seeded["json"].parent / "talk.reference.json").read_text())
+    assert key["complete"] is False
+    text = (seeded["json"].parent / "talk.reference.txt").read_text()
+    assert text.endswith("Speaker 2: Fine. [not checked]\n")
+
+
+def test_an_answer_key_with_no_review_is_refused(seeded: dict[str, Any]) -> None:
+    reply = page().post(f"/api/transcripts/{seeded['id']}/reference", json={})
+    assert reply.status_code == 409
+    assert "no review yet" in reply.json()["message"]
+
+
+def test_the_answer_key_holds_the_corrected_words_names_and_flags(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    correct_there(seeded)
+    client.put(f"{route}/names", json={"names": {"SPEAKER_00": "Ali"}})
+    both = document(sha(seeded), "checked", "checked", flags=([], ["overlap"]))
+    client.put(f"{route}/review", json=both)
+    assert client.post(f"{route}/reference", json={}).status_code == 200
+    key = json.loads((seeded["json"].parent / "talk.reference.json").read_text())
+    assert key["format"] == "dsj-reference"
+    assert key["transcript"] == "talk.json"
+    assert key["model"] == "mlx-community/parakeet-tdt-0.6b-v3"
+    assert key["complete"] is True
+    assert [(s["speaker"], s["text"], s["flags"]) for s in key["segments"]] == [
+        ("Ali", "Hello their.", []),
+        ("Speaker 2", "Fine.", ["overlap"]),
+    ]
+    text = (seeded["json"].parent / "talk.reference.txt").read_text()
+    assert text == "[0:00] Ali: Hello their.\n[0:01] Speaker 2: Fine. (overlapping talk)\n"
+
+
+def test_transcribed_again_the_old_edit_list_is_moved_aside_not_applied(
+    seeded: dict[str, Any],
+) -> None:
+    """Review Focus 4: a run from the app with the same settings writes the same JSON path."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    correct_there(seeded)
+    old = sha(seeded)
+    client.put(f"{route}/review", json=document(old, "checked", "checked"))
+
+    transcribe_again(seeded)
+
+    edits = client.get(f"{route}/edits").json()
+    words = "".join(e["text"] for e in edits["content"] if e["kind"] == "item")
+    assert "world" in words and "their" not in words
+    assert edits["replaced"] is not None and "made again" in edits["replaced"]
+    listed = edits_path(seeded["json"])
+    aside = listed.with_name(f"{listed.stem}.{old[:12]}.json")
+    assert aside.is_file()
+    assert "their" in aside.read_text()
+    # The review is kept; the page sees its sha no longer matches and re-checks by span.
+    review = client.get(f"{route}/review").json()
+    assert review["document"]["transcript_sha"] == old
+    assert review["transcript_sha"] == sha(seeded) != old
+    # Opened again, the list is the new transcript's: nothing more is moved, nothing replaced.
+    again = client.get(f"{route}/edits").json()
+    assert again["replaced"] is None
+    assert sorted(p.name for p in listed.parent.iterdir() if p.name.startswith(listed.stem)) == [
+        aside.name, f"{aside.stem}.source.json"
+    ]
+
+
+def test_transcribed_again_the_speakers_keep_their_names(seeded: dict[str, Any]) -> None:
+    """Names belong to the voices, not the words: they come across to the fresh list."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    correct_there(seeded)
+    client.put(f"{route}/names", json={"names": {"SPEAKER_00": "Ali"}})
+
+    transcribe_again(seeded)
+
+    edits = client.get(f"{route}/edits").json()
+    assert edits["names"] == {"SPEAKER_00": "Ali"}
+    assert edits["replaced"] is not None
+    # Kept in the fresh list itself, so the next open still has them and moves nothing.
+    assert hatao.load(edits_path(seeded["json"])).names == {"SPEAKER_00": "Ali"}
+    again = client.get(f"{route}/edits").json()
+    assert (again["names"], again["replaced"]) == ({"SPEAKER_00": "Ali"}, None)
+    assert "world" in "".join(e["text"] for e in again["content"] if e["kind"] == "item")
+
+
+def test_a_list_saved_before_its_source_was_kept_is_trusted_and_gains_one(
+    seeded: dict[str, Any],
+) -> None:
+    """A list from before #249 has no note of its source: it opens as it always did."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    correct_there(seeded)
+    note = source_path(edits_path(seeded["json"]))
+    assert json.loads(note.read_text()) == {"transcript_sha": sha(seeded)}
+    note.unlink()
+    opened = client.get(route).json()
+    assert opened["replaced"] is None
+    assert " their" in [e.get("text") for e in opened["content"]]
+    client.put(route, json={"content": opened["content"]})
+    assert note.is_file()
