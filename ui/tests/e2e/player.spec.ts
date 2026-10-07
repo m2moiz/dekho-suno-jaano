@@ -289,3 +289,21 @@ for (const [label, viewport, least] of [
     }
   });
 }
+
+// One gold action per screen (DESIGN.md, The One Gold Rule; Task 16a review I2;
+// critique 7 Oct P1-2): the rail's play is a control, outlined on the field, so
+// the screen's gold action (Review, Checked next) is the only gold button. And
+// the phone shows the time too (critique P2-9), which `hidden sm:inline` hid.
+for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) {
+  test(`at ${viewport.width} px the rail's play is not gold, and the time shows`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const dir = scratchDir();
+    const seeded = seed(transcript(silence(dir, 8, `rail-gold-${viewport.width}.wav`), [sentence(0, 0, [" One", " two."])]), dir);
+    await page.goto(readerUrl(seeded));
+    const play = page.getByRole("button", { name: "Play" });
+    const fill = await play.evaluate((element) => getComputedStyle(element).backgroundColor);
+    expect(fill).not.toBe("rgb(200, 162, 74)");
+    const rail = page.getByRole("region", { name: "Player" });
+    await expect(rail.getByText(/^0:00 \/ 0:0\d$/)).toBeVisible();
+  });
+}

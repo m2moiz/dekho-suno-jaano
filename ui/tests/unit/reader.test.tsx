@@ -396,12 +396,29 @@ describe("the reader", () => {
     expect(named).toEqual([{ SPEAKER_00: "Ali" }, { SPEAKER_00: "Ali", SPEAKER_01: "Sara" }]);
   });
 
+  it("keeps a typed name when the field is left without Enter, as a phone's keyboard closing does (#261)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));
+    const field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
+    fireEvent.change(field, { target: { value: "Sara" } });
+    fireEvent.blur(field);
+    expect(await screen.findByRole("button", { name: "Sara, rename" })).toBeTruthy();
+    expect(named).toEqual([{ SPEAKER_01: "Sara" }]);
+    // Left unchanged, nothing is sent.
+    fireEvent.click(screen.getByRole("button", { name: "Sara, rename" }));
+    fireEvent.blur(screen.getByRole("textbox", { name: "Name for Sara" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(named).toEqual([{ SPEAKER_01: "Sara" }]);
+  });
+
   it("keeps the old name on Esc, and an emptied name gives the speaker its own label back", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));
     let field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
     fireEvent.change(field, { target: { value: "Sara" } });
     fireEvent.keyDown(field, { key: "Escape" });
+    // A browser that fires blur as the field goes must not save what Esc dropped.
+    fireEvent.blur(field);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Speaker 2, rename" }));
     expect(named).toEqual([]);
 

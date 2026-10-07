@@ -171,6 +171,13 @@
   font-family: var(--font-urdu);
   font-size: 1.3em;
   line-height: 2.1;
+  /* An Urdu line starts at its right edge, a whole measure from the margin on
+     the left, and the eye jumped that far on every turn (critique 7 Oct, P1-1).
+     The margin stays on the left for every turn (owner's ruling, 8 Oct); a
+     right-to-left turn takes a narrower measure, 42 characters of its own
+     face, so its start sits near the margin. The box keeps to the start of
+     the left-to-right grid, so it narrows from the right. */
+  max-inline-size: 42ch;
 }
 
 /* The word being said (#60). A background only: ::highlight() takes colour,

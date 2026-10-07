@@ -341,4 +341,17 @@ test.describe("on a phone, 390 px wide, a touch screen", () => {
     await expect(chips.getByRole("button", { name: "Speaker 1" })).toHaveAttribute("aria-pressed", "true");
     expect(await undersized(page)).toEqual([]);
   });
+
+  test("the card's gold Checked, next stands 12 px or more clear of the rail, whose play is not gold (critique P1-2)", async ({ page }, info) => {
+    await openReview(page, `review-phone-gap-${info.project.name}`, 9.4 + info.project.name.length / 1000);
+    await page.getByRole("button", { name: /^Every sentence/ }).tap();
+    const checked = await page.getByRole("button", { name: "Checked, next" }).boundingBox();
+    const rail = await page.getByRole("region", { name: "Player" }).boundingBox();
+    if (checked === null || rail === null) throw new Error("Checked, next or the rail is not on the page");
+    expect(rail.y - (checked.y + checked.height)).toBeGreaterThanOrEqual(12);
+    const gold = (name: string | RegExp) => page.getByRole("button", { name }).evaluate((element) => getComputedStyle(element).backgroundColor === "rgb(200, 162, 74)");
+    expect(await gold("Checked, next")).toBe(true);
+    // Arriving plays the sentence, so the rail's button may read Pause.
+    expect(await gold(/^(Play|Pause)$/)).toBe(false);
+  });
 });

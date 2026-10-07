@@ -355,12 +355,16 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       {!hasVideo && <audio ref={attach} src={src} preload="metadata" aria-label="Recording" className="hidden" />}
       <div className="bg-field text-field-foreground">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2 px-2 sm:gap-3 sm:px-6">
-          {/* The rail's one gold primary: the default variant, which is gold. */}
+          {/* A control, not the screen's action, so outlined on the field rather
+              than gold: one gold action per screen (DESIGN.md, The One Gold Rule;
+              Task 16a review I2). In phone Review a gold play sat just under the
+              gold Checked, next (critique 7 Oct, P1-2). */}
           <Button
             size="icon"
+            variant="ghost"
             aria-label={playing ? "Pause" : "Play"}
             onClick={() => toggleRef.current()}
-            className="size-11 shrink-0 rounded-full"
+            className={`size-11 shrink-0 rounded-full border-2 border-field-muted ${FIELD_BUTTON}`}
           >
             {playing ? <Pause aria-hidden className="size-5" /> : <Play aria-hidden className="size-5" />}
           </Button>
@@ -369,7 +373,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
           <span
             ref={clock}
             style={{ minWidth: `${2 * clockLabel.length + 3}ch` }}
-            className="hidden shrink-0 text-sm text-field-muted tabular-nums sm:inline"
+            className="shrink-0 text-xs text-field-muted tabular-nums sm:text-sm"
           >
             {`0:00 / ${clockLabel}`}
           </span>

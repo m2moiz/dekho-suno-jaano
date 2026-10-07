@@ -13,7 +13,7 @@ import { REVIEW_SHEET } from "@/features/shell/keys";
 import { FINE, useMediaQuery } from "@/lib/media";
 import { langOf } from "@/lib/script";
 import { FinishPanel } from "./FinishPanel";
-import { FLAGS, FlagMenu, onBoxKey, PassChooser, SAVE_TEXT, SecondOpinion } from "./ReviewDesk";
+import { BOX_HINT, BOX_HINT_ID, FLAGS, FlagMenu, onBoxKey, PassChooser, SAVE_TEXT, SecondOpinion } from "./ReviewDesk";
 import { useSwipe } from "./swipe";
 import type { Session } from "./useReviewSession";
 import "./review.css";
@@ -137,9 +137,13 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
                 </span>
               ))}
             </p>
+            <span id={BOX_HINT_ID} className="sr-only">
+              {BOX_HINT}
+            </span>
             <Textarea
               ref={box}
               aria-label="What was said"
+              aria-describedby={BOX_HINT_ID}
               className="review-box"
               dir="auto"
               lang={langOf(session.text)}
@@ -200,7 +204,8 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
       </main>
       {/* In thumb reach, just above the player rail, whose height it reads (playhead.ts PLAYER_HEIGHT). */}
       <div className="sticky z-10 border-t border-border bg-background" style={{ bottom: "var(--dsj-player-height, 0px)" }}>
-        <div className="mx-auto grid w-full max-w-2xl grid-cols-[1fr_2fr] gap-2 px-3 py-2 sm:px-6">
+        {/* 12 px clear of the rail below, so a thumb aimed at play does not mark a sentence checked (critique 7 Oct, P1-2). */}
+        <div className="mx-auto grid w-full max-w-2xl grid-cols-[1fr_2fr] gap-2 px-3 pt-2 pb-3 sm:px-6">
           <Button variant="outline" className="h-12 text-base" onClick={() => session.act({ kind: "previous" })}>
             Back
           </Button>

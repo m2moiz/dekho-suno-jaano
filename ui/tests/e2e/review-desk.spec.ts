@@ -174,3 +174,41 @@ test("a transcript is reviewed by keyboard from R to the answer key, and the rea
   await expect(page.locator("article p").first()).toContainText("alpha bravo Charles");
   await expect(page.locator("article li [data-margin] del")).toHaveText(["charlie"]);
 });
+
+// The owner's ruling of 8 Oct (critique 7 Oct, P1-1): the margin stays on the
+// left, and a right-to-left sentence takes a narrower measure so its start,
+// on the right, sits near it. The box and the context lines share that
+// measure, so the context's start lines up with the box text's (it overshot
+// by about 18 px, the box's padding and edge, before).
+test("an Urdu sentence on the desk takes the narrow measure, its context lined up with it", async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const dir = scratchDir();
+  const seeded = seed(
+    editableTranscript(tone(dir, 8.6 + info.project.name.length / 1000, `review-urdu-measure-${info.project.name}.wav`), [
+      ["آج", "صبح", "ہم", "نے", "نیا", "منصوبہ", "دیکھا۔"],
+      ["میں", "نے", "3", "بجے", "meeting", "رکھی", "ہے۔"],
+      ["یہ", "بات", "ٹھیک", "ہے۔"],
+    ]),
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  await page.locator("body").press("r");
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toHaveAttribute("lang", "ur");
+  const shape = await page.evaluate(() => {
+    const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+    const style = getComputedStyle(textarea);
+    const inset = parseFloat(style.paddingRight) + parseFloat(style.borderRightWidth);
+    const context = document.querySelector(".review-context:lang(ur)") as HTMLElement;
+    const margin = document.querySelector(".review-margin") as HTMLElement;
+    return {
+      boxTextRight: textarea.getBoundingClientRect().right - inset,
+      contextRight: context.getBoundingClientRect().right,
+      marginRight: margin.getBoundingClientRect().right,
+    };
+  });
+  // Near the margin: the text's start within 600 px of it (it was about 850 at 1440).
+  expect(shape.boxTextRight - shape.marginRight).toBeLessThan(600);
+  expect(Math.abs(shape.contextRight - shape.boxTextRight)).toBeLessThanOrEqual(2);
+});

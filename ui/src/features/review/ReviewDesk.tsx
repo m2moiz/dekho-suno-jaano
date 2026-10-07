@@ -19,6 +19,14 @@ import type { Flag, ReviewPass } from "./model";
 import type { SentenceView, Session } from "./useReviewSession";
 import "./review.css";
 
+/**
+ * What the box says of Tab to a screen reader (aria-describedby), where Tab
+ * plays rather than moving on: WCAG 2.1.2 asks that a way out a field does
+ * not take by Tab be announced (critique 7 Oct, P1-3). The footer says it too.
+ */
+export const BOX_HINT = "Tab plays. Option+Tab moves to the other controls.";
+export const BOX_HINT_ID = "review-box-hint";
+
 export const SAVE_TEXT: Record<SaveState, string> = { saved: "Saved", saving: "Saving…", failed: "Not saved" };
 
 export const FLAGS: [Flag, string][] = [
@@ -298,9 +306,13 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
               </FlagMenu>
             </div>
             <div className="flex min-w-0 flex-col gap-3">
+              <span id={BOX_HINT_ID} className="sr-only">
+                {BOX_HINT}
+              </span>
               <Textarea
                 ref={box}
                 aria-label="What was said"
+                aria-describedby={BOX_HINT_ID}
                 className="review-box"
                 dir="auto"
                 lang={langOf(session.text)}
@@ -330,6 +342,12 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
             {key.does}
           </span>
         ))}
+        {/* Tab stays in the box, so the way out is said here once (critique 7 Oct, P1-3). */}
+        <span className="flex items-center gap-1">
+          <Kbd>⌥</Kbd>
+          <Kbd>Tab</Kbd>
+          other controls
+        </span>
       </footer>
     </>
   );

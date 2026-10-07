@@ -43,7 +43,7 @@ export const REVIEW_SHEET: Sheet = {
     { keys: ["Ctrl", "."], does: "Faster" },
     { keys: ["Ctrl", "1 to 9"], does: "This sentence was said by speaker n" },
     { keys: ["Ctrl", "G"], does: "Take the second opinion's reading" },
-    { keys: ["Ctrl", "U"], does: "Flag: can't make it out (adds [?] at the cursor when text is selected or empty)" },
+    { keys: ["Ctrl", "U"], does: "Flag: can't make it out (puts [?] in place of the selected words, or in an empty box)" },
     { keys: ["Ctrl", "F"], does: "Flag menu: not speech, overlapping talk, cut off" },
     { keys: ["Ctrl", "S"], does: "Split the sentence at the cursor" },
     { keys: ["Ctrl", "M"], does: "Merge with the previous sentence" },

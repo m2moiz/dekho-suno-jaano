@@ -166,6 +166,16 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
           leading: parseFloat(style.lineHeight) / parseFloat(style.fontSize),
           rightGap: box.right - right,
           leftGap: left - box.left,
+          // The paragraph's measure in its own font's "0" widths.
+          measure: (() => {
+            const probe = document.createElement("span");
+            probe.textContent = "0";
+            probe.style.position = "absolute";
+            p.append(probe);
+            const ch = probe.getBoundingClientRect().width;
+            probe.remove();
+            return box.width / ch;
+          })(),
         };
       }),
       three: words(ps[1] as Element, "3"),
@@ -182,7 +192,12 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
     // Set from the right edge, as Urdu is.
     expect(turn?.rightGap).toBeLessThan(2);
   }
-  // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
+  // An Urdu turn starts at its right edge, so it gets a narrower measure, 40 to
+  // 45 characters, to bring that start near the margin on the left (owner's
+  // ruling, 8 Oct; critique 7 Oct P1-1). An English turn keeps the full one.
+  for (const turn of [urdu, mixed]) expect(turn?.measure).toBeLessThanOrEqual(46);
+  expect(english?.measure ?? 0).toBeGreaterThan(60);
+    // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
   for (const turn of shape.turns) expect(turn.marginRight).toBeLessThan(turn.textLeft);
   expect((urdu?.size ?? 0) / (english?.size ?? 1)).toBeCloseTo(1.3, 1);
   expect(english?.lang).toBeNull();

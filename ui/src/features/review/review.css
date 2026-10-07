@@ -6,6 +6,11 @@
 
 /* The margin on the left of every sentence, the same side for Urdu and
    English, as the reader's: the grid runs left to right, each text its own way. */
+/* The measure of an Urdu sentence on the desk, box and context alike. */
+:root {
+  --urdu-desk-measure: 34rem;
+}
+
 .review-row {
   display: grid;
   grid-template-columns: 9.5rem minmax(0, 1fr);
@@ -67,6 +72,10 @@
   font-family: var(--font-urdu);
   font-size: 1.95rem;
   line-height: 2.1;
+  /* Right to left, the sentence starts on the right, a whole column from the
+     margin; a narrower measure brings its start near it (owner's ruling,
+     8 Oct; critique 7 Oct, P1-1), as the reader's 42 characters do. */
+  max-inline-size: var(--urdu-desk-measure);
 }
 
 .review-context {
@@ -81,6 +90,9 @@
   font-family: var(--font-urdu);
   font-size: 1.38rem;
   line-height: 2.1;
+  /* Its start lines up with the box text's: the box's measure less the box's
+     padding and edge, which the context lines do not have. */
+  max-inline-size: calc(var(--urdu-desk-measure) - 1rem - 2px);
 }
 
 /* The card's speaker chips (ReviewCard.tsx): each in its speaker's colour,

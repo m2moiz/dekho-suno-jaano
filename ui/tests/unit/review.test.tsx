@@ -62,6 +62,14 @@ describe("Review mode on a Mac", () => {
     expect(server.edits).toHaveLength(1);
   });
 
+  it("says on the box, and once in the footer, that Tab plays and Option+Tab moves on (critique 7 Oct, P1-3)", async () => {
+    const field = await start();
+    const described = (field.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "");
+    expect(described).toContain("Tab plays. Option+Tab moves to the other controls.");
+    const footer = document.querySelector("footer");
+    expect(footer?.textContent).toContain("other controls");
+  });
+
   it("sets who said a sentence with Ctrl+2", async () => {
     key(await start(), { key: "2", code: "Digit2", ctrlKey: true });
     await vi.waitFor(() => expect(server.edits).toHaveLength(1));
