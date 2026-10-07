@@ -12,14 +12,17 @@ Any page open in any other tab can send requests to a server on this machine;
 it only has to guess the port. So only this machine's own page may use this one
 (#112), by six rules:
 
-  1. It listens on 127.0.0.1 only, on a port the kernel picks.
+  1. It listens on 127.0.0.1 only, on a port the kernel picks. With
+     `--tailnet` too: the phone comes in through Tailscale's own proxy
+     (dsj/ui/tailnet.py, #250), which passes each request to that address.
   2. Every /api and /media request carries a token made at startup, in an
      `Authorization` header. The page itself is served without one: a browser
      navigation cannot send a header. Nor can an <audio> or <video> element,
      so a recording's media route alone also takes it as `?t=` (#59).
   3. A request whose `Host` is not this server's loopback address is refused
      before anything else is looked at. That is what stops a hostile site
-     pointing its own domain at 127.0.0.1 (DNS rebinding).
+     pointing its own domain at 127.0.0.1 (DNS rebinding). With `--tailnet`,
+     and only then, the Mac's tailnet name on port 8443 is let in as well.
   4. No CORS header is ever sent, so another origin's script cannot read a
      reply even when it guesses the port and the token check lets it through.
   5. No route takes a filesystem path. The page names a recording by id and
@@ -71,6 +74,7 @@ from dsj.ui.errors import STATUS, describe
 from dsj.ui.jobs import Jobs
 from dsj.ui.routes import jobs, marks, media, recording, review
 from dsj.ui.store import library_path
+from dsj.ui.tailnet import TAILNET_IDLE_S, TAILNET_PORT, Tailnet, TailnetUnavailable
 
 # Committed, and inside the package, so an install carries the page with no
 # Node on the machine. `just ui-build` writes it from ui/ (#57 section 8).
@@ -272,13 +276,19 @@ def bye(request: Request) -> None:
 
 
 def create_app(
-    port: int, *, token: str | None = None, extra_ports: tuple[int, ...] = ()
+    port: int,
+    *,
+    token: str | None = None,
+    extra_ports: tuple[int, ...] = (),
+    extra_hosts: tuple[str, ...] = (),
 ) -> tuple[FastAPI, str]:
     """Build the app for a server about to listen on `port`, and its token.
 
     `extra_ports` are other loopback ports whose `Host` is accepted too: only
     `dev_app()` uses it, for Vite's dev server, which passes the browser's own
-    `Host` through to this one. The app's Heartbeat is `app.state.heartbeat`.
+    `Host` through to this one. `extra_hosts` are whole `Host` values accepted
+    too: only `serve(tailnet=True)` passes one, the Mac's `<name>:8443` (#250).
+    The app's Heartbeat is `app.state.heartbeat`.
 
     Raises:
         UIUnavailable: when the built page is not where the package expects it.
@@ -291,7 +301,7 @@ def create_app(
     token = token or secrets.token_urlsafe(32)
     hosts = frozenset(
         f"{name}:{p}" for p in (port, *extra_ports) for name in (HOST, "localhost")
-    )
+    ) | {host.lower() for host in extra_hosts}
     # No /docs or /redoc: they load their scripts from a CDN, and nothing about
     # this app may reach off the machine. /openapi.json stays, for #155.
     # The lifespan is where the server's own state is let go of, as uvicorn
@@ -353,16 +363,22 @@ def _take_lock(path: Path) -> int | None:
     return fd
 
 
-def _running_url(path: Path) -> str:
-    """The URL the `dsj ui` holding the lock at `path` printed."""
+def _read_holder(path: Path) -> dict[str, object]:
+    """What the lock file at `path` says, or an empty dict when it says nothing."""
+    with contextlib.suppress(OSError, ValueError):
+        holder: object = json.loads(path.read_text())
+        if isinstance(holder, dict):
+            return cast("dict[str, object]", holder)
+    return {}
+
+
+def _running(path: Path) -> dict[str, object]:
+    """What the `dsj ui` holding the lock at `path` wrote: its URL, and more."""
     deadline = time.monotonic() + _HOLDER_WAIT_S
     while True:
-        with contextlib.suppress(OSError, ValueError):
-            holder: object = json.loads(path.read_text())
-            if isinstance(holder, dict):
-                url = cast("dict[str, object]", holder).get("url")
-                if isinstance(url, str):
-                    return url
+        holder = _read_holder(path)
+        if isinstance(holder.get("url"), str):
+            return holder
         if time.monotonic() >= deadline:
             raise UIUnavailable(
                 f"another dsj ui holds {path} but has not written where it listens. "
@@ -402,7 +418,121 @@ def _watch(
         return
 
 
-def serve(*, open_browser: bool, idle_s: float = IDLE_S, bye_s: float = BYE_S) -> None:
+def _already_running(lock: Path, *, tailnet: bool, open_browser: bool) -> None:
+    """Print the running `dsj ui`'s address instead of binding a rival.
+
+    With --tailnet that is its phone URL; a run without one has none, and its
+    loopback URL printed here would read as the phone's, so that is refused.
+
+    Raises:
+        TailnetUnavailable: --tailnet asked of a run started without it.
+    """
+    holder = _running(lock)
+    url = cast("str", holder["url"])
+    if tailnet:
+        phone = cast("dict[str, object]", holder.get("tailnet") or {}).get("url")
+        if not isinstance(phone, str):
+            raise TailnetUnavailable(
+                f"dsj ui is already running without --tailnet; stop it first "
+                f"(`lsof {lock}` finds it), then run dsj ui --tailnet again."
+            )
+        url = phone
+    print(url, flush=True)
+    print(f"dsj ui is already running; this is its address ({lock}).",
+          file=sys.stderr, flush=True)
+    if open_browser:
+        webbrowser.open(url)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _clear_stale(tailnet: Tailnet, previous: dict[str, object]) -> None:
+    """Remove the 8443 entry a killed --tailnet run left behind (#250).
+
+    Only when the lock file, which a `kill -9` leaves written, records a
+    --tailnet run whose pid is dead, and only when the entry still points at
+    that run's loopback port: anything else on 8443 is not dsj's to remove.
+    """
+    pid, port = previous.get("pid"), previous.get("port")
+    if not previous.get("tailnet") or not isinstance(pid, int) or not isinstance(port, int):
+        return
+    if _pid_alive(pid):
+        return
+    if tailnet.close(port):
+        print(f"Removed the tailscale serve entry on {TAILNET_PORT} that a stopped "
+              f"dsj ui (pid {pid}) left behind.", file=sys.stderr, flush=True)
+
+
+class _Undo:
+    """Remove this run's 8443 entry, once, whichever way the server stops."""
+
+    def __init__(self, tailnet: Tailnet) -> None:
+        self.tailnet = tailnet
+        self.port: int | None = None
+        self._lock = threading.Lock()
+
+    def __call__(self) -> None:
+        with self._lock:
+            port, self.port = self.port, None
+        if port is None:
+            return
+        try:
+            self.tailnet.close(port)
+        except (TailnetUnavailable, OSError, ValueError) as exc:
+            # Never over the error that stopped the server, if there was one.
+            with contextlib.suppress(OSError):
+                print(f"dsj ui could not remove its tailscale serve entry ({exc}); "
+                      f"`tailscale serve --https={TAILNET_PORT} off` removes it.",
+                      file=sys.stderr, flush=True)
+
+
+def _undo_on_stop(app: FastAPI, undo: _Undo) -> None:
+    """Run `undo` as uvicorn shuts the app down.
+
+    A `finally` in serve() is not enough: on SIGTERM uvicorn shuts down and
+    then re-raises the signal, whose default action ends the process before
+    any `finally` outside uvicorn runs. Wrapped round the app's own lifespan,
+    as dev_app() wraps it.
+    """
+    serving = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def undone(a: FastAPI) -> AsyncGenerator[None]:
+        try:
+            async with serving(a):
+                yield
+        finally:
+            undo()
+
+    app.router.lifespan_context = undone
+
+
+def _show_qr(url: str) -> None:
+    """The phone URL as a QR code on stderr, for the phone's camera."""
+    try:
+        import segno
+    except ImportError:
+        print("(No QR code: segno, which the `ui` extra carries, is not installed.)",
+              file=sys.stderr, flush=True)
+        return
+    segno.make(url).terminal(out=sys.stderr, compact=True)
+
+
+def serve(
+    *,
+    open_browser: bool,
+    idle_s: float | None = None,
+    bye_s: float = BYE_S,
+    tailnet: bool = False,
+) -> None:
     """Listen on a port the kernel picks, print the URL, and serve until idle or stopped.
 
     If another `dsj ui` is already serving this library, print its URL (and
@@ -412,35 +542,67 @@ def serve(*, open_browser: bool, idle_s: float = IDLE_S, bye_s: float = BYE_S) -
     the app is built, with no window between choosing a free port and taking it.
     It is listening before the URL is printed, so anything that reads the URL
     and connects at once is queued, not refused.
+
+    With `tailnet`, Tailscale's proxy serves it to the owner's tailnet on 8443
+    (dsj/ui/tailnet.py, #250), the phone URL is printed instead, and the idle
+    stop is TAILNET_IDLE_S unless `idle_s` says otherwise.
+
+    Raises:
+        TailnetUnavailable: with `tailnet`, when Tailscale cannot serve it.
     """
+    if idle_s is None:
+        idle_s = TAILNET_IDLE_S if tailnet else IDLE_S
     lock = lock_path()
     fd = _take_lock(lock)
     if fd is None:
-        url = _running_url(lock)
-        print(url, flush=True)
-        print(f"dsj ui is already running; this is its address ({lock}).",
-              file=sys.stderr, flush=True)
-        if open_browser:
-            webbrowser.open(url)
+        _already_running(lock, tailnet=tailnet, open_browser=open_browser)
         return
+    undo: _Undo | None = None
     try:
+        proxy: Tailnet | None = None
+        if tailnet:
+            # All before the bind: a refusal leaves nothing listening.
+            proxy = Tailnet()
+            proxy.connect()
+            # What the lock file held before this run took it: a killed run's.
+            _clear_stale(proxy, _read_holder(lock))
+            proxy.refuse_if_taken()
+            undo = _Undo(proxy)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((HOST, 0))
             sock.listen()
             port: int = sock.getsockname()[1]
-            app, token = create_app(port)
+            app, token = create_app(port, extra_hosts=(proxy.host,) if proxy else ())
             # After `#` the token never reaches a server, a log or a Referer;
             # the page reads it and wipes it from the address bar (#112).
             url = f"http://{HOST}:{port}/#t={token}"
-            _write_holder(fd, {
+            holder: dict[str, object] = {
                 "url": url, "port": port, "pid": os.getpid(),
                 "started": datetime.now(UTC).isoformat(timespec="seconds"),
-            })
+            }
+            shown = url
+            if proxy and undo:
+                shown = f"https://{proxy.host}/#t={token}"
+                holder["tailnet"] = {"host": proxy.name, "port": TAILNET_PORT, "url": shown}
+            # Written before the entry is made, so a run killed at any point
+            # after it leaves the record the next run's _clear_stale() reads.
+            _write_holder(fd, holder)
+            if proxy and undo:
+                undo.port = port
+                _undo_on_stop(app, undo)
+                proxy.open(port)
             # The URL alone on stdout, so `dsj ui --print-url` composes the way
             # `dsj dikhao` does; everything for a person goes to stderr.
-            print(url, flush=True)
-            print("dsj ui is serving; Ctrl-C stops it.", file=sys.stderr, flush=True)
+            print(shown, flush=True)
+            if proxy:
+                _show_qr(shown)
+                print("dsj ui is serving this Mac and your tailnet: open the address "
+                      "above on your phone, or scan the code. Ctrl-C stops it.",
+                      file=sys.stderr, flush=True)
+            else:
+                print("dsj ui is serving; Ctrl-C stops it.", file=sys.stderr, flush=True)
             if open_browser:
+                # The Mac's own page, on loopback, either way.
                 webbrowser.open(url)
             server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
             done = threading.Event()
@@ -457,6 +619,10 @@ def serve(*, open_browser: bool, idle_s: float = IDLE_S, bye_s: float = BYE_S) -
             finally:
                 done.set()
     finally:
+        # Usually done already, by the app's shutdown; this catches a failure
+        # before or outside uvicorn.
+        if undo:
+            undo()
         # Emptied, not deleted: the token goes with the server, and deleting a
         # file another `dsj ui` may be waiting to flock would let two run.
         with contextlib.suppress(OSError):

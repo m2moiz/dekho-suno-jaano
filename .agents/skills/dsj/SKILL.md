@@ -311,11 +311,13 @@ everything it shows comes from the files the other verbs write, so query those i
 ```bash
 dsj ui
 dsj ui --print-url
+dsj ui --tailnet --print-url
 ```
 
 | Flag | |
 |---|---|
 | `--print-url` | print the URL and serve, without opening a browser |
+| `--tailnet` | also serve it to the owner's own Tailscale devices, and print the phone URL |
 
 It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
 on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` request needs
@@ -335,6 +337,19 @@ started from the page (`GET /api/recordings`: every recording, newest first, eac
 with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_count`,
 `mark_count`, `language`) and serves one transcript's JSON unchanged at
 `GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
+
+With `--tailnet` (for a phone or tablet, #250) it still listens on `127.0.0.1`, and
+runs `tailscale serve --bg --https=8443 http://127.0.0.1:<port>` in front of it, so
+only devices on the owner's tailnet reach it. It prints
+`https://<mac>.<tailnet>.ts.net:8443/#t=<token>` on stdout instead, and a QR code of it
+on stderr; the token is still required, and `<mac>.<tailnet>.ts.net:8443` is the one
+extra `Host` let in. It removes that 8443 entry when it stops, however it stops, and
+waits 30 minutes for a page instead of three, because a phone's background tab sends no
+heartbeat. It exits 1 with one line, changing nothing, when `tailscale` is not on
+PATH, when Tailscale is not running (it never starts it), when 8443 already serves
+something else (it never replaces it), or when a `dsj ui` without `--tailnet` is
+already running. It never runs `tailscale funnel`, so nothing is on the public
+internet. An agent should not run it: the phone check belongs to the owner.
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.

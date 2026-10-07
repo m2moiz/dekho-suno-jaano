@@ -148,7 +148,7 @@ carries more than you want:
 | `dsj[whisper]` | `mlx-whisper`, `silero-vad` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch. silero-vad is the speech detector `--roman-urdu` cuts the audio with |
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
-| `dsj[ui]` | `fastapi`, `uvicorn` | `dsj ui`, the app in a browser |
+| `dsj[ui]` | `fastapi`, `uvicorn`, `segno` | `dsj ui`, the app in a browser; segno draws the phone QR code |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -612,6 +612,24 @@ dsj ui --print-url    # prints the URL and serves, without opening one
 
 It needs the `ui` extra, which `dsj[mac]` carries. The page is built ahead of
 time and ships inside the package, so an install needs no Node.
+
+**On your phone or tablet**, through [Tailscale](https://tailscale.com): start
+Tailscale on the Mac and on the phone, then
+
+```bash
+dsj ui --tailnet      # prints the phone address and a QR code to scan
+```
+
+The server still listens on this Mac only. Tailscale's own proxy (`tailscale
+serve`, HTTPS on port 8443) passes requests from your tailnet's devices to it,
+and nothing reaches it from the public internet. The phone address carries the
+same key after `#` as the Mac's, and every request still needs it. When the
+server stops, the 8443 entry goes with it. A phone tab in the background sends
+no sign of life, so with `--tailnet` the server waits 30 minutes for one
+instead of three. dsj never starts Tailscale, never uses `tailscale funnel`,
+and never replaces something you already serve on 8443: in each of those cases
+it says what is in the way and stops. A plain `dsj ui` already running must be
+stopped first.
 
 Only this Mac's own page can use it. The URL carries a key after `#`, which
 the page takes and wipes from the address bar; every request has to bring it
