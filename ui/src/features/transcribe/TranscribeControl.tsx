@@ -35,7 +35,7 @@ export function TranscribeControl({ recording, label = "Transcribe" }: { recordi
         </div>
       )}
       {job?.state === "failed" && (
-        <p className="text-sm text-destructive select-text" role="alert">
+        <p className="text-sm whitespace-pre-wrap text-destructive select-text" role="alert">
           The last transcription failed: {job.error}
         </p>
       )}

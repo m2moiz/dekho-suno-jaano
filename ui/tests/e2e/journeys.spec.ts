@@ -65,15 +65,16 @@ test.afterAll(async () => {
 });
 
 test.describe("journey 1: see the library", () => {
+  // Titled by file name without its extension: neither name holds a date.
   test("both recordings are listed by title, each with its date, engine and model under Details", async ({ page }) => {
     await page.goto(server.url);
-    const rows = page.getByRole("list", { name: "Recordings" }).getByRole("listitem", { name: /\.wav$/ });
+    const rows = page.getByRole("list", { name: "Recordings" }).getByRole("listitem", { name: /^(standup|review)$/ });
     await expect(rows).toHaveCount(2);
     // A date as the reader's own clock writes it: the year, at least, and a time.
     const date = /\b20\d\d\b.*\d{1,2}:\d{2}/;
-    const standup = page.getByRole("listitem", { name: "standup.wav" });
-    await expect(standup.getByRole("link", { name: "standup.wav" })).toBeVisible();
-    await expect(standup.getByLabel("2 speakers")).toBeVisible();
+    const standup = page.getByRole("listitem", { name: "standup" });
+    await expect(standup.getByRole("link", { name: "standup" })).toBeVisible();
+    await expect(standup.getByRole("img", { name: "2 speakers" })).toBeVisible();
     // The model is a detail, not the row's subtitle (critique: "model repo ID as subtitle").
     await expect(standup).not.toContainText("mlx-community");
     await standup.getByRole("button", { name: "Details" }).click();
@@ -82,7 +83,7 @@ test.describe("journey 1: see the library", () => {
     await expect(made).toContainText("parakeet");
     await expect(standup.locator("dt", { hasText: "Model" }).locator("+ dd")).toHaveText("mlx-community/parakeet-tdt-0.6b-v3");
     await expect(standup.locator("dt", { hasText: "Speakers" }).locator("+ dd")).toHaveText("2 speakers");
-    const review = page.getByRole("listitem", { name: "review.wav" });
+    const review = page.getByRole("listitem", { name: "review" });
     await review.getByRole("button", { name: "Details" }).click();
     await expect(review.locator("dt", { hasText: "Made" }).locator("+ dd")).toHaveText(date);
     await expect(review.locator("dt", { hasText: "Made" }).locator("+ dd")).toContainText("whisper");
@@ -93,7 +94,7 @@ test.describe("journey 1: see the library", () => {
 /** Open the standup's transcript the way a person does: from its line in the library. */
 async function openStandup(page: Page) {
   await page.goto(server.url);
-  await page.getByRole("listitem", { name: "standup.wav" }).getByRole("link", { name: "standup.wav" }).click();
+  await page.getByRole("listitem", { name: "standup" }).getByRole("link", { name: "standup" }).click();
   await expect(page).toHaveURL(new RegExp(`recording=${ids.standup.recording}&transcript=${ids.standup.transcript}$`));
   await expect(page.getByRole("article", { name: "Transcript" }).locator("p")).toHaveCount(3);
 }

@@ -17,7 +17,7 @@ import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
 import { type Picked, SelectionToolbar } from "@/features/edit/SelectionToolbar";
 import { TimingStrip } from "@/features/edit/TimingStrip";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
-import { displayTitle } from "@/features/library/title";
+import { displayTitle, titleFace } from "@/features/library/title";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
 import { PLAYER_HEIGHT } from "@/features/player/playhead";
@@ -392,12 +392,22 @@ type PageProps = {
   sheet?: Sheet;
 };
 
+/** The recording's title as the library shows it, in Nastaliq when it is in Urdu script (Hashiya spec, Type). */
+function PageTitle({ title }: { title: string }) {
+  const face = titleFace(title);
+  return (
+    <h1 dir="auto" lang={face.lang} className={`min-w-0 flex-1 truncate font-semibold ${face.className}`}>
+      {title}
+    </h1>
+  );
+}
+
 function Page({ opened, transcriptId, reading, article, children, tools, muteSpans, controls, corrections: fixed, names, nameplate, review, selectOnTap = false, sheet = READER_SHEET }: PageProps) {
   const { recording, doc } = opened;
   return (
     <>
       <AppBar back settings={<KeysItem sheet={sheet} />}>
-        <h1 className="min-w-0 flex-1 truncate font-reading text-lg font-semibold">{displayTitle(recording)}</h1>
+        <PageTitle title={displayTitle(recording)} />
         <VersionPicker recording={recording} transcript={transcriptId} />
         <UnsureNav reading={reading} model={doc.model} article={article} />
         {tools}

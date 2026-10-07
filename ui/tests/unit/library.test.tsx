@@ -101,8 +101,8 @@ describe("the library page", () => {
   it("lists every recording in the order the server sent, newest first", async () => {
     const seen = serve(ROWS);
     render(<LibraryPage />);
-    const items = await screen.findAllByRole("listitem", { name: /\.(mov|m4a)$/ });
-    expect(items.map((li) => li.getAttribute("aria-label"))).toEqual(["review.mov", "standup.m4a"]);
+    const items = await screen.findAllByRole("listitem", { name: /^(review|standup)$/ });
+    expect(items.map((li) => li.getAttribute("aria-label"))).toEqual(["review", "standup"]);
     const request = seen.mock.calls[0]?.[0];
     expect(new URL(request?.url ?? "").pathname).toBe("/api/recordings");
     expect(request?.headers.get("Authorization")).toBe("Bearer a-token");
@@ -111,7 +111,7 @@ describe("the library page", () => {
   it("keeps date, engine and model under Details, and tags the row's language", async () => {
     serve(ROWS);
     render(<LibraryPage />);
-    const review = await screen.findByRole("listitem", { name: "review.mov" });
+    const review = await screen.findByRole("listitem", { name: "review" });
     expect(within(review).getByText("Urdu")).toBeTruthy();
     // No model id on the row itself (critique: "model repo ID as subtitle").
     expect(within(review).queryByText(/mlx-community/)).toBeNull();
@@ -126,8 +126,8 @@ describe("the library page", () => {
   it("shows an adopted transcript's engine as unknown, and one speaker as 1 speaker", async () => {
     serve(ROWS);
     render(<LibraryPage />);
-    const standup = await screen.findByRole("listitem", { name: "standup.m4a" });
-    expect(within(standup).getByLabelText("1 speaker")).toBeTruthy();
+    const standup = await screen.findByRole("listitem", { name: "standup" });
+    expect(within(standup).getByRole("img", { name: "1 speaker" })).toBeTruthy();
     fireEvent.click(within(standup).getByRole("button", { name: "Details" }));
     expect(within(standup).getByText("Made").nextElementSibling?.textContent).toMatch(/unknown engine$/);
     expect(within(standup).getByText("Speakers").nextElementSibling?.textContent).toBe("1 speaker");
@@ -137,32 +137,32 @@ describe("the library page", () => {
   it("keeps a missing recording, greyed out, with its last known path", async () => {
     serve(ROWS);
     render(<LibraryPage />);
-    const standup = await screen.findByRole("listitem", { name: "standup.m4a" });
+    const standup = await screen.findByRole("listitem", { name: "standup" });
     expect(standup.getAttribute("data-missing")).toBe("true");
-    expect(within(standup).getByRole("link", { name: "standup.m4a" }).className).toContain("text-muted-foreground");
+    expect(within(standup).getByRole("link", { name: "standup" }).className).toContain("text-muted-foreground");
     expect(within(standup).getByText("Not where it was last seen.")).toBeTruthy();
     fireEvent.click(within(standup).getByRole("button", { name: "Details" }));
     expect(within(standup).getByText("/Volumes/Old disk/standup.m4a")).toBeTruthy();
-    const review = screen.getByRole("listitem", { name: "review.mov" });
+    const review = screen.getByRole("listitem", { name: "review" });
     expect(review.getAttribute("data-missing")).toBeNull();
   });
 
   it("opens each recording's latest transcript from its title", async () => {
     serve(ROWS);
     render(<LibraryPage />);
-    const review = await screen.findByRole("listitem", { name: "review.mov" });
-    expect(within(review).getByRole("link", { name: "review.mov" }).getAttribute("href")).toBe("/?recording=2&transcript=7");
-    const standup = screen.getByRole("listitem", { name: "standup.m4a" });
-    expect(within(standup).getByRole("link", { name: "standup.m4a" }).getAttribute("href")).toBe("/?recording=1&transcript=3");
+    const review = await screen.findByRole("listitem", { name: "review" });
+    expect(within(review).getByRole("link", { name: "review" }).getAttribute("href")).toBe("/?recording=2&transcript=7");
+    const standup = screen.getByRole("listitem", { name: "standup" });
+    expect(within(standup).getByRole("link", { name: "standup" }).getAttribute("href")).toBe("/?recording=1&transcript=3");
   });
 
   it("offers Transcribe only on a recording with no transcript, and Transcribe again under Details", async () => {
     serve([...ROWS, { ...ROWS[0], id: 5, path: "/r/fresh.wav", transcripts: [] }]);
     render(<LibraryPage />);
-    const fresh = await screen.findByRole("listitem", { name: "fresh.wav" });
+    const fresh = await screen.findByRole("listitem", { name: "fresh" });
     expect(within(fresh).getByRole("button", { name: "Transcribe" })).toBeTruthy();
     expect(within(fresh).queryByRole("link")).toBeNull();
-    const review = screen.getByRole("listitem", { name: "review.mov" });
+    const review = screen.getByRole("listitem", { name: "review" });
     expect(within(review).queryByRole("button", { name: /^Transcribe/ })).toBeNull();
     fireEvent.click(within(review).getByRole("button", { name: "Details" }));
     expect(within(review).getByRole("button", { name: "Transcribe again" })).toBeTruthy();
@@ -218,15 +218,86 @@ describe("the library page", () => {
     expect(await patch?.json()).toEqual({ title: "" });
   });
 
+  it("sets an Urdu-script title in Nastaliq with lang ur, and a Latin one in Literata", async () => {
+    serve([{ ...ROWS[0], title: "امی کی کال" }, ROWS[1]]);
+    render(<LibraryPage />);
+    const urdu = await screen.findByRole("link", { name: "امی کی کال" });
+    expect(urdu.getAttribute("lang")).toBe("ur");
+    expect(urdu.getAttribute("dir")).toBe("auto");
+    expect(urdu.className).toContain("font-urdu");
+    const latin = screen.getByRole("link", { name: "standup" });
+    expect(latin.getAttribute("lang")).toBeNull();
+    expect(latin.className).toContain("font-reading");
+    fireEvent.click(screen.getByRole("button", { name: "Rename امی کی کال" }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect(field.getAttribute("lang")).toBe("ur");
+    expect(field.className).toContain("font-urdu");
+  });
+
+  it("keeps focus where it went when the rename field is left, and saves what was typed", async () => {
+    const seen = serve(ROWS);
+    render(<LibraryPage />);
+    const row = await screen.findByRole("listitem", { name: "review" });
+    fireEvent.click(within(row).getByRole("button", { name: "Rename review" }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    fireEvent.change(field, { target: { value: "Weekly review" } });
+    const search = screen.getByRole("searchbox", { name: "Search titles" });
+    // A real move of focus, as a Tab or a click on the search would make.
+    act(() => search.focus());
+    await vi.waitFor(() => expect(seen.mock.calls.some(([r]) => r.method === "PATCH")).toBe(true));
+    await vi.waitFor(() => expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull());
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("keeps the typed title in the field when the server refuses it, and shows why", async () => {
+    const refusal = { error: "HTTP 422", message: "title too long", request: "x" };
+    const seen = serve(ROWS);
+    seen.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/jobs") return Response.json([]);
+      if (request.method === "PATCH") return Response.json(refusal, { status: 422 });
+      return Response.json(ROWS);
+    });
+    render(<LibraryPage />);
+    const row = await screen.findByRole("listitem", { name: "review" });
+    fireEvent.click(within(row).getByRole("button", { name: "Rename review" }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    fireEvent.change(field, { target: { value: "Weekly review" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await vi.waitFor(() => expect(currentError()).toEqual({ ...refusal, request: "/api/recordings/2" }));
+    expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Weekly review");
+    // The error dialog taking focus is a blur, not a second try.
+    fireEvent.blur(screen.getByRole("textbox", { name: "Title" }));
+    expect(seen.mock.calls.filter(([r]) => r.method === "PATCH")).toHaveLength(1);
+  });
+
+  it("finds an Urdu title typed with Arabic letters, and a title in any case", async () => {
+    serve([{ ...ROWS[0], title: "امی کی کال" }, ROWS[1]]);
+    render(<LibraryPage />);
+    await screen.findByRole("listitem", { name: "امی کی کال" });
+    const search = screen.getByRole("searchbox", { name: "Search titles" });
+    expect(search.getAttribute("dir")).toBe("auto");
+    // Arabic yeh and kaf (U+064A, U+0643) for the Urdu ی and ک the title holds.
+    fireEvent.change(search, { target: { value: "\u0643\u064A" } });
+    expect(screen.getByRole("listitem", { name: "امی کی کال" })).toBeTruthy();
+    expect(screen.queryByRole("listitem", { name: "standup" })).toBeNull();
+    fireEvent.change(search, { target: { value: "STAND" } });
+    expect(screen.getByRole("listitem", { name: "standup" })).toBeTruthy();
+  });
+
   it("filters by title as you type, and says when nothing matches", async () => {
     serve(ROWS);
     render(<LibraryPage />);
-    await screen.findByRole("listitem", { name: "review.mov" });
+    await screen.findByRole("listitem", { name: "review" });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search titles" }), { target: { value: "stand" } });
-    expect(screen.queryByRole("listitem", { name: "review.mov" })).toBeNull();
-    expect(screen.getByRole("listitem", { name: "standup.m4a" })).toBeTruthy();
+    expect(screen.queryByRole("listitem", { name: "review" })).toBeNull();
+    expect(screen.getByRole("listitem", { name: "standup" })).toBeTruthy();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search titles" }), { target: { value: "zzz" } });
-    expect(screen.getByText(/No title has/)).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("No title or file name has “zzz” in it.");
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getAllByRole("listitem", { name: /^(review|standup)$/ })).toHaveLength(2);
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Search titles" }));
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("shows review progress, and older versions folded", async () => {
@@ -241,10 +312,10 @@ describe("the library page", () => {
       },
     ]);
     render(<LibraryPage />);
-    const row = await screen.findByRole("listitem", { name: "review.mov" });
+    const row = await screen.findByRole("listitem", { name: "review" });
     expect(within(row).getByText("212 of 252 checked")).toBeTruthy();
     const versions = within(row).getByRole("button", { name: "2 earlier versions" });
-    expect(within(row).getByRole("link", { name: "review.mov" }).getAttribute("href")).toBe("/?recording=2&transcript=9");
+    expect(within(row).getByRole("link", { name: "review" }).getAttribute("href")).toBe("/?recording=2&transcript=9");
     expect(within(row).getAllByRole("link")).toHaveLength(1);
     fireEvent.click(versions);
     expect(
@@ -312,7 +383,7 @@ describe("bringing a recording in (#110)", () => {
     render(<LibraryPage />);
     expect(await screen.findByRole("heading", { name: "No recordings yet" })).toBeTruthy();
     act(() => emptyAdd().click());
-    const row = await screen.findByRole("listitem", { name: "demo.mov" });
+    const row = await screen.findByRole("listitem", { name: "demo" });
     expect(asked("/api/recordings/import").map((r) => r.method)).toEqual(["POST"]);
     // Nothing about where the file is goes up: the server asks the Mac.
     expect(await asked("/api/recordings/import")[0]?.text()).toBe("");
@@ -354,9 +425,14 @@ describe("bringing a recording in (#110)", () => {
       Response.json(null),
     );
     render(<LibraryPage />);
-    const row = await screen.findByRole("listitem", { name: "cut.mov" });
+    const row = await screen.findByRole("listitem", { name: "cut" });
     expect(within(row).getByRole("note").textContent).toBe(`ffmpeg could not read this file: ${said}`);
     expect((within(row).getByRole("button", { name: "Transcribe" }) as HTMLButtonElement).disabled).toBe(true);
+    // One quiet line with Relink (Hashiya spec), above the row's stretched link so it can be selected.
+    expect(within(row).getByRole("button", { name: "Relink" })).toBeTruthy();
+    expect(within(row).getByRole("note").parentElement?.className).toContain("z-10");
+    // No transcript, nothing to open: no hover tint saying otherwise.
+    expect(row.className).not.toContain("hover:");
   });
 
   it("re-points a missing recording from its row", async () => {
@@ -367,10 +443,10 @@ describe("bringing a recording in (#110)", () => {
       return Response.json(rows[0]);
     });
     render(<LibraryPage />);
-    const row = await screen.findByRole("listitem", { name: "demo.mov" });
+    const row = await screen.findByRole("listitem", { name: "demo" });
     expect(screen.getAllByRole("button", { name: "Relink" })).toHaveLength(1);
     act(() => within(row).getByRole("button", { name: "Relink" }).click());
-    const found = await screen.findByRole("listitem", { name: "demo-renamed.mov" });
+    const found = await screen.findByRole("listitem", { name: "demo-renamed" });
     expect(found.getAttribute("data-missing")).toBeNull();
     expect(screen.queryByRole("button", { name: "Relink" })).toBeNull();
   });

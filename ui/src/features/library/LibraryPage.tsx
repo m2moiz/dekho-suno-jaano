@@ -1,5 +1,5 @@
 import { Search } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -45,11 +45,24 @@ function useLate(on: boolean, ms: number): boolean {
   return late;
 }
 
+// Letters typed one way and stored another: an Arabic keyboard's yeh, kaf
+// and heh against the Urdu letters a title is written in (ي ى to ی, ك to ک,
+// ه to ہ), and the short-vowel marks, which a search never needs to match.
+const VARIANTS: Record<string, string> = { "\u064A": "\u06CC", "\u0649": "\u06CC", "\u0643": "\u06A9", "\u0647": "\u06C1" };
+const MARKS = /[\u064B-\u065F\u0670]/g;
+
+/** `text` as search compares it: one form of each Urdu letter, no vowel marks, any case. */
+function fold(text: string): string {
+  return text
+    .replace(MARKS, "")
+    .replace(/[\u064A\u0649\u0643\u0647]/g, (ch) => VARIANTS[ch] ?? ch)
+    .toLocaleLowerCase();
+}
+
 /** Titles and file names holding every word of `query`, in any order and case. */
 function matches(row: RecordingRow, query: string): boolean {
-  const haystack = `${displayTitle(row)} ${fileName(row.path)}`.toLocaleLowerCase();
-  return query
-    .toLocaleLowerCase()
+  const haystack = fold(`${displayTitle(row)} ${fileName(row.path)}`);
+  return fold(query)
     .split(/\s+/)
     .filter(Boolean)
     .every((word) => haystack.includes(word));
@@ -110,6 +123,7 @@ export function LibraryPage() {
   const [changed, setChanged] = useState(0);
   const reload = useCallback(() => setChanged((n) => n + 1), []);
   const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement>(null);
   const late = useLate(loaded.state === "loading", SKELETON_AFTER_MS);
   useEffect(() => {
     let live = true;
@@ -132,14 +146,17 @@ export function LibraryPage() {
   const shown = loaded.state === "ready" ? loaded.rows.filter((row) => matches(row, query)) : [];
   return (
     <>
-      <AppBar>
+      {/* The bar's content lines up with the list below it. */}
+      <AppBar measure="max-w-3xl">
         <h1 className="sr-only">Library</h1>
         {/* Nothing to search in an empty library. */}
         {!empty && (
           <label className="relative order-last flex min-w-0 basis-full items-center sm:order-none sm:max-w-sm sm:flex-1 sm:basis-auto">
             <Search aria-hidden className="pointer-events-none absolute left-3 size-4 text-field-muted" />
             <Input
+              ref={search}
               type="search"
+              dir="auto"
               aria-label="Search titles"
               placeholder="Search titles"
               value={query}
@@ -181,19 +198,46 @@ export function LibraryPage() {
             </p>
             <AddRecording onAdded={reload} onField={false} />
           </section>
-        ) : shown.length === 0 ? (
-          <p className="text-muted-foreground">No title has “{query.trim()}” in it.</p>
         ) : (
-          // One surface, a hairline between conversations: an archive to read
-          // down, not a stack of boxes (craft floor, "cards are the lazy container").
-          <ul
-            className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card text-card-foreground"
-            aria-label="Recordings"
-          >
-            {shown.map((row) => (
-              <RecordingRowItem key={row.id} row={row} onChanged={reload} />
-            ))}
-          </ul>
+          // A block, not the main column's gap: the status line takes no room while empty.
+          <div>
+            {/* On the page from the first list, so a screen reader hears it
+                when a search stops matching (a live region added already
+                full is often not read). */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <p role="status" className="text-muted-foreground">
+                {shown.length === 0 && (
+                  <>
+                    No title or file name has “<bdi>{query.trim()}</bdi>” in it.
+                  </>
+                )}
+              </p>
+              {shown.length === 0 && (
+                <Button
+                  variant="outline"
+                  className="h-11 px-4 sm:h-9"
+                  onClick={() => {
+                    setQuery("");
+                    search.current?.focus();
+                  }}
+                >
+                  Clear search
+                </Button>
+              )}
+            </div>
+            {shown.length > 0 && (
+              // One surface, a hairline between conversations: an archive to read
+              // down, not a stack of boxes (craft floor, "cards are the lazy container").
+              <ul
+                className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card text-card-foreground"
+                aria-label="Recordings"
+              >
+                {shown.map((row) => (
+                  <RecordingRowItem key={row.id} row={row} onChanged={reload} />
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </main>
     </>

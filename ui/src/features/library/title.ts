@@ -11,10 +11,18 @@
 // "Recording 2025-09-20T21-05.wav". The stamp is read as this Mac's local
 // time, which is what the recorder wrote.
 
-import { fileName } from "./describe";
+import { langOf } from "@/lib/script";
+import { durationLabel, fileName } from "./describe";
 import type { RecordingRow } from "./types";
 
 const STAMP = /(\d{4})-?(\d{2})-?(\d{2})(?:\s+at\s+|[ _T-])(\d{1,2})[.:-]?(\d{2})(?:[.:-]?(\d{2}))?(?:\s*([AaPp])\.?[Mm]\.?)?/;
+// A cut of a longer recording names its span after the stamp, minutes and
+// seconds: "recording-20250920-094234_07m00-17m00.m4a" (the one cut in the
+// owner's library, counted with the same `sqlite3` query).
+const CUT = /_(\d+)m(\d{2})-(\d+)m(\d{2})(?=\.[^.]*$|$)/;
+// The sound and picture containers a recording comes in. Only these are cut
+// from a file name standing in for a title: "notes.v2" keeps its ".v2".
+const MEDIA = /\.(?:wav|m4a|mp3|mp4|mov|aac|flac|ogg|oga|opus|webm|mkv|m4v|caf|aiff?|amr|3gp|wma)$/i;
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -47,10 +55,34 @@ export function whenTitle(when: Date, now: Date = new Date()): string {
   return `${DAYS[when.getDay()] ?? ""} ${when.getDate()} ${MONTHS[when.getMonth()] ?? ""}${year}, ${hour}:${minute} ${half}`;
 }
 
-/** The title a person gave the recording, else when its file's name says it was made, else that name. */
+/** "7:00 to 17:00" for a cut's span in its file's name, or null when the name holds none. */
+function cutOf(name: string): string | null {
+  const found = CUT.exec(name);
+  if (found === null) return null;
+  const [from, to] = [Number(found[1]) * 60 + Number(found[2]), Number(found[3]) * 60 + Number(found[4])];
+  return `${durationLabel(from) ?? ""} to ${durationLabel(to) ?? ""}`;
+}
+
+/**
+ * The title a person gave the recording, else when its file's name says it
+ * was made (and the span, for a cut), else that name without its extension.
+ */
 export function displayTitle(row: Pick<RecordingRow, "title" | "path">, now?: Date): string {
   if (row.title) return row.title;
   const name = fileName(row.path);
   const when = stampOf(name);
-  return when === null ? name : whenTitle(when, now);
+  if (when === null) return name.replace(MEDIA, "") || name;
+  const cut = cutOf(name);
+  return cut === null ? whenTitle(when, now) : `${whenTitle(when, now)} · ${cut}`;
+}
+
+/**
+ * How a title is set (Hashiya spec, Type): one that opens in Urdu script in
+ * Nastaliq, about 1.3 times the size (text-lg's 1.125rem x 1.3), with the
+ * line height its tall letters need, and lang="ur"; any other in Literata.
+ */
+export function titleFace(title: string): { lang: "ur" | undefined; className: string } {
+  return langOf(title) === "ur"
+    ? { lang: "ur", className: "font-urdu text-[1.4625rem] leading-[2.1]" }
+    : { lang: undefined, className: "font-reading text-lg" };
 }

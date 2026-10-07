@@ -23,7 +23,7 @@ import {
 } from "./describe";
 import { relinkRecording } from "./imports";
 import { retitle } from "./retitle";
-import { displayTitle } from "./title";
+import { displayTitle, titleFace } from "./title";
 import type { RecordingRow, TranscriptRow } from "./types";
 
 // The longest title the server keeps (dsj/ui/schemas.py, TitleUpdate).
@@ -32,7 +32,7 @@ const TITLE_MAX = 200;
 /** Speakers as coloured dots, one a speaker up to six (Hashiya spec, Library). */
 function SpeakerDots({ count }: { count: number }) {
   return (
-    <span className="flex items-center gap-1" aria-label={`${count} ${count === 1 ? "speaker" : "speakers"}`}>
+    <span role="img" className="flex items-center gap-1" aria-label={`${count} ${count === 1 ? "speaker" : "speakers"}`}>
       {Array.from({ length: Math.min(count, 6) }, (_, i) => (
         <span key={i} aria-hidden className="size-2.5 rounded-full" style={{ background: speakerColour(i) }} />
       ))}
@@ -53,60 +53,97 @@ function Title({
   onChanged: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [typed, setTyped] = useState(title);
   const rename = useRef<HTMLButtonElement>(null);
-  // Focus goes back to the pencil once the field closes, not to the page's start.
-  const closed = useRef(false);
+  // Set when the field closes by Enter or Escape: focus goes back to the
+  // pencil then. Closing because focus left (a Tab, a click on the search)
+  // leaves it where the person sent it.
+  const refocus = useRef(false);
+  // The field is going away: its blur is not a person leaving it.
+  const closing = useRef(false);
+  // The text last sent, so a blur after a refusal (the error dialog taking
+  // focus) does not send the same thing again; Enter always does.
+  const sent = useRef<string | null>(null);
+  const saving = useRef(false);
   useEffect(() => {
-    if (renaming || !closed.current) return;
-    closed.current = false;
+    if (renaming || !refocus.current) return;
+    refocus.current = false;
     rename.current?.focus();
   }, [renaming]);
-  const close = () => {
-    closed.current = true;
+  const open = () => {
+    closing.current = false;
+    sent.current = null;
+    setTyped(title);
+    setRenaming(true);
+  };
+  const close = (back: boolean) => {
+    closing.current = true;
+    refocus.current = back;
     setRenaming(false);
   };
-  const save = (typed: string) => {
-    close();
-    if (typed === title) return;
+  const save = (back: boolean) => {
+    const text = typed.trim();
+    if (saving.current) return;
+    if (text === title) {
+      close(back);
+      return;
+    }
     // The title it shows without one is not a title someone typed.
-    const next = typed === displayTitle({ title: null, path: row.path }) ? "" : typed;
-    retitle(row.id, next).then(onChanged, (thrown: unknown) =>
-      showError(fromThrown(thrown, `/api/recordings/${row.id}`)),
+    const next = text === displayTitle({ title: null, path: row.path }) ? "" : text;
+    sent.current = typed;
+    saving.current = true;
+    // Not closed until the server has it: a refusal leaves the field open
+    // with what was typed, beside the error.
+    retitle(row.id, next).then(
+      () => {
+        saving.current = false;
+        close(back);
+        onChanged();
+      },
+      (thrown: unknown) => {
+        saving.current = false;
+        showError(fromThrown(thrown, `/api/recordings/${row.id}`));
+      },
     );
   };
   if (renaming) {
+    const face = titleFace(typed);
     return (
       <Input
         autoFocus
         aria-label="Title"
-        defaultValue={title}
+        value={typed}
         dir="auto"
+        lang={face.lang}
         maxLength={TITLE_MAX}
-        className="relative z-10 h-11 font-reading text-lg md:text-lg sm:h-9"
+        // Its own size at every width: the primitive drops to text-sm from md.
+        className={`relative z-10 h-auto min-h-11 py-0.5 sm:min-h-9 ${face.className} ${face.lang === "ur" ? "md:text-[1.4625rem]" : "md:text-lg"}`}
+        onChange={(event) => setTyped(event.target.value)}
         onFocus={(event) => event.currentTarget.select()}
         // Leaving the field keeps what was typed, as Enter does; only Escape
         // throws it away (a phone has no Enter to reach for).
-        onBlur={(event) => {
-          if (closed.current) return;
-          save(event.currentTarget.value.trim());
+        onBlur={() => {
+          if (closing.current || typed === sent.current) return;
+          save(false);
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
-            close();
+            close(true);
           }
           if (event.key !== "Enter") return;
           event.preventDefault();
-          save(event.currentTarget.value.trim());
+          save(true);
         }}
       />
     );
   }
-  const missing = row.missing ? "text-muted-foreground" : "";
+  const face = titleFace(title);
+  const look = `min-w-0 font-semibold break-words text-pretty ${face.className} ${row.missing ? "text-muted-foreground" : ""}`;
   return (
     <div className="flex min-w-0 items-center gap-1">
       {href === null ? (
-        <span dir="auto" className={`truncate font-reading text-lg font-semibold ${missing}`}>
+        <span dir="auto" lang={face.lang} className={look}>
           {title}
         </span>
       ) : (
@@ -116,7 +153,8 @@ function Title({
         <a
           href={href}
           dir="auto"
-          className={`truncate font-reading text-lg font-semibold underline-offset-4 after:absolute after:inset-0 group-hover:underline ${missing}`}
+          lang={face.lang}
+          className={`${look} underline-offset-4 after:absolute after:inset-0 group-hover:underline`}
         >
           {title}
         </a>
@@ -127,7 +165,7 @@ function Title({
         size="icon"
         aria-label={`Rename ${title}`}
         className="relative z-10 size-11 shrink-0 text-muted-foreground sm:size-9"
-        onClick={() => setRenaming(true)}
+        onClick={open}
       >
         <Pencil aria-hidden className="size-4" />
       </Button>
@@ -204,11 +242,21 @@ function DetailsPanel({ row, latest, again }: { row: RecordingRow; latest: Trans
   );
 }
 
-function Relink({ row, onChanged }: { row: RecordingRow; onChanged: () => void }) {
+/**
+ * A file dsj cannot use where it is (Hashiya spec, Library: "a missing or
+ * unreadable file shown as one quiet line with Relink"). Above the row's
+ * stretched link, so its words can be selected and copied.
+ */
+function FileTrouble({ row, onChanged }: { row: RecordingRow; onChanged: () => void }) {
   const [relinking, setRelinking] = useState(false);
   return (
-    <p className="relative z-10 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-      Not where it was last seen.
+    <div className="relative z-10 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+      {row.missing && <span>Not where it was last seen.</span>}
+      {row.unreadable !== null && (
+        <p className="whitespace-pre-wrap select-text" role="note">
+          ffmpeg could not read this file: {row.unreadable}
+        </p>
+      )}
       <Button
         variant="outline"
         size="sm"
@@ -230,7 +278,7 @@ function Relink({ row, onChanged }: { row: RecordingRow; onChanged: () => void }
       >
         Relink
       </Button>
-    </p>
+    </div>
   );
 }
 
@@ -260,7 +308,8 @@ export function RecordingRowItem({ row, onChanged }: { row: RecordingRow; onChan
         <li
           aria-label={title}
           data-missing={row.missing || undefined}
-          className="group relative px-4 py-3 transition-colors focus-within:bg-muted/50 hover:bg-muted/50"
+          // The tint says "this opens": only a row with a transcript does.
+          className={`group relative px-4 py-3 transition-colors ${latest === undefined ? "" : "focus-within:bg-muted/50 hover:bg-muted/50"}`}
         />
       }
     >
@@ -281,12 +330,7 @@ export function RecordingRowItem({ row, onChanged }: { row: RecordingRow; onChan
           <ChevronDown aria-hidden className="size-3.5 transition-transform group-data-[panel-open]/trigger:rotate-180" />
         </CollapsibleTrigger>
       </div>
-      {row.missing && <Relink row={row} onChanged={onChanged} />}
-      {row.unreadable !== null && (
-        <p className="mt-1 text-sm text-muted-foreground select-text" role="note">
-          ffmpeg could not read this file: {row.unreadable}
-        </p>
-      )}
+      {(row.missing || row.unreadable !== null) && <FileTrouble row={row} onChanged={onChanged} />}
       {/* In the row's own column, so a running job's bar has the row's width. */}
       {(latest === undefined || news) && (
         <div className="relative z-10">

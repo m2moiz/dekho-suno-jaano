@@ -34,8 +34,9 @@ test("a transcript opened from the library reads as typeset paragraphs", async (
   // A recording of this browser's own, so its row's title link is this
   // transcript: a length of its own, since the library knows a recording by
   // its contents, and the run's library is shared.
-  const name = `reader-${info.project.name}.wav`;
-  const seeded = seed(transcript(tone(dir, 14 + info.project.name.length / 10, name)), dir);
+  // Its title is the file's name without the extension.
+  const name = `reader-${info.project.name}`;
+  const seeded = seed(transcript(tone(dir, 14 + info.project.name.length / 10, `${name}.wav`)), dir);
   const library = new URL(readerUrl(seeded));
   library.search = "";
   await page.goto(library.toString());

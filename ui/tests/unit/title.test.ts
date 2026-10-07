@@ -2,7 +2,7 @@
 // file's timestamp, e.g. 'Sat 20 Sep, 9:42 am', else the filename").
 import { describe, expect, it } from "vitest";
 
-import { displayTitle, stampOf } from "../../src/features/library/title";
+import { displayTitle, stampOf, titleFace } from "../../src/features/library/title";
 
 // 7 Oct 2025: the same year as most stamps below, so they print without one.
 const NOW = new Date(2025, 9, 7, 12, 0);
@@ -14,10 +14,16 @@ describe("displayTitle", () => {
     ["20250920_094234.m4a", "Sat 20 Sep, 9:42 am"],
     // The phone recorder the owner's library mostly holds: date and time joined by a hyphen.
     ["recording-20250920-094234.m4a", "Sat 20 Sep, 9:42 am"],
-    ["recording-20250920-094234_07m00-17m00.m4a", "Sat 20 Sep, 9:42 am"],
+    // A cut of a longer recording says which stretch it is.
+    ["recording-20250920-094234_07m00-17m00.m4a", "Sat 20 Sep, 9:42 am · 7:00 to 17:00"],
+    ["recording-20250920-094234_59m30-75m00.m4a", "Sat 20 Sep, 9:42 am · 59:30 to 1:15:00"],
     ["2025-09-20 21.05.10.m4a", "Sat 20 Sep, 9:05 pm"],
     ["Recording 2024-03-05T21-05.wav", "Tue 5 Mar 2024, 9:05 pm"],
-    ["standup.wav", "standup.wav"],
+    // A name standing in for a title drops its sound or picture extension, and only that.
+    ["standup.wav", "standup"],
+    ["budget call.M4A", "budget call"],
+    ["notes.v2", "notes.v2"],
+    [".wav", ".wav"],
   ])("%s reads as %s", (name, title) => {
     expect(displayTitle({ title: null, path: `/Users/me/Recordings/${name}` }, NOW)).toBe(title);
   });
@@ -34,4 +40,16 @@ describe("stampOf", () => {
       expect(stampOf(name)).toBeNull();
     },
   );
+});
+
+describe("titleFace", () => {
+  it("sets a title that opens in Urdu script in Nastaliq, with lang ur", () => {
+    expect(titleFace("امی کی کال")).toEqual({ lang: "ur", className: expect.stringContaining("font-urdu") });
+    expect(titleFace("3 بجے کی میٹنگ").lang).toBe("ur");
+  });
+
+  it("sets any other title in Literata, Roman Urdu included", () => {
+    expect(titleFace("Ammi ki call")).toEqual({ lang: undefined, className: expect.stringContaining("font-reading") });
+    expect(titleFace("Sat 20 Sep, 9:42 am").lang).toBeUndefined();
+  });
 });

@@ -15,7 +15,18 @@ export const BAR_HEIGHT = "--dsj-bar-height";
  * tools, then settings. It wraps to a second row on a phone rather than
  * squeezing its targets under 44 px.
  */
-export function AppBar({ back = false, children, settings }: { back?: boolean; children?: ReactNode; settings?: ReactNode }) {
+export function AppBar({
+  back = false,
+  children,
+  settings,
+  measure = "max-w-6xl",
+}: {
+  back?: boolean;
+  children?: ReactNode;
+  settings?: ReactNode;
+  /** The bar content's max width, so a page can line it up with its own column. */
+  measure?: string;
+}) {
   const bar = useRef<HTMLElement>(null);
   useEffect(() => {
     const element = bar.current;
@@ -30,7 +41,7 @@ export function AppBar({ back = false, children, settings }: { back?: boolean; c
   }, []);
   return (
     <header ref={bar} className="sticky top-0 z-30 bg-field text-field-foreground">
-      <div className="mx-auto flex min-h-14 w-full max-w-6xl flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-6">
+      <div className={`mx-auto flex min-h-14 w-full ${measure} flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-6`}>
         {back ? (
           <a
             href="/"

@@ -223,7 +223,10 @@ describe("TranscriptPage", () => {
   it("opens the transcript under its recording's name, with the token on both requests", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByText(" Hello there.", { normalizer: (s) => s })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1, name: "review.m4a" })).toBeTruthy();
+    // The library's title for it: the file's name without its extension.
+    const heading = screen.getByRole("heading", { level: 1, name: "review" });
+    expect(heading.getAttribute("lang")).toBeNull();
+    expect(heading.className).toContain("font-reading");
     // Speaker turns are list items under that one heading, not headings of their own.
     expect(screen.getAllByRole("heading")).toHaveLength(1);
     expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
@@ -237,6 +240,20 @@ describe("TranscriptPage", () => {
     expect(screen.getByRole("note").textContent).toContain("cannot be edited");
     expect(document.querySelector("audio")?.getAttribute("src")).toBe("/api/recording/2/media?t=a-token");
     expect(currentError()).toBeNull();
+  });
+
+  it("sets a recording's Urdu-script title in Nastaliq, with lang ur", async () => {
+    const reply = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (request: Request) =>
+      new URL(request.url).pathname === "/api/recordings"
+        ? Response.json([{ ...RECORDING, title: "امی کی کال" }])
+        : (reply as (r: Request) => Promise<Response>)(request),
+    );
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const heading = await screen.findByRole("heading", { level: 1, name: "امی کی کال" });
+    expect(heading.getAttribute("lang")).toBe("ur");
+    expect(heading.getAttribute("dir")).toBe("auto");
+    expect(heading.className).toContain("font-urdu");
   });
 
   it("shows the error dialog when the library has no such transcript", async () => {
