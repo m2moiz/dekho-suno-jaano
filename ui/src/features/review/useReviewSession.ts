@@ -11,7 +11,7 @@
 
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
-import { type Editable, NotSaved, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
+import { type Editable, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
 import { speakerLabels } from "@/features/edit/readContent";
 import { newSpeakerLabel, speakerAt, speakerChange } from "@/features/edit/speaker";
 import type { PlayerControls } from "@/features/player/Player";
@@ -184,7 +184,11 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     () => documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments, corrections: fixes }),
     [sha, pass, segments, index, startedAt, fixes],
   );
-  const { state: saving, flush } = useReviewSave(transcriptId, document);
+  const { state: reviewSaving, flush } = useReviewSave(transcriptId, document);
+  // The bar's one word covers both saves: Review's words go to the edit list,
+  // its checks to the review, and either can fail alone (Task 13 review, I2).
+  const saving: SaveState =
+    reviewSaving === "failed" || edits.state === "failed" ? "failed" : reviewSaving === "saving" || edits.state === "saving" ? "saving" : "saved";
   const settle = async () => {
     await Promise.all([flush(), edits.settle()]);
   };
@@ -245,9 +249,17 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const setPass = (next: ReviewPass) => {
     setPassState(next);
     writeCookie(PASS_COOKIE, next);
-    const to = entryOf(next);
+    // After a pass has finished, the next one starts at its first sentence not
+    // yet checked, and the done panel gives way to it (Task 13 review, I3).
+    const fresh = passOrder(segments.length, next, likely);
+    const to = finished ? (fresh.find((i) => segments[i]?.state !== "checked") ?? fresh[0] ?? null) : entryOf(next);
     if (to === null) {
       setNotice("There are no likely errors in this transcript. Every sentence is the pass to take.");
+      return;
+    }
+    if (finished) {
+      setFinished(false);
+      go(to, segments);
       return;
     }
     if (to === index) return;
@@ -286,13 +298,27 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
         if (!live) return;
         setLeaving(false);
         // The save's own failure is already on screen; this says why the page stayed.
-        setNotice(`Still here: ${thrown instanceof NotSaved ? thrown.message : "the last changes are not saved."}`);
+        // Review's own words: the edit list's NotSaved messages speak of exporting.
+        void thrown;
+        setNotice("Still in Review: the last changes are not saved yet, for the reason shown. Esc tries again.");
       },
     );
     return () => {
       live = false;
     };
   }, [leaving]);
+
+  // Words in the box not yet in the list are not saved anywhere: leaving the
+  // page by the browser asks first (Task 13 review, Minor 2). Esc commits them.
+  const unsaved = useRef(false);
+  unsaved.current = text !== shown;
+  useEffect(() => {
+    const leaving = (event: BeforeUnloadEvent) => {
+      if (unsaved.current) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", leaving);
+    return () => window.removeEventListener("beforeunload", leaving);
+  }, []);
 
   const leave = () => {
     controls.current?.pause();
@@ -302,6 +328,12 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
 
   const act = (action: Action, caret?: Caret) => {
     if (segment === undefined || choosing) return;
+    // While the flag menu is open its keys are its own: a key that reaches the
+    // box first (a fast Esc after Ctrl+F) only closes it (Task 13 review, I1).
+    if (flagging && action.kind !== "flag") {
+      if (action.kind === "leave") setFlagging(false);
+      return;
+    }
     switch (action.kind) {
       case "check": {
         const next = commit(segments).map((s, i) => (i === index ? { ...s, state: "checked" as const } : s));

@@ -10,6 +10,7 @@ const fetchMock = vi.hoisted(() => {
 
 import { dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
+import { KeySheet } from "../../src/features/shell/KeySheet";
 import { takeToken } from "../../src/features/session/session";
 import type { Content, Entry, Item } from "../../src/lib/editOps";
 import { installHighlights } from "./highlights";
@@ -74,6 +75,7 @@ let edits: Content[] = [];
 let reviews: Saved[] = [];
 let saved: unknown = null;
 let withOther = false;
+let refuseEdits = false;
 
 beforeEach(() => {
   installHighlights();
@@ -87,6 +89,8 @@ beforeEach(() => {
   reviews = [];
   saved = null;
   withOther = false;
+  refuseEdits = false;
+  document.cookie = "dsj-speed=; max-age=0; path=/";
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
@@ -95,6 +99,12 @@ beforeEach(() => {
     if (path === "/api/transcripts/7") return Response.json(DOC);
     if (path === "/api/transcripts/8") return Response.json(OTHER);
     if (path === "/api/transcripts/7/edits") {
+      if (request.method === "PUT" && refuseEdits) {
+        return Response.json(
+          { error: "TranscriptChanged", message: "This transcript was made again while it was open. Reload the page.", request: path },
+          { status: 409 },
+        );
+      }
       const content = request.method === "PUT" ? (body as { content: Content }).content : CONTENT;
       if (request.method === "PUT") edits.push(content);
       return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1" });
@@ -291,6 +301,142 @@ describe("Review mode on a Mac", () => {
     const went: string[] = [];
     await start((href) => went.push(href));
     fireEvent.click(screen.getByRole("link", { name: "Back to the transcript" }));
+    await vi.waitFor(() => expect(went).toEqual(["/?recording=2&transcript=7"]));
+  });
+});
+
+describe("Review mode, fix round 1", () => {
+  it("while the flag menu is open, Esc in the box closes the menu and stays, and no other key acts (I1)", async () => {
+    const went: string[] = [];
+    const field = await start((href) => went.push(href));
+    key(field, { key: "f", code: "KeyF", ctrlKey: true });
+    expect(await screen.findByRole("menu")).toBeTruthy();
+    // The menu is open but the key reaches the box first (a fast Esc, I1).
+    key(field, { key: "Enter", code: "Enter" });
+    expect(screen.getByText("0 of 3 checked")).toBeTruthy();
+    key(field, { key: "Escape", code: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(went).toEqual([]);
+    expect((await box()).value).toBe("alpha bravo charlie");
+  });
+
+  it("says Not saved when the edit list's save is refused, though the review saved (I2)", async () => {
+    refuseEdits = true;
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(reviews.length).toBeGreaterThan(0), { timeout: 2000 });
+    await vi.waitFor(() => expect(screen.getByText("Not saved")).toBeTruthy());
+    expect(screen.queryByText("Saved")).toBeNull();
+  });
+
+  it("switching pass after one has finished leaves the done panel for the new pass's first sentence (I3)", async () => {
+    withOther = true;
+    render(<ReviewPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Likely errors\s*1/ }));
+    expect((await box()).value).toBe("foxtrot");
+    key(await box(), { key: "Enter", code: "Enter" });
+    expect(await screen.findByRole("heading", { name: "This pass is done" })).toBeTruthy();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause");
+    fireEvent.click(screen.getByRole("button", { name: /^Every sentence$/ }));
+    expect((await box()).value).toBe("alpha bravo charlie");
+    expect(screen.queryByRole("heading", { name: "This pass is done" })).toBeNull();
+    // And it plays the sentence it lands on, from 0.3 s before it (here, from 0).
+    expect(audio().currentTime).toBeCloseTo(0, 5);
+    pause.mockRestore();
+  });
+
+  it("Shift+Enter keeps the words typed in the box (I4: no data loss)", async () => {
+    key(await start(), { key: "Enter", code: "Enter" });
+    const field = await box();
+    fireEvent.change(field, { target: { value: "delta echo golf" } });
+    key(field, { key: "Enter", code: "Enter", shiftKey: true });
+    expect((await box()).value).toBe("alpha bravo charlie");
+    await vi.waitFor(() => expect(edits).toHaveLength(1));
+    expect(items(edits[0]).map((e) => e.text)).toContain(" golf");
+    key(await box(), { key: "Enter", code: "Enter" });
+    expect((await box()).value).toBe("delta echo golf");
+  });
+
+  it("Tab plays again from 1.5 s before where it stopped (I4)", async () => {
+    const field = await start();
+    audio().currentTime = 3.2;
+    key(field, { key: "Tab", code: "Tab" });
+    expect(audio().currentTime).toBeCloseTo(1.7, 5);
+  });
+
+  it("plays a sentence on arrival up to 0.2 s after its end, then stops (I4)", async () => {
+    const pause = vi.fn();
+    HTMLMediaElement.prototype.pause = pause;
+    key(await start(), { key: "Enter", code: "Enter" });
+    // "delta echo" ends at 2.9: the stop is at 3.1.
+    pause.mockClear();
+    audio().currentTime = 3.05;
+    audio().dispatchEvent(new Event("seeked"));
+    expect(pause).not.toHaveBeenCalled();
+    audio().currentTime = 3.12;
+    audio().dispatchEvent(new Event("seeked"));
+    expect(pause).toHaveBeenCalled();
+  });
+
+  it("typing pauses playback (I4)", async () => {
+    const pause = vi.fn();
+    HTMLMediaElement.prototype.pause = pause;
+    const field = await start();
+    pause.mockClear();
+    fireEvent.input(field, { target: { value: "alpha bravo charlie x" } });
+    expect(pause).toHaveBeenCalled();
+  });
+
+  it("Ctrl+. and Ctrl+, step the speed through Review's four (I4)", async () => {
+    const field = await start();
+    key(field, { key: ".", code: "Period", ctrlKey: true });
+    await vi.waitFor(() => expect(audio().playbackRate).toBe(1.25));
+    expect(screen.getByText("Playing at 1.25×")).toBeTruthy();
+    key(await box(), { key: ",", code: "Comma", ctrlKey: true });
+    key(await box(), { key: ",", code: "Comma", ctrlKey: true });
+    await vi.waitFor(() => expect(audio().playbackRate).toBe(0.75));
+  });
+
+  it("Ctrl+G takes the second opinion, and Ctrl+Shift+J goes back to the likely error before (I4)", async () => {
+    withOther = true;
+    const field = await start();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /Likely errors \(1\)/ })).toBeTruthy());
+    // Flag the first sentence, so there is a likely error behind the one Ctrl+J finds.
+    key(field, { key: "u", code: "KeyU", ctrlKey: true });
+    key(await box(), { key: "j", code: "KeyJ", ctrlKey: true });
+    expect((await box()).value).toBe("foxtrot");
+    key(await box(), { key: "g", code: "KeyG", ctrlKey: true });
+    expect((await box()).value).toBe("hotel");
+    key(await box(), { key: "J", code: "KeyJ", ctrlKey: true, shiftKey: true });
+    expect((await box()).value).toBe("alpha bravo charlie");
+  });
+
+  it("Ctrl+/ opens Review's key sheet (I4)", async () => {
+    render(<KeySheet />);
+    key(await start(), { key: "/", code: "Slash", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Keys in Review" })).toBeTruthy();
+  });
+
+  it("asks before the browser leaves with words in the box not yet in the list (Minor 2)", async () => {
+    const field = await start();
+    const leaving = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(leaving()).toBe(false);
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    expect(leaving()).toBe(true);
+  });
+
+  it("Esc on the finish panel leaves Review (Minor 7)", async () => {
+    const went: string[] = [];
+    await start((href) => went.push(href));
+    for (let i = 0; i < 3; i += 1) key(await box(), { key: "Enter", code: "Enter" });
+    await screen.findByRole("heading", { name: "This pass is done" });
+    key(document.body, { key: "Escape", code: "Escape" });
     await vi.waitFor(() => expect(went).toEqual(["/?recording=2&transcript=7"]));
   });
 });

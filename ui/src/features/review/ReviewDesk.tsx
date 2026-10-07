@@ -135,7 +135,7 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
   // while it is open, so the menu keeps the keyboard (F12).
   useEffect(() => {
     if (!session.flagging && !session.choosing) box.current?.focus();
-  }, [current?.index, session.flagging, session.choosing]);
+  }, [current?.index, session.flagging, session.choosing, session.pass, session.finished]);
 
   const face = titleFace(title);
   const bar = (
@@ -145,6 +145,8 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
         label: "Back to the transcript",
         // As Esc: save first, then go (F27).
         onClick: (event) => {
+          // Cmd+click and the like keep the link's own new tab (Minor 6).
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
           event.preventDefault();
           session.leave();
         },
@@ -223,7 +225,7 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                 </span>
               ))}
               <DropdownMenu open={session.flagging} onOpenChange={session.setFlagging}>
-                <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="-ml-2 h-8 text-muted-foreground max-md:h-11" />}>
+                <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="-ml-2.5 h-8 text-muted-foreground max-md:h-11" />}>
                   Flag
                 </DropdownMenuTrigger>
                 {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
@@ -253,6 +255,12 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                 onChange={(event) => session.setText(event.target.value)}
                 onInput={() => session.pause()}
                 onKeyDown={(event) => {
+                  // The flag menu open: the box takes no key; Esc closes the menu (I1).
+                  if (session.flagging) {
+                    event.preventDefault();
+                    if (event.key === "Escape") session.setFlagging(false);
+                    return;
+                  }
                   const action = actionFor(event.nativeEvent);
                   if (action === null) return;
                   event.preventDefault();

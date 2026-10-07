@@ -8,7 +8,9 @@
 // Ctrl keys go by `event.code`, the key's place on the keyboard, not by
 // `event.key`, the letter it types: with the Urdu input source the G key types
 // گ and the digit row Urdu digits, and every action must still be in reach.
-// A key pressed while an input method is composing is the input method's.
+// A key pressed while an input method is composing is the input method's,
+// and so is the Enter that ends a composition, which WebKit reports with
+// isComposing false and keyCode 229 (Task 13 review, Minor 4).
 // Option (Alt) is left to the browser too: Option+Tab moves focus out of the
 // box to the bar's controls, the pass switch among them, while Tab plays.
 
@@ -33,10 +35,10 @@ export type Action =
   | { kind: "keys" }
   | { kind: "leave" };
 
-type Press = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "shiftKey" | "metaKey" | "altKey" | "isComposing">;
+type Press = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "shiftKey" | "metaKey" | "altKey" | "isComposing" | "keyCode">;
 
 export function actionFor(event: Press): Action | null {
-  if (event.isComposing || event.metaKey || event.altKey) return null;
+  if (event.isComposing || event.keyCode === 229 || event.metaKey || event.altKey) return null;
   if (!event.ctrlKey) {
     if (event.key === "Enter") return { kind: event.shiftKey ? "previous" : "check" };
     if (event.key === "Tab") return { kind: event.shiftKey ? "replay" : "toggle" };

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { fromThrown, showError } from "@/features/errors/appError";
@@ -28,6 +28,14 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
   const [written, setWritten] = useState<ReferenceWritten | null>(null);
   const [asking, setAsking] = useState(false);
   const unchecked = progress.total - progress.checked;
+  // Esc leaves Review here too (spec key table; Task 13 review, Minor 7).
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) leave();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [leave]);
   const save = (partial: boolean) => {
     setAsking(false);
     settle()
@@ -78,6 +86,7 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
           href={back}
           className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
           onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
             event.preventDefault();
             leave();
           }}

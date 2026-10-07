@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { actionFor } from "../../src/features/review/keymap";
 
-type Press = { key: string; code: string; ctrlKey?: boolean; shiftKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean };
-const press = (p: Press) => actionFor({ ctrlKey: false, shiftKey: false, metaKey: false, altKey: false, isComposing: false, ...p });
+type Press = { key: string; code: string; ctrlKey?: boolean; shiftKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean; keyCode?: number };
+const press = (p: Press) => actionFor({ ctrlKey: false, shiftKey: false, metaKey: false, altKey: false, isComposing: false, keyCode: 0, ...p });
 
 describe("the review keys", () => {
   it.each([
@@ -42,6 +42,10 @@ describe("the review keys", () => {
     expect(press({ key: "a", code: "KeyA" })).toBeNull();
     expect(press({ key: "a", code: "KeyA", ctrlKey: true })).toBeNull();
     expect(press({ key: "Enter", code: "Enter", isComposing: true })).toBeNull();
+  });
+
+  it("leaves the Enter that ends a composition to the input method, as WebKit reports it (keyCode 229)", () => {
+    expect(press({ key: "Enter", code: "Enter", keyCode: 229 })).toBeNull();
   });
 
   it("leaves Option+Tab to the browser, which moves focus out of the box to the bar's controls", () => {
