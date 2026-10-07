@@ -32,12 +32,17 @@ def read_review(transcript_id: str) -> Review:
 
 
 @router.put("/transcripts/{transcript_id}/review")
-def save_review(transcript_id: str, document: ReviewDocument) -> ReviewSaved:
+def save_review(
+    transcript_id: str, document: ReviewDocument, review_sha: str | None = None
+) -> ReviewSaved:
     """Save the page's review in place of the last one, or refuse it whole, naming the segment.
 
+    `review_sha` is the sha of the review this replaces, or "none" when the
+    page saw no review: anything else on disk is refused 409 ReviewChanged
+    (#251 fix round 1). Left out, the review is saved over whatever is there.
     The answer is its sha, not the review sent back: the page already has it (#251).
     """
-    saved = review.save_review(transcript_number(transcript_id), document)
+    saved = review.save_review(transcript_number(transcript_id), document, replacing=review_sha)
     return ReviewSaved(review_sha=review.review_sha(saved), updated_at=saved.updated_at)
 
 

@@ -25,6 +25,7 @@ Plain Python, no fastapi: the routes are dsj/ui/routes/review.py.
 from __future__ import annotations
 
 __all__ = [
+    "NO_REVIEW",
     "InvalidReview",
     "ReviewChanged",
     "ReviewIncomplete",
@@ -193,23 +194,55 @@ def _check(document: ReviewDocument) -> None:
         reached = segment.end
 
 
-def save_review(transcript_id: int, document: ReviewDocument) -> ReviewDocument:
+# What `save_review`'s `replacing` says when the page saw no review at all.
+NO_REVIEW = "none"
+
+
+def save_review(
+    transcript_id: int, document: ReviewDocument, *, replacing: str | None = None
+) -> ReviewDocument:
     """Save the page's review in place of the last one, whole or not at all.
 
     Under the lock edit-list saves take, so it is never written under a
     transcript's name while a run is moving that transcript's files to another
     (dsj/ui/jobs.py, keep_earlier_roman_run).
 
+    `replacing` names the review this one replaces: its sha, or NO_REVIEW
+    when the page saw none. A tab that opened Review before any review
+    existed must not write over one another tab or device made since, with
+    its checks (#251 fix round 1, I2). None replaces whatever is there, for
+    callers other than the page.
+
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
-        InvalidReview: a segment is broken, named; nothing is written.
+        InvalidReview: a segment is broken, named, or the saved review cannot
+            be read to compare; nothing is written.
+        ReviewChanged: the review on disk is not the one `replacing` names.
     """
     _check(document)
     with edits.WRITING:
         path = review_path(_transcript(transcript_id).json_path)
+        if replacing is not None:
+            held = _held_sha(path)
+            if (held or NO_REVIEW) != replacing:
+                raise ReviewChanged(
+                    "This review was changed in another tab or window after this page loaded "
+                    "it, so this page's review was not saved over it. Reload the page to "
+                    "load it again."
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, document.model_dump_json(), fsync=True)
     return document
+
+
+def _held_sha(path: Path) -> str | None:
+    """The sha of the review saved at `path`, or None when there is none. Under WRITING."""
+    if not path.is_file():
+        return None
+    try:
+        return review_sha(ReviewDocument.model_validate_json(path.read_text(encoding="utf-8")))
+    except ValueError as exc:
+        raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
 
 
 def patch_review(

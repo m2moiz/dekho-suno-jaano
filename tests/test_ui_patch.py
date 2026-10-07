@@ -382,3 +382,40 @@ def test_the_whole_review_put_still_works_for_any_caller(seeded: dict[str, Any])
     assert again.status_code == 200
     # The same document sent whole again is the same review, so the same sha.
     assert again.json()["review_sha"] == saved["review_sha"]
+
+
+# -- fix round 1: a review created by a second tab (I2) --------------------------------
+
+
+def test_a_second_tab_that_saw_no_review_cannot_create_one_over_the_review_in_progress(
+    seeded: dict[str, Any],
+) -> None:
+    """The reviewer's probe: tab B opened Review before any review existed, tab A checked."""
+    route = f"/api/transcripts/{seeded['id']}/review"
+    phone, laptop = page(), page()
+    # Both opened Review while there was no review.
+    assert laptop.get(route).json()["review_sha"] is None
+    made = phone.put(route, params={"review_sha": "none"}, json=document(sha(seeded)))
+    assert made.status_code == 200, made.text
+    checked = phone.patch(route, json=review_patch(seeded, made.json()["review_sha"]))
+    assert checked.status_code == 200, checked.text
+    kept = review_path(seeded["json"]).read_bytes()
+    # The laptop picks a pass: its creating save must not write over the phone's checks.
+    reply = laptop.put(route, params={"review_sha": "none"}, json=document(sha(seeded)))
+    assert reply.status_code == 409, reply.text
+    assert reply.json()["error"] == "ReviewChanged"
+    assert review_path(seeded["json"]).read_bytes() == kept
+    states = [s["state"] for s in page().get(route).json()["document"]["segments"]]
+    assert states == ["checked", "unchecked"]
+
+
+def test_a_whole_review_put_names_the_review_it_replaces(seeded: dict[str, Any]) -> None:
+    route = f"/api/transcripts/{seeded['id']}/review"
+    saved = created(seeded)["review_sha"]
+    stale = page().put(route, params={"review_sha": "0" * 64}, json=document(sha(seeded)))
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["error"] == "ReviewChanged"
+    current = page().put(route, params={"review_sha": saved}, json=document(sha(seeded)))
+    assert current.status_code == 200, current.text
+    # A caller that names nothing still saves whole, as before #251.
+    assert page().put(route, json=document(sha(seeded))).status_code == 200
