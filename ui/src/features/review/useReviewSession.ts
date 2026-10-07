@@ -11,7 +11,7 @@
 
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
-import { type Editable, Outdated, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
+import { type Editable, onPageHide, Outdated, type SaveState, type Saving, useContent, useLatest } from "@/features/edit/editing";
 import { speakerLabels } from "@/features/edit/readContent";
 import { newSpeakerLabel, speakerAt, speakerChange } from "@/features/edit/speaker";
 import type { PlayerControls } from "@/features/player/Player";
@@ -155,6 +155,9 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const [pass, setPassState] = useState<ReviewPass>(saved?.review_pass ?? lastPass());
   const [choosing, setChoosing] = useState(true);
   const [fixes, setFixes] = useState<ReviewCorrection[]>(saved?.corrections ?? []);
+  // The same list, as of this instant: a page going away saves a correction
+  // made in that same moment, before any render has put it in `fixes`.
+  const fixesNow = useRef<ReviewCorrection[]>(fixes);
   const [startedAt] = useState(() => saved?.started_at ?? new Date().toISOString());
   const [notice, setNotice] = useState<string | null>(opening.lost > 0 ? lostNotice(opening.lost) : null);
   const [flagging, setFlagging] = useState(false);
@@ -184,7 +187,7 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     () => documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments, corrections: fixes }),
     [sha, pass, segments, index, startedAt, fixes],
   );
-  const { state: reviewSaving, flush } = useReviewSave(transcriptId, document);
+  const { state: reviewSaving, flush, keep } = useReviewSave(transcriptId, document);
   // The bar's one word covers both saves: Review's words go to the edit list,
   // its checks to the review, and either can fail alone (Task 13 review, I2).
   const saving: SaveState =
@@ -235,7 +238,8 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     if (fix === null) return list;
     editor.applyEdit(fix.op);
     // Every change of words, before and after: sub-project C's learning data (spec, "Seam for C"; F28).
-    setFixes((all) => [...all, { at: new Date().toISOString(), ...fix.correction }]);
+    fixesNow.current = [...fixesNow.current, { at: new Date().toISOString(), ...fix.correction }];
+    setFixes(fixesNow.current);
     return list.map((s, i) => (i === index ? { ...s, edited: true } : s));
   };
 
@@ -323,6 +327,26 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     window.addEventListener("beforeunload", leaving);
     return () => window.removeEventListener("beforeunload", leaving);
   }, []);
+
+  // The page hidden or left. A phone gives no beforeunload (iOS Safari never
+  // fires it) and may never run this page again: a swipe back, an app switch
+  // that ends in the tab evicted, a reload. So the box's words go into the
+  // list, and both saves go at once with keepalive (Task 14 re-review,
+  // R1-I1). On a desktop this happens on every switch away too, which costs a
+  // save of what was typed, as Enter would make it, without checking it.
+  const hideNow = useRef<() => void>(() => undefined);
+  hideNow.current = () => {
+    if (choosing) return;
+    const list = commit(segments);
+    edits.keep();
+    if (list === segments) {
+      keep();
+      return;
+    }
+    setSegments(list);
+    keep(documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments: list, corrections: fixesNow.current }));
+  };
+  useEffect(() => onPageHide(() => hideNow.current()), []);
 
   const leave = () => {
     controls.current?.pause();

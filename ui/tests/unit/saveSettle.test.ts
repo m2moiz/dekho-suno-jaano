@@ -9,7 +9,7 @@ const fetchMock = vi.hoisted(() => {
   return mock;
 });
 
-import { type Editable, Latest, NotSaved, useSave } from "../../src/features/edit/editing";
+import { type Editable, keepaliveFits, Latest, NotSaved, useSave } from "../../src/features/edit/editing";
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import { type Content, Editor, type Entry } from "../../src/lib/editOps";
 
@@ -177,5 +177,63 @@ describe("useSave settle", () => {
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useSave when the page goes away (Task 14 re-review, R1-I1)", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+
+  /** A server that holds every ordinary PUT and answers a keepalive one at once, keeping each body. */
+  function holdingServer() {
+    const kept: Content[] = [];
+    const held: Content[] = [];
+    fetchMock.mockImplementation(async (request) => {
+      const content = ((await request.clone().json()) as { content: Content }).content;
+      if (request.keepalive) {
+        kept.push(content);
+        return ok();
+      }
+      held.push(content);
+      return new Promise<Response>(() => undefined);
+    });
+    return { kept, held };
+  }
+
+  it("sends the change behind a save in flight with keepalive when the page is hidden", async () => {
+    const e = editable();
+    renderHook(() => useSave(7, e));
+    const server = holdingServer();
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(server.held).toHaveLength(1));
+    // Made while the first save flies: an ordinary save would wait for it, and a phone may never come back.
+    muteOne(e.editor, 2);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => expect(server.kept).toHaveLength(1));
+    expect(server.kept[0]).toEqual(e.editor.content);
+  });
+
+  it("on pagehide too, and sends nothing when the server has it all", async () => {
+    const e = editable();
+    renderHook(() => useSave(7, e));
+    const server = holdingServer();
+    window.dispatchEvent(new Event("pagehide"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.kept).toEqual([]);
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(server.held).toHaveLength(1));
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.waitFor(() => expect(server.kept).toHaveLength(1));
+  });
+});
+
+describe("keepaliveFits", () => {
+  it("holds a body to the browser's 64 KiB keepalive limit, counted in UTF-8 bytes", () => {
+    expect(keepaliveFits({ content: "x".repeat(60_000) })).toBe(true);
+    expect(keepaliveFits({ content: "x".repeat(66_000) })).toBe(false);
+    // Urdu letters are two bytes each in UTF-8: 34,000 of them are over.
+    expect(keepaliveFits({ content: "\u0628".repeat(34_000) })).toBe(false);
   });
 });

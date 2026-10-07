@@ -157,6 +157,25 @@ test("in a narrow window, a mouse drag across the card selects words and checks 
   await expect(page.getByText("0 of 3 checked")).toBeVisible();
 });
 
+test("words typed on the card survive the page being hidden and then left, as a phone leaves it (Task 14 re-review, R1-I1)", async ({ page }, info) => {
+  await page.setViewportSize(PHONE);
+  const reader = await openReview(page, `review-phone-hide-${info.project.name}`, 9.1 + info.project.name.length / 1000);
+  const readerHref = page.url().replace("&review=1", "");
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await box.fill("alpha bravo charles");
+  // An app switch on a phone: hidden, and never shown again. No key, no button, no beforeunload.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  // The tab evicted and opened again later: a fresh load of the reader.
+  await page.waitForTimeout(500);
+  await page.goto(readerHref);
+  expect(new URL(page.url()).search).toBe(reader);
+  await expect(page.locator("article p").first()).toHaveText(/charles/);
+});
+
 test.describe("on a tablet, a touch screen 820 px wide", () => {
   test.use({ viewport: TABLET, hasTouch: true });
 

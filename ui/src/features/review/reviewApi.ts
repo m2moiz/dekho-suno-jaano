@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import type { components } from "@/api/schema";
-import { NotSaved, type SaveState } from "@/features/edit/editing";
+import { keepaliveFits, NotSaved, type SaveState } from "@/features/edit/editing";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import type { CurrentSha, ReviewDocument } from "./model";
 
@@ -26,11 +26,12 @@ export async function loadReview(transcriptId: number): Promise<{ document: Revi
   return { document: data.document, sha: data.transcript_sha as CurrentSha };
 }
 
-async function putReview(transcriptId: number, document: ReviewDocument): Promise<void> {
+async function putReview(transcriptId: number, document: ReviewDocument, keepalive = false): Promise<void> {
   const route = `/api/transcripts/${transcriptId}/review`;
   const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/review", {
     params: { path: { transcript_id: String(transcriptId) } },
     body: document,
+    ...(keepalive && keepaliveFits(document) ? { keepalive: true } : {}),
   });
   if (data === undefined) throw new ApiError(fromBody(error, response, route));
 }
@@ -54,7 +55,10 @@ export async function saveAnswerKey(transcriptId: number, allowPartial: boolean)
  * the save failed. The document the review opened with is not sent until
  * something changes.
  */
-export function useReviewSave(transcriptId: number, document: ReviewDocument): { state: SaveState; flush: () => Promise<void> } {
+export function useReviewSave(
+  transcriptId: number,
+  document: ReviewDocument,
+): { state: SaveState; flush: () => Promise<void>; keep: (next?: ReviewDocument) => void } {
   const [state, setState] = useState<SaveState>("saved");
   const latest = useRef(document);
   latest.current = document;
@@ -91,8 +95,27 @@ export function useReviewSave(transcriptId: number, document: ReviewDocument): {
     return () => clearTimeout(timer);
   }, [document, send]);
 
+  /**
+   * The page hidden or left (Task 14 re-review, R1-I1): send the newest
+   * document at once with keepalive, not after the wait or behind a save in
+   * flight. `next` is the document as it is about to be, for a change made
+   * in the same moment that no render has drawn yet. The ordinary save sends
+   * it again if the page lives on; a failure here is left to that save to say.
+   */
+  const keep = useCallback(
+    (next?: ReviewDocument) => {
+      const doc = next ?? latest.current;
+      if (doc === sent.current) return;
+      putReview(transcriptId, doc, true).catch((thrown: unknown) => {
+        console.warn("dsj ui: the review save sent as the page went away failed", thrown);
+      });
+    },
+    [transcriptId],
+  );
+
   useEffect(() => {
-    // Leaving with a change unsaved asks first, as the reader does.
+    // Leaving with a change unsaved asks first, as the reader does, where the
+    // browser asks at all (a desktop's; never iOS Safari).
     const leaving = (event: BeforeUnloadEvent) => {
       if (latest.current !== sent.current) event.preventDefault();
     };
@@ -103,5 +126,5 @@ export function useReviewSave(transcriptId: number, document: ReviewDocument): {
   const flush = useCallback(async () => {
     if (!(await send())) throw new NotSaved("The review's latest changes are not saved.");
   }, [send]);
-  return { state, flush };
+  return { state, flush, keep };
 }

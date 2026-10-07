@@ -14,8 +14,9 @@ const fetchMock = vi.hoisted(() => {
 import { dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { SWIPE_PX } from "../../src/features/review/swipe";
+import type { Content } from "../../src/lib/editOps";
 import { stubMatchMedia } from "./media";
-import { box, items, key, serveReview, server, start } from "./reviewServer";
+import { box, hidePage, items, key, serveReview, server, showPage, start } from "./reviewServer";
 
 // A phone: a coarse pointer, so (pointer: fine) does not match.
 const PHONE = (query: string) => query.includes("coarse");
@@ -25,6 +26,7 @@ const NARROW = (query: string) => query.includes("max-width") || query.includes(
 beforeEach(() => serveReview(fetchMock, PHONE));
 
 afterEach(() => {
+  showPage();
   cleanup();
   act(() => dismissError());
 });
@@ -195,5 +197,33 @@ describe("Review's keys on the card, when a keyboard is there (F14)", () => {
     key(next, { key: "s", code: "KeyS", ctrlKey: true });
     expect((await box()).value).toBe("delta");
     expect(screen.getByText("1 of 4 checked")).toBeTruthy();
+  });
+});
+
+describe("Words typed on the card when the page goes away (Task 14 re-review, R1-I1)", () => {
+  // iOS Safari never fires beforeunload, so the box's words are put in the
+  // list and sent with keepalive the moment the page is hidden or left.
+  for (const how of ["visibilitychange", "pagehide"] as const) {
+    it(`on ${how}, puts the box's words in the list and sends both saves with keepalive`, async () => {
+      const field = await start();
+      fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+      act(() => hidePage(how));
+      await vi.waitFor(() => expect(server.kept.some((k) => k.path === "/api/transcripts/7/edits")).toBe(true));
+      const sent = server.kept.filter((k) => k.path === "/api/transcripts/7/edits").at(-1)?.body as { content: Content };
+      expect(items(sent.content).map((e) => e.text)).toContain(" charles");
+      await vi.waitFor(() => expect(server.kept.some((k) => k.path === "/api/transcripts/7/review")).toBe(true));
+      const review = server.kept.filter((k) => k.path === "/api/transcripts/7/review").at(-1)?.body as {
+        corrections: { before: string; after: string }[];
+      };
+      expect(review.corrections).toMatchObject([{ before: "charlie", after: "charles" }]);
+    });
+  }
+
+  it("sends nothing when nothing is unsaved", async () => {
+    await start();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    act(() => hidePage("visibilitychange"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(server.kept).toEqual([]);
   });
 });

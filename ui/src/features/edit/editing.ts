@@ -121,7 +121,44 @@ export type Saving = {
    * fails, so nothing reads the server's copy while it is behind the page's.
    */
   settle: () => Promise<void>;
+  /**
+   * Send what the server does not have yet at once, beside any save in flight,
+   * with `keepalive` when it fits, so it outlives the page: for a page being
+   * hidden or left (Task 14 re-review, R1-I1). Review calls it after putting
+   * the box's words in the list; the hook does it by itself for the reader.
+   */
+  keep: () => void;
 };
+
+// The most a page may send with `keepalive` at once: the Fetch standard's
+// 64 KiB limit on in-flight keepalive bodies (fetch, "inflight keepalive
+// bytes"), not a measurement. A browser refuses a larger body outright, so a
+// larger one goes as an ordinary request: that still lands when the page is
+// only hidden (an app switch, a tab later evicted), not when it is torn down.
+const KEEPALIVE_BYTES = 65_536;
+
+/** Whether `body`, sent as JSON, fits under the browser's keepalive limit. */
+export function keepaliveFits(body: unknown): boolean {
+  return new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BYTES;
+}
+
+/**
+ * Call `onHide` when the page is hidden or left: `visibilitychange` to hidden
+ * (an app switch, after which a phone may evict the tab) and `pagehide` (a
+ * swipe back, a reload, a close). A phone gives nothing else: iOS Safari never
+ * fires `beforeunload`, which is only a question anyway, never a save.
+ */
+export function onPageHide(onHide: () => void): () => void {
+  const hidden = () => {
+    if (document.visibilityState === "hidden") onHide();
+  };
+  document.addEventListener("visibilitychange", hidden);
+  window.addEventListener("pagehide", onHide);
+  return () => {
+    document.removeEventListener("visibilitychange", hidden);
+    window.removeEventListener("pagehide", onHide);
+  };
+}
 
 /** The list could not be brought up to date on the server, for the reason in the message. */
 export class NotSaved extends Error {
@@ -145,6 +182,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
   const [state, setState] = useState<SaveState>("saved");
   const pending = useRef(false);
   const settling = useRef<() => Promise<void>>(() => Promise.resolve());
+  const keeping = useRef<() => void>(() => undefined);
   useEffect(() => {
     const route = `/api/transcripts/${transcriptId}/edits`;
     let sent: Content = editor.content;
@@ -154,17 +192,23 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
     // what was sent aside, and every later save would be refused the same
     // way, so nothing more is sent until the page is reloaded.
     let outdated = false;
+    const put = async (content: Content, keepalive: boolean) => {
+      const body = { content: [...content], transcript_sha: sha };
+      const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/edits", {
+        params: { path: { transcript_id: String(transcriptId) } },
+        body,
+        ...(keepalive && keepaliveFits(body) ? { keepalive: true } : {}),
+      });
+      if (data === undefined) throw new ApiError(fromBody(error, response, route));
+      return data;
+    };
     // True when the server has the list as it is now.
     const send = async (): Promise<boolean> => {
       while (live && !outdated && editor.content !== sent && !editor.inGesture) {
         const content = editor.content;
         setState("saving");
         try {
-          const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/edits", {
-            params: { path: { transcript_id: String(transcriptId) } },
-            body: { content: [...content], transcript_sha: sha },
-          });
-          if (data === undefined) throw new ApiError(fromBody(error, response, route));
+          const data = await put(content, false);
           sent = content;
           if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
         } catch (thrown) {
@@ -209,18 +253,33 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
         throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.");
       }
     };
-    // Leaving with a change unsaved asks first, as any editor does.
+    // The page hidden or left: what the server lacks goes now, with
+    // keepalive, without waiting for a save in flight, which a page torn down
+    // never finishes. The ordinary loop sends it again if the page lives on;
+    // a list sent twice is the same list. A failure here is not shown: the
+    // ordinary save says it, if the page is still there to say it.
+    keeping.current = () => {
+      if (outdated || editor.inGesture || editor.content === sent) return;
+      put(editor.content, true).catch((thrown: unknown) => {
+        console.warn("dsj ui: the save sent as the page went away failed", thrown);
+      });
+    };
+    // Leaving with a change unsaved asks first, as any editor does, where the
+    // browser asks at all (a desktop's; never iOS Safari).
     const leaving = (event: BeforeUnloadEvent) => {
       if (pending.current) event.preventDefault();
     };
     window.addEventListener("beforeunload", leaving);
+    const stopHiding = onPageHide(() => keeping.current());
     const unsubscribe = editor.subscribe(changed);
     return () => {
       live = false;
       unsubscribe();
       window.removeEventListener("beforeunload", leaving);
+      stopHiding();
     };
   }, [transcriptId, editor, renderable, sha]);
   const settle = useCallback(() => settling.current(), []);
-  return { state, settle };
+  const keep = useCallback(() => keeping.current(), []);
+  return { state, settle, keep };
 }

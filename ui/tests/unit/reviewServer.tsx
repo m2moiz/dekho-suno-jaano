@@ -81,7 +81,24 @@ export const server = {
   withOther: false,
   /** Whether the edit list's PUT is refused as made against an older transcript (409). */
   refuseEdits: false,
+  /** Every request sent with `keepalive`, the kind that outlives the page: its path and body. */
+  kept: [] as { path: string; body: unknown }[],
 };
+
+/** The page going away as a phone does it: hidden (an app switch, a tab evicted), or `pagehide` (a swipe back, a reload). */
+export function hidePage(how: "visibilitychange" | "pagehide"): void {
+  if (how === "pagehide") {
+    window.dispatchEvent(new Event("pagehide"));
+    return;
+  }
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+/** Undo hidePage's stub, so the next test's page is in view. */
+export function showPage(): void {
+  Reflect.deleteProperty(document, "visibilityState");
+}
 
 /**
  * Before each test: the server mocked through `fetchMock`, the media and the
@@ -101,11 +118,13 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
   server.saved = null;
   server.withOther = false;
   server.refuseEdits = false;
+  server.kept = [];
   document.cookie = "dsj-speed=; max-age=0; path=/";
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
     const body: unknown = request.method === "GET" ? null : await request.json();
+    if (request.keepalive) server.kept.push({ path, body });
     if (path === "/api/recordings") return Response.json([recording(server.withOther)]);
     if (path === "/api/transcripts/7") return Response.json(DOC);
     if (path === "/api/transcripts/8") return Response.json(OTHER);
