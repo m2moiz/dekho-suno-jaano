@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
+import { TOUCH, useMediaQuery } from "@/lib/media";
 import type { Sheet } from "./keys";
 
 // The sheet on show, if any: module state, as the error dialog's is, so the
@@ -80,10 +81,12 @@ export function KeySheet() {
 
 /** "Keys" in the settings menu, for the page's own sheet. */
 export function KeysItem({ sheet, shortcut = "?" }: { sheet: Sheet; shortcut?: string }) {
+  // 44 px where the page has its touch layout, as the menu's other items (F15).
+  const tall = useMediaQuery(TOUCH);
   return (
     <>
       <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={() => showKeys(sheet)}>
+      <DropdownMenuItem className={tall ? "min-h-11" : undefined} onClick={() => showKeys(sheet)}>
         Keys
         <Kbd className="ml-auto">{shortcut}</Kbd>
       </DropdownMenuItem>

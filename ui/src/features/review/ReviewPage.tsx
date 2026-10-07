@@ -7,8 +7,10 @@ import { Player, type PlayerControls } from "@/features/player/Player";
 import { AppBar } from "@/features/shell/AppBar";
 import { read, type Reading } from "@/features/transcript/document";
 import { type Opened, openTranscript } from "@/features/transcript/TranscriptPage";
+import { TOUCH, useMediaQuery } from "@/lib/media";
 import { transcriptHref } from "@/lib/route";
 import type { CurrentSha, ReviewDocument } from "./model";
+import { ReviewCard } from "./ReviewCard";
 import { ReviewDesk } from "./ReviewDesk";
 import { loadReview } from "./reviewApi";
 import { loadReading, otherTranscript } from "./secondOpinion";
@@ -113,6 +115,10 @@ type InSessionProps = {
 
 function InSession({ opened, editable, transcriptId, review, other, back, navigate }: InSessionProps) {
   const controls = useRef<PlayerControls | null>(null);
+  // A touch screen, or a window narrower than 768 px, gets the card; the desk
+  // and the card draw the one session, so switching between them mid-review
+  // (a window dragged narrower) loses nothing (F14).
+  const touch = useMediaQuery(TOUCH);
   // Review's corrections and speaker changes are edits, saved as the reader saves them.
   const edits = useSave(transcriptId, editable);
   const session = useReviewSession({
@@ -130,7 +136,11 @@ function InSession({ opened, editable, transcriptId, review, other, back, naviga
   const title = displayTitle(opened.recording);
   return (
     <>
-      <ReviewDesk session={session} title={title} back={back} transcriptId={transcriptId} />
+      {touch ? (
+        <ReviewCard session={session} title={title} back={back} transcriptId={transcriptId} />
+      ) : (
+        <ReviewDesk session={session} title={title} back={back} transcriptId={transcriptId} />
+      )}
       {opened.recording.missing ? (
         <p className="sticky bottom-0 bg-field px-4 py-3 text-sm text-field-foreground">
           The recording is not where it was last seen, so this review cannot play it. Last seen at{" "}

@@ -1,0 +1,171 @@
+// Review mode on a phone and a tablet (Hashiya spec, "Phone and tablet,
+// touch-first"), in a real browser against the real `dsj ui`: the card below
+// 768 px or on a touch screen, every target on it 44 px or more (F15), the
+// desk's keys on it when a keyboard is there (F14), and the swipes.
+import { expect, type Page, test } from "@playwright/test";
+
+import { editableTranscript } from "./editable.ts";
+import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
+
+const PHONE = { width: 390, height: 844 };
+const TABLET = { width: 820, height: 1180 };
+const LEAST = 44;
+
+/** Open Review on a made-up transcript of three sentences, at its pass chooser. */
+async function openReview(page: Page, name: string, seconds: number): Promise<string> {
+  const dir = scratchDir();
+  const seeded = seed(
+    // A length of its own, per test and per browser: two tones of one length are
+    // one recording to the library, and another test's transcript would be this
+    // one's second opinion.
+    editableTranscript(tone(dir, seconds, `${name}.wav`), [
+      ["alpha", "bravo", "charlie"],
+      ["delta", "echo"],
+      ["foxtrot", "golf"],
+    ]),
+    dir,
+  );
+  const reader = readerUrl(seeded);
+  const review = new URL(reader);
+  review.searchParams.set("review", "1");
+  await page.goto(review.toString());
+  await expect(page.getByRole("heading", { name: "Which sentences?" })).toBeVisible();
+  return new URL(reader).search;
+}
+
+/**
+ * Every control in sight smaller than LEAST px either way, or reaching past
+ * the window's sides, by its measured box. jsdom lays nothing out, so only
+ * a real browser can say (correction.spec.ts, player.spec.ts).
+ */
+function undersized(page: Page): Promise<string[]> {
+  return page.evaluate((least) => {
+    const controls = document.querySelectorAll<HTMLElement>(
+      "a[href], button, textarea, input, select, [role=button], [role=slider], [role=combobox], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [tabindex='0']",
+    );
+    const out: string[] = [];
+    for (const el of controls) {
+      const box = el.getBoundingClientRect();
+      // Not drawn: hidden, or the screen reader's own.
+      if (box.width === 0 || box.height === 0 || el.closest("[aria-hidden=true], .sr-only, [hidden]")) continue;
+      const name = (el.getAttribute("aria-label") ?? el.textContent ?? el.tagName).trim().slice(0, 40);
+      // Its laid-out size, not its box: a menu opens from 95 % scale, and a box
+      // measured mid-animation is that much smaller.
+      const [width, height] = [el.offsetWidth, el.offsetHeight];
+      if (height < least || width < least) out.push(`${name}: ${width}x${height}`);
+      if (box.left < 0 || box.right > window.innerWidth) out.push(`${name}: outside the window`);
+    }
+    return out;
+  }, LEAST);
+}
+
+test.describe("on a phone, 390 px wide, with a keyboard", () => {
+  test.use({ viewport: PHONE });
+
+  test("every target is 44 px or more: chooser, card, flag menu, settings menu, done panel (F15)", async ({ page }, info) => {
+    await openReview(page, `review-phone-targets-${info.project.name}`, 8.6 + info.project.name.length / 1000);
+    expect(await undersized(page)).toEqual([]);
+    await page.getByRole("button", { name: /^Every sentence/ }).click();
+    const card = page.getByRole("article", { name: "Sentence being checked" });
+    await expect(card).toBeVisible();
+    // One sentence, not the desk's five.
+    await expect(page.getByText("delta echo")).toHaveCount(0);
+    expect(await undersized(page)).toEqual([]);
+
+    // Back and Checked, next sit above the player rail, nothing behind it.
+    const rail = await page.getByRole("region", { name: "Player" }).boundingBox();
+    const next = await page.getByRole("button", { name: "Checked, next" }).boundingBox();
+    if (rail === null || next === null) throw new Error("the rail or Checked, next is not on the page");
+    expect(next.y + next.height).toBeLessThanOrEqual(rail.y + 0.5);
+    expect(next.height).toBeGreaterThanOrEqual(48);
+
+    await page.getByRole("button", { name: "Flag" }).click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    expect(await undersized(page)).toEqual([]);
+    await page.getByRole("menuitemcheckbox", { name: "Not speech" }).click();
+    await expect(page.getByRole("menu")).toBeHidden();
+    await expect(card.getByText("Not speech")).toBeVisible();
+
+    await page.getByRole("combobox", { name: "Playback speed" }).click();
+    await expect(page.getByRole("listbox")).toBeVisible();
+    expect(await undersized(page)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toBeHidden();
+
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    expect(await undersized(page)).toEqual([]);
+    // And the key sheet it opens.
+    await page.getByRole("menuitem", { name: /^Keys/ }).click();
+    await expect(page.getByRole("dialog", { name: "Keys in Review" })).toBeVisible();
+    expect(await undersized(page)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+
+    for (let i = 0; i < 3; i += 1) await page.getByRole("button", { name: "Checked, next" }).click();
+    await expect(page.getByRole("heading", { name: "This pass is done" })).toBeVisible();
+    expect(await undersized(page)).toEqual([]);
+  });
+
+  test("the desk's keys work on the card when a keyboard is there (F14)", async ({ page }, info) => {
+    const reader = await openReview(page, `review-phone-keys-${info.project.name}`, 8.7 + info.project.name.length / 1000);
+    await page.keyboard.press("Enter");
+    const box = page.getByRole("textbox", { name: "What was said" });
+    await expect(page.getByRole("article", { name: "Sentence being checked" })).toBeVisible();
+    await expect(box).toBeFocused();
+    await expect(box).toHaveValue("alpha bravo charlie");
+    await page.keyboard.press("Enter");
+    await expect(box).toHaveValue("delta echo");
+    await expect(page.getByText("1 of 3 checked")).toBeVisible();
+    await page.keyboard.press("Shift+Enter");
+    await expect(box).toHaveValue("alpha bravo charlie");
+    // A correction typed on the card, then Ctrl+2: the words are kept and the speaker changes.
+    await box.fill("alpha bravo charles");
+    await page.keyboard.press("Control+2");
+    await expect(page.getByRole("button", { name: "Speaker 2" })).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Control+f");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toBeHidden();
+    await expect(box).toBeFocused();
+    // Esc leaves for the reader, once everything is saved, and the correction is there.
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL((url) => url.search === reader);
+    // Speaker 2 now says it, as the sentence after it: the reader draws one turn of the two.
+    await expect(page.locator("article p").first()).toHaveText(/^ alpha bravo charles delta echo$/);
+  });
+});
+
+test.describe("on a tablet, a touch screen 820 px wide", () => {
+  test.use({ viewport: TABLET, hasTouch: true });
+
+  test("the card is used, its targets are 44 px or more, and a swipe checks or goes back", async ({ page }, info) => {
+    await openReview(page, `review-tablet-${info.project.name}`, 8.8 + info.project.name.length / 1000);
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    await page.getByRole("button", { name: /^Every sentence/ }).tap();
+    const card = page.getByRole("article", { name: "Sentence being checked" });
+    await expect(card).toBeVisible();
+    const box = page.getByRole("textbox", { name: "What was said" });
+    // Nothing takes the focus, so the screen's keyboard stays down.
+    await expect(box).not.toBeFocused();
+    expect(await undersized(page)).toEqual([]);
+
+    // A drag from the card's margin line, not the text box.
+    const from = await card.getByText("Not checked yet").boundingBox();
+    if (from === null) throw new Error("the card's margin line is not on the page");
+    const swipe = async (dx: number) => {
+      await page.mouse.move(from.x + 200, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 200 + dx / 2, from.y + from.height / 2 + 4);
+      await page.mouse.move(from.x + 200 + dx, from.y + from.height / 2 + 8);
+      await page.mouse.up();
+    };
+    await swipe(-160);
+    await expect(box).toHaveValue("delta echo");
+    await expect(page.getByText("1 of 3 checked")).toBeVisible();
+    await swipe(160);
+    await expect(box).toHaveValue("alpha bravo charlie");
+    await page.getByRole("button", { name: "Checked, next" }).tap();
+    await expect(box).toHaveValue("delta echo");
+  });
+});

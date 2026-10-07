@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useRef } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -19,7 +19,7 @@ import type { Flag, ReviewPass } from "./model";
 import type { SentenceView, Session } from "./useReviewSession";
 import "./review.css";
 
-const SAVE_TEXT: Record<SaveState, string> = { saved: "Saved", saving: "Saving…", failed: "Not saved" };
+export const SAVE_TEXT: Record<SaveState, string> = { saved: "Saved", saving: "Saving…", failed: "Not saved" };
 
 export const FLAGS: [Flag, string][] = [
   ["unclear", "Can't make it out"],
@@ -78,7 +78,14 @@ const PASSES: [ReviewPass, string, string][] = [
  * buttons, the one picked last focused, so Enter starts it; nothing plays
  * until one is picked, and then the sentence in hand does (F25).
  */
-function PassChooser({ session }: { session: Session }) {
+export function PassChooser({
+  session,
+  checks = "Enter marks it checked",
+}: {
+  session: Session;
+  /** How a sentence is marked checked here (the card says a swipe on a touch screen), for the line under the heading. */
+  checks?: string;
+}) {
   const { checked, total } = session.progress;
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-6 px-3 py-12 sm:px-6">
@@ -87,7 +94,7 @@ function PassChooser({ session }: { session: Session }) {
         <p className="text-muted-foreground">
           {session.resumed
             ? `${checked.toLocaleString("en")} of ${total.toLocaleString("en")} checked so far. You pick up where you left off.`
-            : `${total.toLocaleString("en")} sentences. Each plays as you reach it; Enter marks it checked.`}
+            : `${total.toLocaleString("en")} sentences. Each plays as you reach it; ${checks}.`}
         </p>
       </div>
       <div role="group" aria-label="Pass" className="flex flex-col gap-3">
@@ -117,6 +124,63 @@ function PassChooser({ session }: { session: Session }) {
       </p>
     </main>
   );
+}
+
+/**
+ * The flag menu (Ctrl+F, or its button): the four flags, each a tick that
+ * toggles. Open while `session.flagging`, so the key and the button open the
+ * same menu on the desk and the card. `finalFocus` is where focus goes when it
+ * closes: the box, so typing goes on (F12); the card on a touch screen leaves
+ * it to the button, so the phone's keyboard does not pop up.
+ */
+export function FlagMenu({
+  session,
+  trigger,
+  children,
+  finalFocus,
+  roomy = false,
+}: {
+  session: Session;
+  trigger: ReactElement;
+  children: ReactNode;
+  finalFocus?: RefObject<HTMLElement | null>;
+  /** Items 44 px tall, for a finger (F15). */
+  roomy?: boolean;
+}) {
+  const current = session.current;
+  if (current === null) return null;
+  return (
+    <DropdownMenu open={session.flagging} onOpenChange={session.setFlagging}>
+      <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-auto" finalFocus={finalFocus}>
+        {FLAGS.map(([flag, label]) => (
+          <DropdownMenuCheckboxItem
+            key={flag}
+            checked={current.segment.flags.includes(flag)}
+            closeOnClick
+            className={roomy ? "min-h-11" : undefined}
+            onCheckedChange={() => session.act({ kind: "flag", flag })}
+          >
+            {label}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** A key in the box: the spec's table, the same on the desk and on the card when a keyboard is there (F14). */
+export function onBoxKey(session: Session, event: KeyboardEvent<HTMLTextAreaElement>): void {
+  // The flag menu open: the box takes no key; Esc closes the menu (I1).
+  if (session.flagging) {
+    event.preventDefault();
+    if (event.key === "Escape") session.setFlagging(false);
+    return;
+  }
+  const action = actionFor(event.nativeEvent);
+  if (action === null) return;
+  event.preventDefault();
+  session.act(action, { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
 }
 
 type Props = { session: Session; title: string; back: string; transcriptId: number };
@@ -224,24 +288,14 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                   {FLAGS.find(([f]) => f === flag)?.[1]}
                 </span>
               ))}
-              <DropdownMenu open={session.flagging} onOpenChange={session.setFlagging}>
-                <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="-ml-2.5 h-8 text-muted-foreground max-md:h-11" />}>
-                  Flag
-                </DropdownMenuTrigger>
-                {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
-                <DropdownMenuContent align="start" className="w-auto" finalFocus={box}>
-                  {FLAGS.map(([flag, label]) => (
-                    <DropdownMenuCheckboxItem
-                      key={flag}
-                      checked={current.segment.flags.includes(flag)}
-                      closeOnClick
-                      onCheckedChange={() => session.act({ kind: "flag", flag })}
-                    >
-                      {label}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
+              <FlagMenu
+                session={session}
+                finalFocus={box}
+                trigger={<Button variant="ghost" size="sm" className="-ml-2.5 h-8 text-muted-foreground max-md:h-11" />}
+              >
+                Flag
+              </FlagMenu>
             </div>
             <div className="flex min-w-0 flex-col gap-3">
               <Textarea
@@ -254,18 +308,7 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                 value={session.text}
                 onChange={(event) => session.setText(event.target.value)}
                 onInput={() => session.pause()}
-                onKeyDown={(event) => {
-                  // The flag menu open: the box takes no key; Esc closes the menu (I1).
-                  if (session.flagging) {
-                    event.preventDefault();
-                    if (event.key === "Escape") session.setFlagging(false);
-                    return;
-                  }
-                  const action = actionFor(event.nativeEvent);
-                  if (action === null) return;
-                  event.preventDefault();
-                  session.act(action, { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
-                }}
+                onKeyDown={(event) => onBoxKey(session, event)}
               />
               {session.second !== null && <SecondOpinion second={session.second} />}
             </div>

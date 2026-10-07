@@ -101,3 +101,23 @@
     inline-size: calc(max(3px, var(--tick, 0%)) * 0.6);
   }
 }
+
+/* The card's speaker chips (ReviewCard.tsx): each in its speaker's colour,
+   which palette.test.ts holds to 4.5:1 as text on the ground and on a card;
+   the one who says the sentence in hand is filled with a wash of it and set
+   heavier, in the ink, as a hovered chip is, since neither wash is measured. */
+.review-chip {
+  border-color: var(--speaker, var(--border));
+  color: var(--speaker, var(--foreground));
+}
+
+.review-chip:hover,
+.review-chip[aria-pressed="true"] {
+  color: var(--foreground);
+}
+
+.review-chip[aria-pressed="true"] {
+  border-width: 2px;
+  background: color-mix(in oklch, var(--speaker, var(--muted)) 16%, var(--card));
+  font-weight: 650;
+}
