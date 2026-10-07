@@ -9,60 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import page
 
 from dsj import hatao
 from dsj.ui.edits import edits_path
-from dsj.ui.server import create_app
 from dsj.ui.store import Library, library_path
-
-
-def page() -> TestClient:
-    app, token = create_app(port=8721)
-    return TestClient(
-        app, base_url="http://127.0.0.1:8721", headers={"Authorization": f"Bearer {token}"}
-    )
-
-
-def tokens(*words: tuple[float, float, str, float]) -> list[dict[str, Any]]:
-    return [{"t": t, "e": e, "w": w, "c": c} for t, e, w, c in words]
-
-
-@pytest.fixture
-def seeded(tmp_path: Path) -> dict[str, Any]:
-    """One recording, one transcript of two sentences, in the library."""
-    audio = tmp_path / "talk.wav"
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-         "sine=frequency=440:duration=2", str(audio)],
-        check=True,
-    )
-    payload = {
-        "audio": str(audio),
-        "engine": "parakeet",
-        "model": "mlx-community/parakeet-tdt-0.6b-v3",
-        "speakers": ["SPEAKER_00", "SPEAKER_01"],
-        "diarization": "senko",
-        "text": " Hello there. Fine.",
-        "unclear": [],
-        "sentences": [
-            {"start": 0.2, "end": 0.9, "speaker": 0, "text": " Hello there.",
-             "tokens": tokens((0.2, 0.5, " Hello", 0.99), (0.56, 0.8, " there", 0.4),
-                              (0.8, 0.88, ".", 0.97))},
-            {"start": 1.2, "end": 1.6, "speaker": 1, "text": " Fine.",
-             "tokens": tokens((1.2, 1.5, " Fine", 0.9), (1.5, 1.6, ".", 0.95))},
-        ],
-    }
-    json_path = tmp_path / "talk.json"
-    json_path.write_text(json.dumps(payload))
-    with Library.open() as library:
-        row = library.record_run(json_path, engine="parakeet")
-    return {"id": row.id, "audio": audio, "json": json_path, "payload": payload}
 
 
 def test_an_untouched_list_is_built_from_the_transcripts_own_word_ends(

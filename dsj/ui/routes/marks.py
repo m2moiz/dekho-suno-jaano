@@ -14,9 +14,9 @@ __all__ = ["entries", "router"]
 
 import math
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from dsj import hatao
+from dsj import hatao, likho
 from dsj.ui import edits, words
 from dsj.ui.schemas import (
     EditEntry,
@@ -113,6 +113,30 @@ def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
 def save_names(transcript_id: str, update: NamesUpdate) -> Edits:
     """Save the speakers' names in the transcript's edit list, the words untouched (#243)."""
     return _wire(edits.save_names(_id(transcript_id), update.names))
+
+
+@router.get(
+    "/transcripts/{transcript_id}/export/{fmt}",
+    response_class=Response,
+    responses={200: {"content": {"text/plain": {}, "text/vtt": {}}}},
+)
+def export(transcript_id: str, fmt: str) -> Response:
+    """The transcript as edited, as SRT, WebVTT or plain text, by dsj likho's own writers (#244).
+
+    A download, by the transcript's id: nothing is written on this machine,
+    and no path reaches the page (#112 rule 5).
+    """
+    write = likho.EXPORTERS.get(fmt)
+    if write is None:
+        known = ", ".join(sorted(likho.EXPORTERS))
+        raise HTTPException(404, f"There is no export format {fmt!r}; there are {known}.")
+    found = _id(transcript_id)
+    text = write(edits.as_payload(edits.open_edits(found)))
+    return Response(
+        content=text,
+        media_type="text/vtt; charset=utf-8" if fmt == "vtt" else "text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="transcript-{found}.{fmt}"'},
+    )
 
 
 @router.post("/transcripts/{transcript_id}/matches")

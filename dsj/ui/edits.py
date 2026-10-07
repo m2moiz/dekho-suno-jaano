@@ -26,8 +26,11 @@ __all__ = [
     "SOURCE",
     "NoSuchTranscript",
     "Opened",
+    "as_payload",
+    "display_name",
     "edits_path",
     "engine_of",
+    "labels_of",
     "open_edits",
     "save_edits",
     "save_names",
@@ -35,8 +38,9 @@ __all__ = [
 
 import hashlib
 import json
+import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -232,3 +236,71 @@ def engine_of(transcript_id: int) -> str:
         return found.engine
     payload = _payload(row, transcript_id)
     return str(payload.get("engine") or payload.get("model") or "this engine")
+
+
+# A diarizer's own label, which the page shows as "Speaker n" by its place in
+# the transcript's list (ui/src/features/transcript/document.ts, speakerName).
+_DIARIZER_LABEL = re.compile(r"SPEAKER_\d+")
+
+
+def labels_of(opened: Opened) -> list[str]:
+    """The transcript's speaker labels, then any the list uses that it lacks, in order of first use.
+
+    The page reads speakers the same way (readContent.ts, speakerLabels), so a
+    speaker a person added in Review is "Speaker 3" in both.
+    """
+    labels = list(opened.legend)
+    for entry in opened.doc.content:
+        if isinstance(entry, hatao.Paragraph) and entry.speaker and entry.speaker not in labels:
+            labels.append(entry.speaker)
+    return labels
+
+
+def display_name(label: str | None, labels: Sequence[str], names: Mapping[str, str]) -> str | None:
+    """The name a person gave `label`, else "Speaker n" for a diarizer's label, else the label."""
+    if label is None:
+        return None
+    if label in names:
+        return names[label]
+    if _DIARIZER_LABEL.fullmatch(label) and label in labels:
+        return f"Speaker {list(labels).index(label) + 1}"
+    return label
+
+
+def as_payload(opened: Opened) -> dict[str, Any]:
+    """The edit list as a transcript dsj likho can write (#244).
+
+    One sentence per paragraph mark, its words as edited (a correction, #83,
+    reads as corrected), each speaker under the name a person gave them.
+    Paragraphs with no words are left out, as likho leaves them out.
+    """
+    labels = labels_of(opened)
+    sentences: list[dict[str, Any]] = []
+    tokens: list[dict[str, Any]] | None = None
+    speaker: int | None = None
+
+    def close() -> None:
+        if tokens:
+            sentences.append(
+                {
+                    "start": tokens[0]["t"],
+                    "end": max(t["e"] for t in tokens),
+                    "text": "".join(t["w"] for t in tokens),
+                    "speaker": speaker,
+                    "tokens": tokens,
+                }
+            )
+
+    for entry in opened.doc.content:
+        if isinstance(entry, hatao.Paragraph):
+            close()
+            tokens = []
+            speaker = None if entry.speaker is None else labels.index(entry.speaker)
+            continue
+        if tokens is not None and entry.text:
+            tokens.append({"t": entry.source_start, "e": entry.source_end, "w": entry.text})
+    close()
+    payload: dict[str, Any] = {"sentences": sentences}
+    if labels:
+        payload["speakers"] = [display_name(label, labels, opened.doc.names) for label in labels]
+    return payload

@@ -1,6 +1,7 @@
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { BleepDrawer } from "@/features/bleep/BleepDrawer";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
 import { isMuted } from "@/features/bleep/matches";
@@ -23,7 +24,9 @@ import { PLAYER_HEIGHT } from "@/features/player/playhead";
 import { AppBar, BAR_HEIGHT } from "@/features/shell/AppBar";
 import { KeysItem } from "@/features/shell/KeySheet";
 import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
+import { TOUCH, useMediaQuery } from "@/lib/media";
 import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
+import { type ExportFormat, exportTranscript } from "./exportFile";
 import { MoreMenu } from "./MoreMenu";
 import { Nameplate } from "./Nameplate";
 import { useReaderKeys } from "./readerKeys";
@@ -173,8 +176,16 @@ function useTimingInSight(
   }, [word, article, dock]);
 }
 
+const EXPORTS: readonly (readonly [ExportFormat, string])[] = [
+  ["srt", "Subtitles (SRT)"],
+  ["vtt", "Subtitles (WebVTT)"],
+  ["txt", "Text"],
+];
+
 function EditablePage({ opened, editable, transcriptId }: { opened: Opened; editable: Editable; transcriptId: number }) {
   const { editor } = editable;
+  // 44 px menu rows where the reader has its touch layout, as MoreMenu's own (F15).
+  const tall = useMediaQuery(TOUCH) ? "min-h-11" : "";
   const content = useContent(editor);
   const previous = useRef<EditReading | null>(null);
   const edit = useMemo(() => {
@@ -267,6 +278,27 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
             onBleep={() => setBleeping(true)}
             timingWord={selected !== null && selected.first === selected.last ? selected.first : null}
             onTiming={setTiming}
+            extra={
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Export as edited</DropdownMenuLabel>
+                  {EXPORTS.map(([format, label]) => (
+                    <DropdownMenuItem
+                      key={format}
+                      className={tall}
+                      onClick={() =>
+                        exportTranscript(transcriptId, format, fileName(opened.recording.path)).catch((thrown: unknown) =>
+                          showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/export/${format}`)),
+                        )
+                      }
+                    >
+                      {label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+              </>
+            }
           />
         </>
       }
