@@ -1,7 +1,7 @@
 // A transcript's edit list on the page (#66): loaded once, held by an Editor,
 // and saved after every change, without anything waiting on the save.
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
@@ -101,21 +101,39 @@ export function useContent(editor: Editor): Content {
 
 export type SaveState = "saved" | "saving" | "failed";
 
+/** What `useSave` gives back: where the save stands, and a way to wait for it. */
+export type Saving = {
+  state: SaveState;
+  /**
+   * Resolve once the server holds the list as it is now: wait for the save in
+   * flight, or start one for a change not yet sent or one that failed. Throws
+   * `NotSaved` instead of resolving while a drag is under way or when the save
+   * fails, so nothing reads the server's copy while it is behind the page's.
+   */
+  settle: () => Promise<void>;
+};
+
+/** The list could not be brought up to date on the server, for the reason in the message. */
+export class NotSaved extends Error {
+  override name = "NotSaved";
+}
+
 /**
  * Save the list after every change: one request at a time, the newest list
  * each time, so a burst of edits is never saved out of order. A drag (#85)
  * is saved once, when it ends.
  */
-export function useSave(transcriptId: number, { editor, renderable }: Editable): SaveState {
+export function useSave(transcriptId: number, { editor, renderable }: Editable): Saving {
   const [state, setState] = useState<SaveState>("saved");
   const pending = useRef(false);
+  const settling = useRef<() => Promise<void>>(() => Promise.resolve());
   useEffect(() => {
     const route = `/api/transcripts/${transcriptId}/edits`;
     let sent: Content = editor.content;
-    let flying = false;
+    let flight: Promise<boolean> | null = null;
     let live = true;
-    const send = async (): Promise<void> => {
-      flying = true;
+    // True when the server has the list as it is now.
+    const send = async (): Promise<boolean> => {
       while (live && editor.content !== sent && !editor.inGesture) {
         const content = editor.content;
         setState("saving");
@@ -128,22 +146,34 @@ export function useSave(transcriptId: number, { editor, renderable }: Editable):
           sent = content;
           if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
         } catch (thrown) {
-          flying = false;
           pending.current = false;
           if (live) {
             setState("failed");
             showError(fromThrown(thrown, route));
           }
-          return;
+          return false;
         }
       }
-      flying = false;
       pending.current = editor.content !== sent;
       if (live && !pending.current) setState("saved");
+      return !pending.current;
+    };
+    const start = (): Promise<boolean> => {
+      flight ??= send().finally(() => {
+        flight = null;
+      });
+      return flight;
     };
     const changed = () => {
       pending.current = editor.content !== sent;
-      if (!flying && pending.current && !editor.inGesture) void send();
+      if (flight === null && pending.current && !editor.inGesture) void start();
+    };
+    settling.current = async () => {
+      if (editor.inGesture) throw new NotSaved("Let go of the word you are dragging, then export.");
+      if (flight === null && editor.content === sent) return;
+      if (!(await start())) {
+        throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.");
+      }
     };
     // Leaving with a change unsaved asks first, as any editor does.
     const leaving = (event: BeforeUnloadEvent) => {
@@ -157,5 +187,6 @@ export function useSave(transcriptId: number, { editor, renderable }: Editable):
       window.removeEventListener("beforeunload", leaving);
     };
   }, [transcriptId, editor, renderable]);
-  return state;
+  const settle = useCallback(() => settling.current(), []);
+  return { state, settle };
 }

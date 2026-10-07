@@ -32,4 +32,33 @@ describe("exportTranscript", () => {
     await expect(exportTranscript(7, "srt", "talk")).rejects.toBeInstanceOf(ApiError);
     expect(click).not.toHaveBeenCalled();
   });
+
+  it("names the file for the recording without its extension", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response("x", { headers: { "content-type": "text/plain" } })));
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.download);
+    });
+    await exportTranscript(7, "vtt", "talk.wav");
+    await exportTranscript(7, "txt", "board.review.final.mp4");
+    await exportTranscript(7, "srt", "Notes v1.2");
+    expect(clicked).toEqual(["talk.vtt", "board.review.final.txt", "Notes v1.2.srt"]);
+  });
+
+  it("downloads an empty file for a transcript with no words", async () => {
+    // The client reads a zero-length body as no data at all.
+    fetchMock.mockResolvedValue(new Response("", { headers: { "content-type": "text/plain", "content-length": "0" } }));
+    const made: Blob[] = [];
+    URL.createObjectURL = vi.fn((blob: Blob | MediaSource) => {
+      made.push(blob as Blob);
+      return "blob:x";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    await exportTranscript(7, "srt", "talk.wav");
+    expect(click).toHaveBeenCalledOnce();
+    expect(made.map((blob) => blob.size)).toEqual([0]);
+  });
 });

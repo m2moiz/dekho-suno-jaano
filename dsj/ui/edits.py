@@ -242,6 +242,9 @@ def engine_of(transcript_id: int) -> str:
 # the transcript's list (ui/src/features/transcript/document.ts, speakerName).
 _DIARIZER_LABEL = re.compile(r"SPEAKER_\d+")
 
+# What an exported file says where a word was muted.
+_MASK = "[bleep]"
+
 
 def labels_of(opened: Opened) -> list[str]:
     """The transcript's speaker labels, then any the list uses that it lacks, in order of first use.
@@ -272,7 +275,10 @@ def as_payload(opened: Opened) -> dict[str, Any]:
 
     One sentence per paragraph mark, its words as edited (a correction, #83,
     reads as corrected), each speaker under the name a person gave them.
-    Paragraphs with no words are left out, as likho leaves them out.
+    Paragraphs with no words are left out, as likho leaves them out. A muted
+    word is written as `[bleep]`: a word a person chose to silence must not
+    come back in a subtitle file or a text. A paragraph whose speaker is blank
+    has no speaker, as the page shows it.
     """
     labels = labels_of(opened)
     sentences: list[dict[str, Any]] = []
@@ -295,10 +301,13 @@ def as_payload(opened: Opened) -> dict[str, Any]:
         if isinstance(entry, hatao.Paragraph):
             close()
             tokens = []
-            speaker = None if entry.speaker is None else labels.index(entry.speaker)
+            speaker = labels.index(entry.speaker) if entry.speaker else None
             continue
         if tokens is not None and entry.text:
-            tokens.append({"t": entry.source_start, "e": entry.source_end, "w": entry.text})
+            # The word's leading space stays, so the line still breaks between words.
+            lead = entry.text[: len(entry.text) - len(entry.text.lstrip())]
+            word = lead + _MASK if entry.muted else entry.text
+            tokens.append({"t": entry.source_start, "e": entry.source_end, "w": word})
     close()
     payload: dict[str, Any] = {"sentences": sentences}
     if labels:

@@ -9,9 +9,14 @@ import { ApiError, fromBody } from "@/features/errors/appError";
 
 export type ExportFormat = "srt" | "vtt" | "txt";
 
-/** `title` as a file name: the characters Finder or a phone refuses in one become a dot or a space. */
+/**
+ * `title` as a file name: a recording's own extension dropped (talk.wav is
+ * talk.srt, not talk.wav.srt), and the characters Finder or a phone refuses in
+ * one become a dot or a space. An extension starts with a letter, so the ".2" of
+ * "Notes v1.2" stays.
+ */
 function fileStem(title: string): string {
-  return title.replace(/:/g, ".").replace(/[/\\*?"<>|]+/g, " ").trim() || "transcript";
+  return title.replace(/\.[A-Za-z][A-Za-z0-9]{0,4}$/, "").replace(/:/g, ".").replace(/[/\\*?"<>|]+/g, " ").trim() || "transcript";
 }
 
 export async function exportTranscript(transcriptId: number, format: ExportFormat, title: string): Promise<void> {

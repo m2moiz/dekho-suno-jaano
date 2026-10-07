@@ -194,7 +194,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
     return next;
   }, [content, opened.doc.speakers]);
   const article = useRef<HTMLElement>(null);
-  const saving = useSave(transcriptId, editable);
+  const { state: saving, settle } = useSave(transcriptId, editable);
   const selected = useSelection(edit, article);
   const renderable = useLatest(editable.renderable);
   // The speakers' names (#243): saved on their own route, kept beside the editor.
@@ -288,9 +288,12 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
                       key={format}
                       className={tall}
                       onClick={() =>
-                        exportTranscript(transcriptId, format, fileName(opened.recording.path)).catch((thrown: unknown) =>
-                          showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/export/${format}`)),
-                        )
+                        // The server exports its own copy of the list, so it is brought up to date first.
+                        settle()
+                          .then(() => exportTranscript(transcriptId, format, fileName(opened.recording.path)))
+                          .catch((thrown: unknown) =>
+                            showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/export/${format}`)),
+                          )
                       }
                     >
                       {label}

@@ -409,6 +409,50 @@ describe("the words to bleep, on the transcript page", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", true);
   });
 
+  // The menu's export items, with the edit list's PUT held or refused by the test.
+  async function exportAfterAMute(putting: Promise<Response>): Promise<string[]> {
+    const normal = fetchMock.getMockImplementation();
+    const exported: string[] = [];
+    fetchMock.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/transcripts/7/export/srt") {
+        exported.push(path);
+        return new Response("1\n", { headers: { "content-type": "text/plain" } });
+      }
+      if (path === "/api/transcripts/7/edits" && request.method === "PUT") return putting;
+      return (normal as (request: Request) => Promise<Response>)(request);
+    });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const section = await panel();
+    fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+    });
+    choose(await screen.findByRole("menuitem", { name: "Subtitles (SRT)" }));
+    return exported;
+  }
+
+  it("exports only once the edit list the mute started saving is saved", async () => {
+    let answer: (reply: Response) => void = () => undefined;
+    const putting = new Promise<Response>((resolve) => {
+      answer = resolve;
+    });
+    const exported = await exportAfterAMute(putting);
+    // The save has not come back, so the server's copy is behind the page's: no export yet.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(exported).toEqual([]);
+    answer(Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null }));
+    await vi.waitFor(() => expect(exported).toEqual(["/api/transcripts/7/export/srt"]));
+  });
+
+  it("exports nothing, and says so, when the edit list could not be saved", async () => {
+    const exported = await exportAfterAMute(Promise.resolve(Response.json({ detail: "disk full" }, { status: 500 })));
+    await vi.waitFor(() => expect(currentError()?.message).toContain("Nothing was exported"));
+    expect(exported).toEqual([]);
+  });
+
   it("adds a word to the user's list and mutes what the next pass finds of it", async () => {
     const section = await panel();
     const field = within(section).getByRole("textbox", { name: "A word to add to your list" });
