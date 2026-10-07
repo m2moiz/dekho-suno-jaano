@@ -9,6 +9,7 @@ import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/app
 import { AppBar } from "@/features/shell/AppBar";
 import { FIELD_EDGE } from "@/features/shell/field";
 import { useFinishedCount } from "@/features/transcribe/jobs";
+import { fold } from "@/lib/fold";
 import { fileName } from "./describe";
 import { importRecording } from "./imports";
 import { RecordingRowItem } from "./RecordingRow";
@@ -43,20 +44,6 @@ function useLate(on: boolean, ms: number): boolean {
     return () => clearTimeout(timer);
   }, [on, ms]);
   return late;
-}
-
-// Letters typed one way and stored another: an Arabic keyboard's yeh, kaf
-// and heh against the Urdu letters a title is written in (ي ى to ی, ك to ک,
-// ه to ہ), and the short-vowel marks, which a search never needs to match.
-const VARIANTS: Record<string, string> = { "\u064A": "\u06CC", "\u0649": "\u06CC", "\u0643": "\u06A9", "\u0647": "\u06C1" };
-const MARKS = /[\u064B-\u065F\u0670]/g;
-
-/** `text` as search compares it: one form of each Urdu letter, no vowel marks, any case. */
-function fold(text: string): string {
-  return text
-    .replace(MARKS, "")
-    .replace(/[\u064A\u0649\u0643\u0647]/g, (ch) => VARIANTS[ch] ?? ch)
-    .toLocaleLowerCase();
 }
 
 /** Titles and file names holding every word of `query`, in any order and case. */
