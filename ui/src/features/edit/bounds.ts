@@ -7,6 +7,7 @@
 // still plays the whole recording in order and a render still takes it
 // (ui/src/lib/linter.ts checks that after every edit).
 
+import { TIME_EPS_S } from "@/features/transcript/document";
 import type { Content, Entry, Item, RetimeOp } from "@/lib/editOps";
 
 // The file's own precision: dsj/hatao.py rounds lengths to the millisecond.
@@ -113,7 +114,7 @@ export function retime(content: Content, bounds: Bounds, edge: Edge, seconds: nu
   const fill = (until: number, source: string) => {
     entries.push(...paragraphs);
     paragraphs = [];
-    if (until > reached + 0.0005) {
+    if (until > reached + TIME_EPS_S) {
       entries.push({ kind: "item", source, sourceStart: ms(reached), length: ms(until - reached), text: "", muted: pauseMuted, confidence: null });
     }
     pauseMuted = false;

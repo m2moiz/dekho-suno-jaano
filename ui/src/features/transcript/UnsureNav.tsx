@@ -6,7 +6,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { selectWords, turnTexts } from "@/features/edit/selection";
 import { FIELD_BUTTON, FIELD_ICON_BUTTON } from "@/features/shell/field";
 import { cutoffFor, UNSURE, unsureHighlight, unsureWords } from "./confidence";
-import type { Reading } from "./document";
+import { type Reading, TIME_EPS_S } from "./document";
 import { isOurs } from "./readerKeys";
 
 type Props = {
@@ -25,9 +25,6 @@ function goTo(reading: Reading, root: HTMLElement, word: number): void {
   }
 }
 
-// Half a millisecond: dsj/hatao.py rounds times to the millisecond.
-const EPS = 0.0005;
-
 /**
  * The unsure word after (`by` 1) or before (-1) the time `at`, wrapping
  * round; the first or the last when nothing has been visited yet.
@@ -35,8 +32,8 @@ const EPS = 0.0005;
 export function stepUnsure(starts: Float64Array, words: readonly number[], at: number | null, by: 1 | -1): number | undefined {
   if (words.length === 0) return undefined;
   if (at === null) return by > 0 ? words[0] : words.at(-1);
-  if (by > 0) return words.find((w) => (starts[w] ?? 0) > at + EPS) ?? words[0];
-  return words.findLast((w) => (starts[w] ?? 0) < at - EPS) ?? words.at(-1);
+  if (by > 0) return words.find((w) => (starts[w] ?? 0) > at + TIME_EPS_S) ?? words[0];
+  return words.findLast((w) => (starts[w] ?? 0) < at - TIME_EPS_S) ?? words.at(-1);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
@@ -16,10 +16,10 @@ import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
 import { PLAYER_HEIGHT } from "@/features/player/playhead";
-import { AppBar } from "@/features/shell/AppBar";
+import { AppBar, BAR_HEIGHT } from "@/features/shell/AppBar";
 import { KeysItem } from "@/features/shell/KeySheet";
 import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
-import { parseTranscript, read, type Reading, type TranscriptDoc } from "./document";
+import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
 import { useReaderKeys } from "./readerKeys";
 import type { Names } from "./speakers";
 import { type ReviewMarks, TranscriptView } from "./TranscriptView";
@@ -115,6 +115,58 @@ function ReadOnlyPage({ opened, reason, transcriptId }: { opened: Opened; reason
   );
 }
 
+// The custom property on <html> holding the Timing dock's height while it is open.
+const DOCK_HEIGHT = "--dsj-dock-height";
+// Clear space kept between the word and the dock or the bar, in pixels.
+const CLEAR_PX = 12;
+
+function heightOf(property: string): number {
+  return Number.parseFloat(document.documentElement.style.getPropertyValue(property)) || 0;
+}
+
+/**
+ * When the Timing dock opens on a word, scroll the word clear of it and of
+ * the bar (Task 3 review: the dock covered a word near the window's bottom).
+ * The page's bottom padding grows by the dock's height while it is open, so
+ * even the last turn's words can be scrolled above it.
+ */
+function useTimingInSight(
+  word: number | null,
+  reading: Reading,
+  article: RefObject<HTMLElement | null>,
+  dock: RefObject<HTMLDivElement | null>,
+): void {
+  // Read when the dock opens, not followed: a drag in the strip makes a new
+  // reading on every move, and the view must not jump while it does.
+  const now = useRef(reading);
+  now.current = reading;
+  useLayoutEffect(() => {
+    const root = article.current;
+    const element = dock.current;
+    const drawn = now.current;
+    if (word === null || root === null || element === null) return;
+    const html = document.documentElement;
+    const box = element.getBoundingClientRect();
+    html.style.setProperty(DOCK_HEIGHT, `${box.height + CLEAR_PX}px`);
+    const text = turnTexts(root)[drawn.words.turn[word] ?? -1];
+    if (text !== undefined && typeof Range.prototype.getBoundingClientRect === "function") {
+      const from = drawn.words.offset[word] ?? 0;
+      const range = document.createRange();
+      range.setStart(text, from);
+      range.setEnd(text, from + (drawn.words.length[word] ?? 0));
+      const at = range.getBoundingClientRect();
+      const top = heightOf(BAR_HEIGHT) + CLEAR_PX;
+      const bottom = box.top - CLEAR_PX;
+      // Below the dock: up until it clears it; under the bar: down until it clears that.
+      const by = at.bottom > bottom ? at.bottom - bottom : at.top < top ? at.top - top : 0;
+      if (by !== 0) window.scrollBy({ top: by, behavior: "instant" });
+    }
+    return () => {
+      html.style.removeProperty(DOCK_HEIGHT);
+    };
+  }, [word, article, dock]);
+}
+
 function EditablePage({ opened, editable, transcriptId }: { opened: Opened; editable: Editable; transcriptId: number }) {
   const { editor } = editable;
   const content = useContent(editor);
@@ -131,6 +183,8 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const controls = useRef<PlayerControls | null>(null);
   // The word whose edges are being dragged (#85), while the strip is open.
   const [timing, setTiming] = useState<number | null>(null);
+  const dock = useRef<HTMLDivElement>(null);
+  useTimingInSight(timing, edit.reading, article, dock);
   // The words being retyped in place (#83), while the field is open.
   const [correcting, setCorrecting] = useState<Picked | null>(null);
   // Where focus goes back to once Correct or Timing closes: these words, by
@@ -145,7 +199,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
     let last = -1;
     for (let w = edit.reading.turns[back.turn]?.first ?? 0; w < start.length && turn[w] === back.turn; w += 1) {
       const at = start[w] ?? 0;
-      if (at < back.from - 0.0005 || at >= back.to - 0.0005) continue;
+      if (at < back.from - TIME_EPS_S || at >= back.to - TIME_EPS_S) continue;
       if (first < 0) first = w;
       last = w;
     }
@@ -202,6 +256,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
         // Docked above the rail, where it is in sight whichever word it is for
         // (Task 3 review: in the page's flow it opened off screen).
         <div
+          ref={dock}
           className="fixed inset-x-2 z-30 mx-auto max-w-3xl"
           style={{ bottom: `calc(var(${PLAYER_HEIGHT}, 0px) + 0.5rem)` }}
         >
@@ -263,7 +318,11 @@ function Page({ opened, transcriptId, reading, article, children, tools, muteSpa
         <UnsureNav reading={reading} model={doc.model} article={article} />
         {tools}
       </AppBar>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-3 pt-6 pb-10 sm:px-6">
+      {/* Room below the last turn for the Timing dock, so its word can be scrolled clear of it. */}
+      <main
+        className="mx-auto w-full max-w-5xl flex-1 px-3 pt-6 sm:px-6"
+        style={{ paddingBottom: `calc(2.5rem + var(${DOCK_HEIGHT}, 0px))` }}
+      >
         {children}
         <TranscriptView
           reading={reading}

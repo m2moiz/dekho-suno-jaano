@@ -105,6 +105,27 @@ describe("corrections", () => {
     ]);
   });
 
+  it("lists nothing for two unedited words that start at the same time, the first with no length", () => {
+    const doc: TranscriptDoc = {
+      audio: "a.wav",
+      model: "parakeet",
+      sentences: [{ start: 0.2, end: 0.5, text: " uh okay", tokens: [{ t: 0.2, w: " uh", e: 0.2, c: 0.9 }, { t: 0.2, w: " okay", e: 0.5, c: 0.9 }] }],
+    };
+    const content: Content = [
+      { kind: "paragraph", speaker: null, language: null },
+      item(0, 0.2, "", null),
+      item(0.2, 0, " uh"),
+      item(0.2, 0.3, " okay"),
+    ];
+    expect(corrections(readContent(content, undefined).reading, tokensOf(doc))).toEqual([]);
+    // And both still count once retyped: "uh" deleted, "okay" kept.
+    const op = correction(content, 2, 4, "okay");
+    const after = [...content.slice(0, 2), ...op.entries];
+    expect(corrections(readContent(after, undefined).reading, tokensOf(doc))).toEqual([
+      { turn: 0, first: 0, last: -1, original: "uh", now: "" },
+    ]);
+  });
+
   it("reads the transcript's own words over a stretch of time", () => {
     expect(originalText(tokens, 0.6, 1.3)).toBe("bravo charlie");
     expect(originalText(tokens, 5, 6)).toBe("");

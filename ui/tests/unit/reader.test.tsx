@@ -225,6 +225,26 @@ describe("the reader", () => {
     expect(window.getSelection()?.toString()).toBe("bravo");
   });
 
+  it("forgets a ] that found no unsure word, so a selection the page makes later leaves focus alone", async () => {
+    const sure = CONTENT.map((e) => (e.kind === "item" && e.confidence !== null ? { ...e, confidence: 0.95 } : e));
+    const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
+    fetchMock.mockImplementation(async (request: Request) =>
+      new URL(request.url).pathname === "/api/transcripts/7/edits" && request.method === "GET"
+        ? Response.json({ content: sure, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null })
+        : answer(request),
+    );
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" }));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(window.getSelection()?.toString()).toBe("");
+    // The page selects words itself, as it does after Timing's Done.
+    act(() => select("bravo"));
+    await screen.findByRole("toolbar", { name: "Selection" });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("leaves focus alone for a selection made with the pointer", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });

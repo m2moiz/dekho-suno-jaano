@@ -88,7 +88,18 @@ function useKeyboardReach(bar: RefObject<HTMLDivElement | null>, shown: boolean,
       // Esc, Space and the rest select nothing, and a selection the page puts
       // back after one (Timing's Esc, Correct's Save) keeps focus where it is.
       if (event.shiftKey && /^(Arrow|Home|End|Page)/.test(event.key)) growing.current = true;
-      else if (event.code === "BracketRight" || event.code === "BracketLeft") pending.current = true;
+      else if (event.code === "BracketRight" || event.code === "BracketLeft") {
+        pending.current = true;
+        // Once the key's own handlers have run: a `]` that selected nothing new
+        // (no unsure word, or the same one again) is settled here, so the
+        // flag never waits for a selection the page makes later.
+        const before = spotOf(window.getSelection());
+        setTimeout(() => {
+          if (!pending.current || !sameSpot(spotOf(window.getSelection()), before)) return;
+          pending.current = false;
+          if (shownNow.current) first();
+        }, 0);
+      }
     };
     const up = (event: KeyboardEvent) => {
       if (event.key !== "Shift" || !growing.current) return;
@@ -123,6 +134,17 @@ function useKeyboardReach(bar: RefObject<HTMLDivElement | null>, shown: boolean,
     const button = bar.current?.querySelector<HTMLElement>("button:not(:disabled)");
     if (button != null) focusKeepingSelection(button);
   }, [bar, shown, selected]);
+}
+
+/** Where the page's selection is: its two ends, compared by node and offset. */
+function spotOf(selection: Selection | null): readonly [Node | null, number, Node | null, number] {
+  if (selection === null || selection.rangeCount === 0) return [null, 0, null, 0];
+  const range = selection.getRangeAt(0);
+  return [range.startContainer, range.startOffset, range.endContainer, range.endOffset];
+}
+
+function sameSpot(a: ReturnType<typeof spotOf>, b: ReturnType<typeof spotOf>): boolean {
+  return a.every((part, i) => part === b[i]);
 }
 
 /** The paragraph a range is in: its start's, or, from an element (a triple-click), its first word's. */

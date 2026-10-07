@@ -67,27 +67,72 @@ test("dragging a word's end is one undo step, takes time from the next word, and
   expect(await valueOf(page, "Start of delta")).toBe(dragged);
 });
 
-test("Timing on a word far down a long transcript opens in sight, above the player, with focus in it", async ({ page }, info) => {
-  const dir = scratchDir();
-  // Forty turns of eight words: the last is several screens below the first.
-  const turns = Array.from({ length: 40 }, (_, t) => Array.from({ length: 8 }, (_, w) => `t${t}w${w}`));
-  const seconds = Math.ceil(40 * (8 * 0.5 + 0.4)) + 2 + info.project.name.length / 10;
-  const seeded = seed(editableTranscript(tone(dir, seconds, `bounds-long-${info.project.name}.wav`), turns), dir);
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto(readerUrl(seeded));
-  const word = "t38w3";
-  await page.getByText(word).scrollIntoViewIfNeeded();
-  const strip = await openTiming(page, word);
-  await expect(strip).toBeVisible();
-  const box = await strip.boundingBox();
-  const rail = await page.getByRole("region", { name: "Player" }).boundingBox();
-  if (box === null || rail === null) throw new Error("no strip or no player on screen");
-  expect(box.y).toBeGreaterThanOrEqual(0);
-  // Wholly in the window, and clear of the rail it sits on.
-  expect(box.y + box.height).toBeLessThanOrEqual(rail.y + 1);
-  await expect(strip.getByRole("slider", { name: `Start of ${word}` })).toBeFocused();
-  // Esc closes it and puts focus back on the word's paragraph, with the word selected.
-  await page.keyboard.press("Escape");
-  await expect(strip).toHaveCount(0);
-  expect(await page.evaluate(() => [document.activeElement?.tagName, window.getSelection()?.toString()])).toEqual(["P", word]);
-});
+/** The word's box on screen, from its text. */
+function wordBox(page: Page, word: string) {
+  return page.evaluate((word) => {
+    for (const p of document.querySelectorAll("article p")) {
+      const text = p.firstChild as Text;
+      const at = text.data.indexOf(` ${word}`);
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(text, at + 1);
+      range.setEnd(text, at + 1 + word.length);
+      const box = range.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom };
+    }
+    throw new Error(`no paragraph holds ${word}`);
+  }, word);
+}
+
+for (const { width, height } of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test(`at ${width}x${height} Timing scrolls its word clear of the dock: one at the window's bottom, one far down, the last`, async ({ page }, info) => {
+    const dir = scratchDir();
+    // Forty turns of eight words: the last is several screens below the first.
+    const turns = Array.from({ length: 40 }, (_, t) => Array.from({ length: 8 }, (_, w) => `t${t}w${w}`));
+    const seconds = Math.ceil(40 * (8 * 0.5 + 0.4)) + 2 + width / 10000 + info.project.name.length / 10;
+    const seeded = seed(editableTranscript(tone(dir, seconds, `bounds-long-${width}-${info.project.name}.wav`), turns), dir);
+    await page.setViewportSize({ width, height });
+    await page.goto(readerUrl(seeded));
+    await expect(page.locator("article p")).toHaveCount(40);
+    const rail = await page.getByRole("region", { name: "Player" }).boundingBox();
+    if (rail === null) throw new Error("no player on screen");
+    // The lowest word wholly above the rail, as the page first draws: no scrolling first.
+    const bottom = await page.evaluate((railTop) => {
+      let best = "";
+      let lowest = -1;
+      for (const p of document.querySelectorAll("article p")) {
+        const text = p.firstChild as Text;
+        for (const match of text.data.matchAll(/t\d+w\d+/g)) {
+          const range = document.createRange();
+          range.setStart(text, match.index);
+          range.setEnd(text, match.index + match[0].length);
+          const box = range.getBoundingClientRect();
+          if (box.bottom < railTop - 2 && box.bottom > lowest) {
+            lowest = box.bottom;
+            best = match[0];
+          }
+        }
+      }
+      return best;
+    }, rail.y);
+    expect(bottom).not.toBe("");
+    const bar = await page.getByRole("banner").boundingBox();
+    for (const word of [bottom, "t30w3", "t39w7"]) {
+      const strip = await openTiming(page, word);
+      await expect(strip.getByRole("slider", { name: `Start of ${word}` })).toBeFocused();
+      const dock = await strip.boundingBox();
+      if (dock === null || bar === null) throw new Error("no strip or no bar on screen");
+      const box = await wordBox(page, word);
+      // Above the dock's top, below the bar: in sight while its edges are dragged.
+      expect(box.bottom).toBeLessThanOrEqual(dock.y);
+      expect(box.top).toBeGreaterThanOrEqual(bar.y + bar.height);
+      // Esc closes it and puts focus back on the word's paragraph, with the word selected.
+      await page.keyboard.press("Escape");
+      await expect(strip).toHaveCount(0);
+      expect(await page.evaluate(() => [document.activeElement?.tagName, window.getSelection()?.toString()])).toEqual(["P", word]);
+    }
+  });
+}

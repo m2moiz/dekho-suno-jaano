@@ -4,15 +4,13 @@ import { type CSSProperties, memo, type ReactNode, type Ref } from "react";
 import type { Correction } from "@/features/edit/corrections";
 import { durationLabel } from "@/features/library/describe";
 import { langOf } from "@/lib/script";
-import type { Reading } from "./document";
+import { type Reading, TIME_EPS_S } from "./document";
 import { displayName, type Names, NO_NAMES, speakerColour } from "./speakers";
 import "./transcript.css";
 
 // A minute of speech fills the margin's tick; a longer turn stops there.
 const TICK_FULL_S = 60;
 const NONE: readonly Correction[] = [];
-// Half a millisecond: dsj/hatao.py rounds times to the millisecond.
-const EPS = 0.0005;
 
 /** Where Review has got to with a turn or a sentence (Hashiya spec, "The margin": the review mark). */
 export type ReviewState = "checked" | "flagged";
@@ -102,7 +100,7 @@ export const TranscriptView = memo(function TranscriptView({
           const until = end[turn.first + turn.count - 1] ?? turn.start;
           const seconds = Math.max(0, until - turn.start);
           const marks = (review?.sentences ?? [])
-            .filter((m) => m.start >= turn.start - EPS && m.start < until - EPS)
+            .filter((m) => m.start >= turn.start - TIME_EPS_S && m.start < until - TIME_EPS_S)
             .map((m) => m.state);
           const style = {
             "--speaker": speakerColour(turn.speaker),
