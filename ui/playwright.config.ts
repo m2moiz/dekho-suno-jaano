@@ -22,6 +22,7 @@ export default defineConfig({
     { name: "chromium", testDir: "tests/e2e", use: { ...devices["Desktop Chrome"] } },
     { name: "webkit", testDir: "tests/e2e", use: { ...devices["Desktop Safari"] } },
     // Chromium only: the 16.7 ms baseline it is compared with was measured there.
-    { name: "perf", testDir: "tests/perf", use: { ...devices["Desktop Chrome"] } },
+    // One worker: frame-time tests must not share the CPU (Task 15 review, I1).
+    { name: "perf", testDir: "tests/perf", workers: 1, use: { ...devices["Desktop Chrome"] } },
   ],
 });

@@ -266,7 +266,6 @@ test.describe("on a phone, 390 px wide, a touch screen", () => {
   test.use({ viewport: PHONE, hasTouch: true });
 
   test("a swipe left checks and goes on, a swipe right goes back, a speaker chip reassigns, every target 44 px (Task 15)", async ({ page, browserName }, info) => {
-    test.skip(browserName !== "chromium", "a finger's drag goes through the DevTools protocol, which only chromium has");
     await openReview(page, `review-phone-touch-${info.project.name}`, 9.3 + info.project.name.length / 1000);
     await page.getByRole("button", { name: /^Every sentence/ }).tap();
     const card = page.getByRole("article", { name: "Sentence being checked" });
@@ -276,19 +275,25 @@ test.describe("on a phone, 390 px wide, a touch screen", () => {
     await expect(box).not.toBeFocused();
     expect(await undersized(page)).toEqual([]);
 
-    // From the card's margin line, not the text box, which keeps drags for selecting words.
-    const from = await card.locator("p").first().boundingBox();
-    if (from === null) throw new Error("the card's margin line is not on the page");
-    const at = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
-    const cdp = await page.context().newCDPSession(page);
-    await swipe(cdp, at, -160);
+    if (browserName === "chromium") {
+      // A finger's drag goes through the DevTools protocol, which only chromium
+      // speaks; webkit taps on and still measures the targets and the chip.
+      // From the card's margin line, not the text box, which keeps drags for selecting words.
+      const from = await card.locator("p").first().boundingBox();
+      if (from === null) throw new Error("the card's margin line is not on the page");
+      const at = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+      const cdp = await page.context().newCDPSession(page);
+      await swipe(cdp, at, -160);
+      await expect(box).toHaveValue("delta echo");
+      await expect(page.getByText("1 of 3 checked")).toBeVisible();
+      await swipe(cdp, at, 160);
+      await expect(box).toHaveValue("alpha bravo charlie");
+      await swipe(cdp, at, -160);
+      await cdp.detach();
+    } else {
+      await page.getByRole("button", { name: "Checked, next" }).tap();
+    }
     await expect(box).toHaveValue("delta echo");
-    await expect(page.getByText("1 of 3 checked")).toBeVisible();
-    await swipe(cdp, at, 160);
-    await expect(box).toHaveValue("alpha bravo charlie");
-    await swipe(cdp, at, -160);
-    await expect(box).toHaveValue("delta echo");
-    await cdp.detach();
 
     // "delta echo" is the second speaker's (editableTranscript alternates them); a tap on the first's chip reassigns it.
     const chips = page.getByRole("group", { name: "Who said it" });

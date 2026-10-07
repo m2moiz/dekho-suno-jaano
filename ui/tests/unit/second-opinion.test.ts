@@ -141,6 +141,10 @@ describe("rememberedOpinion", () => {
     const mine = ["alpha", "bravo", "Charlie, delta", "echo"];
     expect(opinion(OTHER, split, mine)).toEqual(secondOpinion(OTHER, split, mine));
     expect(opinion(null, split, mine)).toEqual(secondOpinion(null, split, mine));
+    // Merged back, then read against another reading of the same audio.
+    expect(opinion(OTHER, spans, before)).toEqual(secondOpinion(OTHER, spans, before));
+    const another = read({ audio: "a", model: "m", sentences: [sentence(0.2, [" alpha", " bravo", " Charles", " delta", " echo"], 0.4)] });
+    expect(opinion(another, spans, before)).toEqual(secondOpinion(another, spans, before));
   });
 
   it("works out again only the span whose words changed: an edit costs one sentence, not 1,500 (Task 15)", () => {

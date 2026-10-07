@@ -14,8 +14,8 @@ import { FRAMES, P95_CEILING_MS, STEP_PX, type Summary, scrollFrames, summarise 
 
 // A correction's frame, second opinion worked out again included: the
 // ceiling Task 15's dispatch set for changing the code (p95 per edit over 50
-// ms). Measured 2026-10-07 on this Mac, `cd ui && npx playwright test
-// tests/perf/long.spec.ts --project=perf`: see task-15-report.md.
+// ms). After that change it measured 18.0 to 18.5 ms on this Mac (`cd ui &&
+// npx playwright test tests/perf/long.spec.ts --project=perf`).
 const EDIT_P95_CEILING_MS = 50;
 
 /** The long fixture in the run's library, with no recording; and, given `other`, a second transcript of the same "recording". */
@@ -62,8 +62,8 @@ test("scrolling the reader over 1,500 sentences keeps p95 under 20 ms", async ({
 
 test("stepping through 300 of 1,500 sentences in Review keeps p95 under 20 ms, five sentences drawn", async ({ page }) => {
   await openReview(page, seedLong());
-  // The one in hand and two either side, never the transcript.
-  expect(await page.locator("main .review-row").count()).toBeLessThanOrEqual(5);
+  // At the first sentence: it and the two after it, never the transcript.
+  await expect(page.locator("main .review-row")).toHaveCount(3);
   const times = await page.evaluate(
     () =>
       new Promise<number[]>((resolve) => {
@@ -85,6 +85,8 @@ test("stepping through 300 of 1,500 sentences in Review keeps p95 under 20 ms, f
   const result = summarise(times);
   console.log(`review step frame times: ${JSON.stringify(result)}`);
   await expect(page.getByText(/^(299|300) of 1,500 checked$/)).toBeVisible();
+  // Mid-transcript: the one in hand and two either side.
+  await expect(page.locator("main .review-row")).toHaveCount(5);
   expect(result.p95).toBeLessThanOrEqual(P95_CEILING_MS);
 });
 

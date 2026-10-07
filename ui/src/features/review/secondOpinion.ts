@@ -153,10 +153,10 @@ export function secondOpinion(other: Reading | null, spans: readonly Span[], min
  * edit changes one sentence's words, so only that span is compared again;
  * the other reading's words are placed again only when the spans change (a
  * split or a merge) or the other reading does. On the 1,500-sentence fixture
- * comparing every span again made a correction's frame 57 ms at the median
- * and 70 ms at p95, against 17 and 18 ms with no second opinion; remembered,
- * 16.6 and 18.0 ms (Task 15, frames that started an edit-list save left out,
- * `cd ui && npx playwright test tests/perf/long.spec.ts --project=perf`).
+ * comparing every span again made a correction's frame 57 ms at the median,
+ * against 17 ms with no second opinion; remembered, 16.6 ms (Task 15, one run
+ * each, medians, `cd ui && npx playwright test tests/perf/long.spec.ts
+ * --project=perf`).
  */
 export function rememberedOpinion(): (other: Reading | null, spans: readonly Span[], mine: readonly string[]) => Opinions {
   let placed: { other: Reading; spans: readonly Span[]; words: string[][] } | null = null;
