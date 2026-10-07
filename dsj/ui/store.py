@@ -37,6 +37,7 @@ __all__ = [
 
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Iterable
@@ -56,9 +57,10 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 # Kept in SQLite's own `user_version`. Bumped by whoever changes the tables, so
 # an older dsj refuses a library a newer one wrote instead of misreading it.
 # Version 2 added `recordings.unreadable` (#110), version 3
-# `transcripts.last_edited_at` (#83); _MIGRATIONS brings an older library up
-# to date in place, one version at a time.
-SCHEMA_VERSION = 3
+# `transcripts.last_edited_at` (#83), version 4 `recordings.title` and version 5
+# `transcripts.urdu_share` (#245); _MIGRATIONS brings an older library up to
+# date in place, one version at a time.
+SCHEMA_VERSION = 5
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -86,6 +88,7 @@ CREATE TABLE IF NOT EXISTS recordings (
   first_seen    TEXT NOT NULL,
   missing       INTEGER NOT NULL DEFAULT 0,
   unreadable    TEXT,
+  title         TEXT,
   CHECK ((content_id IS NULL) = (size_bytes IS NULL))
 );
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -99,7 +102,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   speaker_count INTEGER,
   mark_count    INTEGER,
   language      TEXT,
-  last_edited_at TEXT
+  last_edited_at TEXT,
+  urdu_share    REAL
 );
 CREATE INDEX IF NOT EXISTS transcripts_by_recording ON transcripts(recording_id);
 PRAGMA user_version = {SCHEMA_VERSION};
@@ -117,15 +121,22 @@ _MIGRATIONS = {
     # the library can show which transcripts a person corrected. NULL for every
     # transcript nobody has edited, which before version 3 was all of them.
     2: "ALTER TABLE transcripts ADD COLUMN last_edited_at TEXT",
+    # A title a person gave the recording in the app (#245). NULL for every
+    # row: the page derives one from the file's name until someone types one.
+    3: "ALTER TABLE recordings ADD COLUMN title TEXT",
+    # The share of the transcript's letters in Urdu script, 0 to 1, which the
+    # library row's language tag reads (#245). NULL until the list fills it
+    # in (Library.backfill_urdu_share), once per transcript.
+    4: "ALTER TABLE transcripts ADD COLUMN urdu_share REAL",
 }
 
 _RECORDING_COLUMNS = (
     "r.id, r.path, r.size_bytes, r.duration_s, r.content_id, r.audio_codec, r.video_codec, "
-    "r.first_seen, r.missing, r.unreadable"
+    "r.first_seen, r.missing, r.unreadable, r.title"
 )
 _TRANSCRIPT_COLUMNS = (
     "id, recording_id, json_path, finished_at, engine, model, diarized, speaker_count, "
-    "mark_count, language, last_edited_at"
+    "mark_count, language, last_edited_at, urdu_share"
 )
 
 
@@ -157,6 +168,8 @@ class Recording:
     # ffprobe's own words when it could not read the file, else None (#110). A
     # file with no sound at all is readable, and is not this.
     unreadable: str | None = None
+    # The title a person gave it in the app (#245), else None: the page derives one.
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +191,8 @@ class Transcript:
     # When the app last saved an edit to it (#83), else None. The JSON file is
     # never edited; the edit list beside the library is (dsj/ui/edits.py).
     last_edited_at: str | None = None
+    # The share of its letters in Urdu script, 0 to 1, or None until read.
+    urdu_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -316,6 +331,23 @@ def _counts(payload: dict[str, Any]) -> tuple[int | None, int | None, int | None
     return diarized, speaker_count, mark_count
 
 
+# Urdu's script blocks: Arabic, its Supplement and Extended-A, and the two
+# Presentation Forms blocks (ui/src/lib/script.ts reads the same ranges).
+_URDU_LETTER = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+
+
+def _urdu_share(payload: dict[str, Any]) -> float:
+    """The share of the transcript's letters in Urdu script, to three places; 0 with no letters."""
+    letters = urdu = 0
+    for sentence in cast("list[dict[str, Any]]", payload.get("sentences") or []):
+        for ch in str(sentence.get("text") or ""):
+            if ch.isalpha():
+                letters += 1
+                if _URDU_LETTER.match(ch):
+                    urdu += 1
+    return round(urdu / letters, 3) if letters else 0.0
+
+
 def _migrate(db: sqlite3.Connection, version: int) -> int:
     """Bring a version `version` library up one version, and return the version it is at.
 
@@ -348,6 +380,7 @@ def _recording(row: tuple[Any, ...]) -> Recording:
         first_seen=row[7],
         missing=bool(row[8]),
         unreadable=row[9],
+        title=row[10],
     )
 
 
@@ -364,6 +397,7 @@ def _transcript(row: tuple[Any, ...]) -> Transcript:
         mark_count=row[8],
         language=row[9],
         last_edited_at=row[10],
+        urdu_share=row[11],
     )
 
 
@@ -464,6 +498,44 @@ class Library:
         with self._db:
             recording_id = self._recording_for(media.expanduser().resolve())
         return self._must_recording(recording_id)
+
+    def set_title(self, recording_id: int, title: str | None) -> Recording:
+        """Give a recording a title of its own, or None to let the page derive one (#245).
+
+        Raises:
+            LibraryError: if there is no recording with this id.
+        """
+        with self._db:
+            changed = self._db.execute(
+                "UPDATE recordings SET title = ? WHERE id = ?", (title, recording_id)
+            ).rowcount
+        if changed == 0:
+            raise LibraryError(f"the library has no recording with id {recording_id}.")
+        return self._must_recording(recording_id)
+
+    def backfill_urdu_share(self) -> int:
+        """Read the script share of every transcript that has none yet; returns how many it filled.
+
+        Once per transcript: a library from before version 5 pays one read of
+        each JSON file, on the first listing after the upgrade. A file that is
+        gone or unreadable is left NULL and read again next time.
+        """
+        rows = self._db.execute(
+            "SELECT id, json_path FROM transcripts WHERE urdu_share IS NULL"
+        ).fetchall()
+        filled = 0
+        with self._db:
+            for transcript_id, json_path in rows:
+                try:
+                    payload = _read_payload(Path(json_path))
+                except NotATranscript:
+                    continue
+                self._db.execute(
+                    "UPDATE transcripts SET urdu_share = ? WHERE id = ?",
+                    (_urdu_share(payload), transcript_id),
+                )
+                filled += 1
+        return filled
 
     def adopt(self, paths: Iterable[Path]) -> Adoption:
         """Index transcript JSON files that already exist, changing nothing in them.
@@ -621,9 +693,9 @@ class Library:
         diarized, speaker_count, mark_count = _counts(payload)
         cursor = self._db.execute(
             "INSERT INTO transcripts (recording_id, json_path, finished_at, engine, model, "
-            "diarized, speaker_count, mark_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "diarized, speaker_count, mark_count, urdu_share) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (recording_id, str(path), finished_at, _engine_of(payload), payload["model"],
-             diarized, speaker_count, mark_count),
+             diarized, speaker_count, mark_count, _urdu_share(payload)),
         )
         return int(cast("int", cursor.lastrowid))
 
@@ -632,9 +704,9 @@ class Library:
         # COALESCE: an engine a run recorded stays; the file only fills one in.
         self._db.execute(
             "UPDATE transcripts SET engine = COALESCE(engine, ?), model = ?, diarized = ?, "
-            "speaker_count = ?, mark_count = ? WHERE id = ?",
+            "speaker_count = ?, mark_count = ?, urdu_share = ? WHERE id = ?",
             (_engine_of(payload), payload["model"], diarized, speaker_count, mark_count,
-             transcript_id),
+             _urdu_share(payload), transcript_id),
         )
 
     def _recording_for(self, media: Path) -> int:

@@ -50,6 +50,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recordings/{recording_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Retitle
+         * @description Give a recording a title of its own, or take it away with an empty one (#245).
+         */
+        patch: operations["retitle_api_recordings__recording_id__patch"];
+        trace?: never;
+    };
     "/api/recordings/{recording_id}/relink": {
         parameters: {
             query?: never;
@@ -559,6 +579,8 @@ export interface components {
         };
         /** @enum {string} */
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
+        /** @enum {string} */
+        LanguageTag: "urdu" | "mixed" | "english";
         /**
          * Match
          * @description One word, or phrase, a word list matched (dsj.hatao.Match).
@@ -641,6 +663,8 @@ export interface components {
             missing: boolean;
             /** Unreadable */
             unreadable: string | null;
+            /** Title */
+            title: string | null;
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
         };
@@ -671,6 +695,14 @@ export interface components {
         };
         /** @enum {string} */
         RenderState: "starting" | "rendering" | "done" | "failed";
+        /**
+         * TitleUpdate
+         * @description A recording's title; empty or None takes it away, so the page derives one again.
+         */
+        TitleUpdate: {
+            /** Title */
+            title?: string | null;
+        };
         /**
          * TranscribeRequest
          * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
@@ -728,6 +760,11 @@ export interface components {
             language: string | null;
             /** Last Edited At */
             last_edited_at: string | null;
+            language_tag: components["schemas"]["LanguageTag"] | null;
+            /** Review Checked */
+            review_checked: number | null;
+            /** Review Total */
+            review_total: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -805,6 +842,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Recording"] | null;
+                };
+            };
+        };
+    };
+    retitle_api_recordings__recording_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TitleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recording"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -28,6 +28,7 @@ function recording(video_codec: string | null): RecordingRow {
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
     unreadable: null,
+    title: null,
     transcripts: [],
   };
 }

@@ -64,8 +64,8 @@ beforeEach(() => {
     if (path === "/api/recordings") {
       return Response.json([{
         id: 2, path: "/rec/a.wav", size_bytes: 1, duration_s: 3, content_id: "c", audio_codec: "pcm",
-        video_codec: null, first_seen: "x", missing: false, unreadable: null,
-        transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: true, speaker_count: 2, mark_count: null, language: null, last_edited_at: null }],
+        video_codec: null, first_seen: "x", missing: false, unreadable: null, title: null,
+        transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: true, speaker_count: 2, mark_count: null, language: null, last_edited_at: null, language_tag: null, review_checked: null, review_total: null }],
       }]);
     }
     if (path === "/api/transcripts/7") return Response.json(DOC);

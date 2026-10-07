@@ -27,6 +27,7 @@ __all__ = [
     "ItemEntry",
     "Job",
     "JobState",
+    "LanguageTag",
     "Match",
     "Matches",
     "NamesUpdate",
@@ -34,6 +35,7 @@ __all__ = [
     "Recording",
     "RenderJob",
     "RenderState",
+    "TitleUpdate",
     "TranscribeRequest",
     "Transcript",
     "WordAdded",
@@ -59,6 +61,11 @@ type JobState = Literal[
 type RenderState = Literal["starting", "rendering", "done", "failed"]
 
 
+# What the library row calls a transcript's language (Hashiya spec, Library):
+# worked out from its run and its script by dsj/ui/routes/recording.py.
+type LanguageTag = Literal["urdu", "mixed", "english"]
+
+
 class Transcript(BaseModel):
     """One transcript of a recording, as the library page lists it."""
 
@@ -75,6 +82,11 @@ class Transcript(BaseModel):
     language: str | None
     # When an edit to it was last saved from the app (#83), else None.
     last_edited_at: str | None
+    # Urdu, mixed or English, or None when nothing says (#245).
+    language_tag: LanguageTag | None
+    # How far its review got, or both None when nobody has reviewed it.
+    review_checked: int | None
+    review_total: int | None
 
 
 class Recording(BaseModel):
@@ -91,7 +103,15 @@ class Recording(BaseModel):
     missing: bool
     # What ffprobe said when it could not read the file, else None (#110).
     unreadable: str | None
+    # A title a person gave it, else None: the page derives one from the file's name.
+    title: str | None
     transcripts: list[Transcript]
+
+
+class TitleUpdate(BaseModel):
+    """A recording's title; empty or None takes it away, so the page derives one again."""
+
+    title: str | None = Field(default=None, max_length=200)
 
 
 class Engine(BaseModel):

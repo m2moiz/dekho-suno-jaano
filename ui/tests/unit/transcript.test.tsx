@@ -167,6 +167,8 @@ describe("TranscriptPage", () => {
     video_codec: null,
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
+    unreadable: null,
+    title: null,
     transcripts: [
       {
         id: 7,
@@ -177,6 +179,10 @@ describe("TranscriptPage", () => {
         speaker_count: null,
         mark_count: null,
         language: null,
+        last_edited_at: null,
+        language_tag: null,
+        review_checked: null,
+        review_total: null,
       },
     ],
   };

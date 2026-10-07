@@ -23,10 +23,55 @@ from fastapi import APIRouter, HTTPException, Response
 
 from dsj.ui import pick
 from dsj.ui import store as store_mod
-from dsj.ui.schemas import Recording, Transcript
+from dsj.ui.review import progress
+from dsj.ui.schemas import LanguageTag, Recording, TitleUpdate, Transcript
 from dsj.ui.store import Library
 
 router = APIRouter(prefix="/api")
+
+# A transcript is Urdu when half its letters or more are in Urdu script, and
+# mixed when a twentieth are, or when it was run as Urdu and written in Latin
+# letters (--roman-urdu sets language "ur"). Set from the measured scripts on
+# #148's public Urdu-English podcast (README, "The model matters more than it
+# looks"; .agents/skills/dsj/references/engines.md): whisper-large-v3-turbo
+# writes 3% Urdu script under --roman-urdu and 78% under --language ur, the
+# full model 61 to 63% either way. English runs write none. The shares were
+# measured with `just urdu-fixture`, then `dsj suno scratch/urdu_cs/podcast.wav
+# --roman-urdu --no-diarize --model <id>` (and `--engine whisper --language ur`
+# for the 78%); the thresholds sit between them.
+URDU_SHARE = 0.5
+MIXED_SHARE = 0.05
+
+
+def _language_tag(t: store_mod.Transcript) -> LanguageTag | None:
+    """Urdu, mixed or English, for the library row; None for an old row not yet read."""
+    share = t.urdu_share
+    if share is not None and share >= URDU_SHARE:
+        return "urdu"
+    # parakeet and sherpa read European languages only (engines.md).
+    if t.engine in ("parakeet", "sherpa"):
+        return "english"
+    if t.language == "ur" or (share is not None and share >= MIXED_SHARE):
+        return "mixed"
+    return None if share is None else "english"
+
+
+def _transcript_row(t: store_mod.Transcript) -> Transcript:
+    done = progress(t.json_path)
+    return Transcript(
+        id=t.id,
+        finished_at=t.finished_at,
+        engine=t.engine,
+        model=t.model,
+        diarized=t.diarized,
+        speaker_count=t.speaker_count,
+        mark_count=t.mark_count,
+        language=t.language,
+        last_edited_at=t.last_edited_at,
+        language_tag=_language_tag(t),
+        review_checked=None if done is None else done[0],
+        review_total=None if done is None else done[1],
+    )
 
 
 def _row(library: Library, rec: store_mod.Recording) -> Recording:
@@ -42,20 +87,8 @@ def _row(library: Library, rec: store_mod.Recording) -> Recording:
         first_seen=rec.first_seen,
         missing=rec.missing,
         unreadable=rec.unreadable,
-        transcripts=[
-            Transcript(
-                id=t.id,
-                finished_at=t.finished_at,
-                engine=t.engine,
-                model=t.model,
-                diarized=t.diarized,
-                speaker_count=t.speaker_count,
-                mark_count=t.mark_count,
-                language=t.language,
-                last_edited_at=t.last_edited_at,
-            )
-            for t in library.transcripts(rec.id)
-        ],
+        title=rec.title,
+        transcripts=[_transcript_row(t) for t in library.transcripts(rec.id)],
     )
 
 
@@ -64,6 +97,7 @@ def recordings() -> list[Recording]:
     """Every recording, the one with the newest transcript first, each with its transcripts."""
     with Library.open() as library:
         library.refresh_missing()
+        library.backfill_urdu_share()
         return [_row(library, rec) for rec in library.recordings()]
 
 
@@ -81,6 +115,18 @@ def import_recording() -> Recording | None:
         return None
     with Library.open() as library:
         return _row(library, library.add_recording(picked))
+
+
+@router.patch("/recordings/{recording_id}")
+def retitle(recording_id: str, update: TitleUpdate) -> Recording:
+    """Give a recording a title of its own, or take it away with an empty one (#245)."""
+    if not (recording_id.isascii() and recording_id.isdigit()):
+        raise HTTPException(404, f"There is no recording {recording_id!r} in the library.")
+    title = (update.title or "").strip() or None
+    with Library.open() as library:
+        if library.recording(int(recording_id)) is None:
+            raise HTTPException(404, f"There is no recording {recording_id} in the library.")
+        return _row(library, library.set_title(int(recording_id), title))
 
 
 @router.post("/recordings/{recording_id}/relink")

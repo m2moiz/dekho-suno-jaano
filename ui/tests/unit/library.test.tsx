@@ -34,6 +34,9 @@ function transcript(overrides: Partial<TranscriptRow>): TranscriptRow {
     mark_count: null,
     language: null,
     last_edited_at: null,
+    language_tag: null,
+    review_checked: null,
+    review_total: null,
     ...overrides,
   };
 }
@@ -47,6 +50,7 @@ const ROWS: RecordingRow[] = [
     audio_codec: "aac",
     missing: false,
     unreadable: null,
+    title: null,
     duration_s: 3725,
     video_codec: "h264",
     first_seen: "2026-09-20T17:00:00+00:00",
@@ -60,6 +64,7 @@ const ROWS: RecordingRow[] = [
     audio_codec: "aac",
     missing: true,
     unreadable: null,
+    title: null,
     duration_s: 249,
     video_codec: null,
     first_seen: "2026-09-01T08:30:00+00:00",
@@ -171,6 +176,7 @@ describe("bringing a recording in (#110)", () => {
     audio_codec: "aac",
     missing: false,
     unreadable: null,
+    title: null,
     duration_s: 61,
     video_codec: "prores",
     first_seen: "2026-10-02T20:00:00+00:00",
