@@ -1,18 +1,27 @@
-/* The transcript as something to read for forty minutes (#58, #57 section 11.1).
+/* The transcript as something to read for forty minutes (#58, #57 section 11.1),
+ * in the Hashiya world (spec, Type).
  *
- * Literata for the words and the system face for everything else, a 68
- * character measure, 1.7 leading, 1.25em between speaker turns, ragged right
- * and never justified. Only the normal-width weight axis is imported: 7 files,
- * 176 KB, and the browser fetches just the scripts on the page.
+ * Literata for English, Noto Nastaliq Urdu for Urdu at 1.3x and 2.1 leading
+ * (Nastaliq's stacked joins need the room), the system face for everything
+ * else. A 68 character measure, ragged and never justified. Both faces are
+ * bundled: only their weight axis, and the browser fetches just the scripts
+ * on the page (Nastaliq's Arabic file is 239.06 kB as `uv run just ui-build`
+ * lists it, fetched only when a word in Urdu script is drawn).
+ *
+ * Each paragraph takes its direction from its own first letter (`dir="auto"`
+ * and `unicode-bidi: plaintext`), so an Urdu turn reads right to left with
+ * the English words and numbers inside it in their own order, and aligns to
+ * its start: the right edge for Urdu, the left for English.
  */
 @import "@fontsource-variable/literata/wght.css";
+@import "@fontsource-variable/noto-nastaliq-urdu/wght.css";
 
 .transcript {
   max-width: 68ch;
-  font-family: "Literata Variable", Georgia, serif;
+  font-family: var(--font-reading);
   font-size: 1.125rem;
   line-height: 1.7;
-  text-align: left;
+  text-align: start;
   hyphens: manual;
 }
 
@@ -28,16 +37,26 @@
 
 .transcript p {
   margin: 0;
+  unicode-bidi: plaintext;
+  text-align: start;
   /* Every word is a seek target (#60). */
   cursor: pointer;
 }
 
+.transcript p:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.3em;
+  line-height: 2.1;
+}
+
 /* The word being said (#60). A background only: ::highlight() takes colour,
  * background and decoration, never border-radius or padding (#57 section 7).
- * Amber, light enough in light mode and dark enough in dark mode that the
- * body text on it keeps its contrast. */
+ * Hashiya gold, light enough in light mode and dark enough in dark mode that
+ * the body text on it keeps 4.5:1 (confidence.test.tsx measures it). Literal
+ * values, not var(--playhead): custom properties inside ::highlight() are
+ * not resolved in every engine this app supports. */
 ::highlight(dsj-playhead) {
-  background-color: light-dark(oklch(0.9 0.12 85), oklch(0.42 0.09 75));
+  background-color: light-dark(#ebd9a6, #5c4a1c);
   color: var(--foreground);
 }
 

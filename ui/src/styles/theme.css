@@ -1,4 +1,9 @@
-/* Every colour the app uses, written once for both schemes (#116).
+/* Every colour the app uses, written once for both schemes (#116), in the
+ * Hashiya world (docs/superpowers/specs/2026-10-07-hashiya-review-mode-design.md).
+ * Colour owns regions: the deep blue field owns the shell (top bar and player
+ * rail); a pale cool ground carries the words; gold marks where you are, the
+ * keyboard focus and the one primary action on a screen; red is a correction
+ * and nothing else; green is "checked" and nothing else.
  *
  * light-dark() picks a side by the root's color-scheme, so with nothing chosen
  * the Mac's own Appearance decides, and changing it changes this window at
@@ -6,45 +11,82 @@
  * scheme through data-theme, which the inline script at the top of
  * ui/index.html sets from the dsj-theme cookie before this file loads.
  *
- * Dark body text is oklch 0.9, not 0.985: near-white on near-black halates,
- * and over an hour of reading that glare is the whole complaint (#57 section
- * 11.3). The values are shadcn's neutral base-nova set, folded into pairs.
+ * Every pair is held to WCAG AA by ui/tests/unit/palette.test.ts: 4.5:1 for
+ * text, 3:1 for a focus ring, a field's edge and the waveform. The spec's
+ * hexes were starting points, and three moved to pass: gold as a ring or as
+ * text on the pale ground is #8A6A1C (the spec's #C8A24A measures 2.2:1
+ * there), and red and green on the dark ground are #E5806A and #79BE98
+ * (#B8402A measures 3.2:1 and #3E7A5C 3.5:1 on #0D1730).
+ *
+ * Dark body text is #E6EAF2, not white: near-white on near-black halates, and
+ * over an hour of reading that glare is the whole complaint (#57 section 11.3).
  */
 
 :root {
   color-scheme: light dark;
-  --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
-  --foreground: light-dark(oklch(0.145 0 0), oklch(0.9 0 0));
-  --card: light-dark(oklch(1 0 0), oklch(0.205 0 0));
-  --card-foreground: light-dark(oklch(0.145 0 0), oklch(0.9 0 0));
-  --popover: light-dark(oklch(1 0 0), oklch(0.205 0 0));
-  --popover-foreground: light-dark(oklch(0.145 0 0), oklch(0.9 0 0));
-  --primary: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
-  --primary-foreground: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
-  --secondary: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
-  --secondary-foreground: light-dark(oklch(0.205 0 0), oklch(0.9 0 0));
-  --muted: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
-  --muted-foreground: light-dark(oklch(0.556 0 0), oklch(0.708 0 0));
-  --accent: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
-  --accent-foreground: light-dark(oklch(0.205 0 0), oklch(0.9 0 0));
-  --destructive: light-dark(oklch(0.577 0.245 27.325), oklch(0.704 0.191 22.216));
-  --border: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 10%));
-  --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
-  --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
-  --sidebar-foreground: light-dark(oklch(0.145 0 0), oklch(0.9 0 0));
-  --sidebar-primary: light-dark(oklch(0.205 0 0), oklch(0.488 0.243 264.376));
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
-  --sidebar-accent-foreground: light-dark(oklch(0.205 0 0), oklch(0.9 0 0));
-  --sidebar-border: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 10%));
-  --sidebar-ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
+
+  /* The shell: the same blue in both schemes. */
+  --field: #132447;
+  --field-foreground: #e6eaf2;
+  --field-muted: #a9b4cc;
+  --field-wave: #6b7ca3;
+
+  /* The reading ground and its ink. */
+  --background: light-dark(#f3f5f9, #0d1730);
+  --foreground: light-dark(#16203a, #e6eaf2);
+  --card: light-dark(#ffffff, #14203f);
+  --card-foreground: light-dark(#16203a, #e6eaf2);
+  --popover: light-dark(#ffffff, #14203f);
+  --popover-foreground: light-dark(#16203a, #e6eaf2);
+  --secondary: light-dark(#e2e6ee, #1a2748);
+  --secondary-foreground: light-dark(#16203a, #e6eaf2);
+  --muted: light-dark(#e2e6ee, #1a2748);
+  --muted-foreground: light-dark(#4a5672, #9aa6bf);
+  --accent: light-dark(#e2e6ee, #1a2748);
+  --accent-foreground: light-dark(#16203a, #e6eaf2);
+  /* Context around the sentence in hand in Review: readable, plainly not the one in hand. */
+  --dim: light-dark(#5f6b85, #808ba5);
+  --border: light-dark(#c9d0de, #26355a);
+  --input: light-dark(#76829c, #61719a);
+
+  /* Gold: the one primary action, the focus ring, the playhead. */
+  --primary: #c8a24a;
+  --primary-foreground: #16203a;
+  --gold: #c8a24a;
+  --gold-ink: light-dark(#8a6a1c, #c8a24a);
+  --ring: light-dark(#8a6a1c, #c8a24a);
+  --playhead: light-dark(#ebd9a6, #5c4a1c);
+
+  /* Red is a correction; green is checked. */
+  --correction: light-dark(#b8402a, #e5806a);
+  --checked: light-dark(#3e7a5c, #79be98);
+  --destructive: light-dark(#b8402a, #e5806a);
+
+  /* One per speaker, by place in the transcript's speaker list. None is red,
+     green or gold, which already mean something. */
+  --speaker-1: light-dark(#2f5e9e, #8db4ea);
+  --speaker-2: light-dark(#8a4f1f, #e2a774);
+  --speaker-3: light-dark(#7a3e7a, #d59ad5);
+  --speaker-4: light-dark(#1f6b73, #7fcbd3);
+  --speaker-5: light-dark(#4f5b9e, #a9b3ea);
+  --speaker-6: light-dark(#6b5e2e, #cdbb85);
+
+  /* shadcn's chart and sidebar slots, unused by the app, kept on the palette. */
+  --chart-1: light-dark(#2f5e9e, #8db4ea);
+  --chart-2: light-dark(#8a4f1f, #e2a774);
+  --chart-3: light-dark(#7a3e7a, #d59ad5);
+  --chart-4: light-dark(#1f6b73, #7fcbd3);
+  --chart-5: light-dark(#4f5b9e, #a9b3ea);
+  --sidebar: light-dark(#e2e6ee, #14203f);
+  --sidebar-foreground: light-dark(#16203a, #e6eaf2);
+  --sidebar-primary: #c8a24a;
+  --sidebar-primary-foreground: #16203a;
+  --sidebar-accent: light-dark(#e2e6ee, #1a2748);
+  --sidebar-accent-foreground: light-dark(#16203a, #e6eaf2);
+  --sidebar-border: light-dark(#c9d0de, #26355a);
+  --sidebar-ring: light-dark(#8a6a1c, #c8a24a);
+
+  --radius: 0.5rem;
 }
 
 :root[data-theme="light"] {

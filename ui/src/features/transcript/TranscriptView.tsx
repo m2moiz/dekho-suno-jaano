@@ -1,6 +1,7 @@
 import { memo, type Ref } from "react";
 
 import { durationLabel } from "@/features/library/describe";
+import { langOf } from "@/lib/script";
 import { type Reading, speakerName } from "./document";
 import "./transcript.css";
 
@@ -31,7 +32,7 @@ export const TranscriptView = memo(function TranscriptView({
               {name !== null && <>{name} · </>}
               <time dateTime={`PT${turn.start.toFixed(2)}S`}>{durationLabel(turn.start)}</time>
             </h2>
-            <p data-turn={i} dir="auto">
+            <p data-turn={i} dir="auto" lang={langOf(turn.text)}>
               {turn.text}
             </p>
           </section>
