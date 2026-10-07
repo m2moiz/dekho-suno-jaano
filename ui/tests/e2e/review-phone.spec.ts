@@ -176,6 +176,35 @@ test("words typed on the card survive the page being hidden and then left, as a 
   await expect(page.locator("article p").first()).toHaveText(/charles/);
 });
 
+test("words typed on the card come back when the page was killed before any save could land (Task 14 fix round 3)", async ({ page, context, browserName }, info) => {
+  test.skip(browserName !== "chromium", "the tab is killed through the DevTools protocol, which only chromium has");
+  await page.setViewportSize(PHONE);
+  await openReview(page, `review-phone-draft-${info.project.name}`, 9.2 + info.project.name.length / 1000);
+  const token = await page.evaluate(() => sessionStorage.getItem("dsj-token"));
+  const review = `${page.url()}#t=${token}`;
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  await page.getByRole("textbox", { name: "What was said" }).fill("alpha bravo charles");
+  // The tab killed outright, as a phone kills one: no pagehide, no
+  // visibilitychange, so no save of any kind is sent. The browser's copy is
+  // all that is left. (CDP, chromium only; the webkit run skips this test.)
+  const cdp = await context.newCDPSession(page);
+  void cdp.send("Page.crash").catch(() => undefined);
+  await page.waitForEvent("crash");
+  await page.close();
+
+  const again = await context.newPage();
+  await again.setViewportSize(PHONE);
+  await again.goto(review);
+  await again.getByRole("button", { name: /^Every sentence/ }).click();
+  const box = again.getByRole("textbox", { name: "What was said" });
+  await expect(box).toHaveValue("alpha bravo charles");
+  await expect(again.getByText("Restored words typed before the page closed")).toBeVisible();
+  // Checked, next commits it and the save lands: the copy is gone.
+  await again.getByRole("button", { name: "Checked, next" }).click();
+  await expect(box).toHaveValue("delta echo");
+  await expect.poll(() => again.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("dsj-review-draft-")))).toEqual([]);
+});
+
 test.describe("on a tablet, a touch screen 820 px wide", () => {
   test.use({ viewport: TABLET, hasTouch: true });
 

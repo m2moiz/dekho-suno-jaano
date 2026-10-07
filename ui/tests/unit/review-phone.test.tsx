@@ -16,7 +16,7 @@ import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { SWIPE_PX } from "../../src/features/review/swipe";
 import type { Content } from "../../src/lib/editOps";
 import { stubMatchMedia } from "./media";
-import { box, hidePage, items, key, serveReview, server, showPage, start } from "./reviewServer";
+import { box, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
 
 // A phone: a coarse pointer, so (pointer: fine) does not match.
 const PHONE = (query: string) => query.includes("coarse");
@@ -225,5 +225,44 @@ describe("Words typed on the card when the page goes away (Task 14 re-review, R1
     act(() => hidePage("visibilitychange"));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(server.kept).toEqual([]);
+  });
+});
+
+describe("A copy of the box in the browser (Task 14 fix round 3)", () => {
+  const DRAFT = "dsj-review-draft-7";
+
+  it("brings back words typed before the page was torn down, with a 2,000-word list too long for keepalive", async () => {
+    server.content = longContent(2000);
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    // Torn down: hidden, then gone, and the ordinary save it sent never lands.
+    server.down = true;
+    act(() => hidePage("visibilitychange"));
+    act(() => hidePage("pagehide"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(server.kept.filter((k) => k.path === "/api/transcripts/7/edits")).toEqual([]);
+    cleanup();
+    // Opened again later.
+    server.down = false;
+    const again = await start();
+    expect(again.value).toBe("alpha bravo charles");
+    expect(screen.getByText("Restored words typed before the page closed")).toBeTruthy();
+  });
+
+  it("keeps a draft while the box differs, and none once the box is committed and saved", async () => {
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    expect(window.localStorage.getItem(DRAFT)).toContain("alpha bravo charles");
+    fireEvent.click(checkedNext());
+    await vi.waitFor(() => expect(server.edits).toHaveLength(1));
+    await vi.waitFor(() => expect(window.localStorage.getItem(DRAFT)).toBeNull());
+  });
+
+  it("drops a draft made against another transcript sha, and says nothing", async () => {
+    window.localStorage.setItem(DRAFT, JSON.stringify({ sha: "s0", start: 0.2, end: 1.3, text: "alpha bravo charles" }));
+    const field = await start();
+    expect(field.value).toBe("alpha bravo charlie");
+    expect(screen.queryByText("Restored words typed before the page closed")).toBeNull();
+    expect(window.localStorage.getItem(DRAFT)).toBeNull();
   });
 });

@@ -83,7 +83,22 @@ export const server = {
   refuseEdits: false,
   /** Every request sent with `keepalive`, the kind that outlives the page: its path and body. */
   kept: [] as { path: string; body: unknown }[],
+  /** The edit list the server holds, when a test needs another than CONTENT. */
+  content: null as Content | null,
+  /** The page torn down: from now on no ordinary PUT reaches the server (the browser cancels it); a keepalive one still does. */
+  down: false,
 };
+
+/** CONTENT followed by a third speaker's `words` filler words, a list far over the 64 KiB a keepalive request may carry. */
+export function longContent(words: number): Content {
+  const long: Entry[] = [...CONTENT, para("SPEAKER_02")];
+  let t = 3.9;
+  for (let w = 0; w < words; w += 1) {
+    long.push(gap(t, 0.1), item(t + 0.1, 0.3, ` w${w}${w % 12 === 11 ? "." : ""}`));
+    t += 0.4;
+  }
+  return long;
+}
 
 /** The page going away as a phone does it: hidden (an app switch, a tab evicted), or `pagehide` (a swipe back, a reload). */
 export function hidePage(how: "visibilitychange" | "pagehide"): void {
@@ -119,12 +134,16 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
   server.withOther = false;
   server.refuseEdits = false;
   server.kept = [];
+  server.content = null;
+  server.down = false;
+  window.localStorage.clear();
   document.cookie = "dsj-speed=; max-age=0; path=/";
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
     const body: unknown = request.method === "GET" ? null : await request.json();
     if (request.keepalive) server.kept.push({ path, body });
+    else if (server.down && request.method === "PUT") return new Promise<Response>(() => undefined);
     if (path === "/api/recordings") return Response.json([recording(server.withOther)]);
     if (path === "/api/transcripts/7") return Response.json(DOC);
     if (path === "/api/transcripts/8") return Response.json(OTHER);
@@ -135,8 +154,11 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
           { status: 409 },
         );
       }
-      const content = request.method === "PUT" ? (body as { content: Content }).content : CONTENT;
-      if (request.method === "PUT") server.edits.push(content);
+      const content = request.method === "PUT" ? (body as { content: Content }).content : (server.content ?? CONTENT);
+      if (request.method === "PUT") {
+        server.edits.push(content);
+        server.content = content;
+      }
       return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1" });
     }
     if (path === "/api/transcripts/7/review") {

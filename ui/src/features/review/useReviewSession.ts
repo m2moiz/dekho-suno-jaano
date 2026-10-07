@@ -50,6 +50,7 @@ import {
   wordCorrection,
   wordIndex,
 } from "./model";
+import { clearDraft, readDraft, writeDraft } from "./draft";
 import { useReviewSave } from "./reviewApi";
 import { secondOpinion } from "./secondOpinion";
 
@@ -114,6 +115,8 @@ type Args = {
 
 // Two sentences before and after the one in hand (spec).
 const CONTEXT = 2;
+// Said once when the box is filled again from the browser's copy (draft.ts).
+const RESTORED = "Restored words typed before the page closed";
 // The pass picked last, kept between reviews so the chooser offers it first (F13).
 const PASS_COOKIE = "dsj-review-pass";
 
@@ -150,8 +153,21 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const names = useLatest(editable.names);
   const words = useMemo(() => wordIndex(content), [content]);
   const [opening] = useState(() => resume(saved, editor.content, sha));
+  // Words typed before the page closed, kept in the browser (draft.ts): put
+  // back in their sentence's box when the transcript is the same one and the
+  // list does not already say them. Pure, so StrictMode's second call agrees;
+  // a draft not used is cleared by the effect below, as the box is saved.
+  const [restored] = useState(() => {
+    const draft = readDraft(transcriptId);
+    if (draft === null || draft.sha !== sha) return null;
+    const at = opening.segments.findIndex((s) => s.start <= draft.start && draft.start < s.end);
+    const segment = opening.segments[at];
+    if (segment === undefined) return null;
+    const listed = segmentText(editor.content, wordIndex(editor.content), segment);
+    return listed === draft.text ? null : { index: at, shown: listed, text: draft.text };
+  });
   const [segments, setSegments] = useState<Segment[]>(opening.segments);
-  const [index, setIndex] = useState(opening.cursor);
+  const [index, setIndex] = useState(restored?.index ?? opening.cursor);
   const [pass, setPassState] = useState<ReviewPass>(saved?.review_pass ?? lastPass());
   const [choosing, setChoosing] = useState(true);
   const [fixes, setFixes] = useState<ReviewCorrection[]>(saved?.corrections ?? []);
@@ -159,7 +175,7 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   // made in that same moment, before any render has put it in `fixes`.
   const fixesNow = useRef<ReviewCorrection[]>(fixes);
   const [startedAt] = useState(() => saved?.started_at ?? new Date().toISOString());
-  const [notice, setNotice] = useState<string | null>(opening.lost > 0 ? lostNotice(opening.lost) : null);
+  const [notice, setNotice] = useState<string | null>(restored !== null ? RESTORED : opening.lost > 0 ? lostNotice(opening.lost) : null);
   const [flagging, setFlagging] = useState(false);
   const [finished, setFinished] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -179,9 +195,23 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const shown = texts[index] ?? "";
   // The box holds what is typed; a new sentence, or new words in this one,
   // start it again from what the list says.
-  const [typed, setTyped] = useState({ shown, index, text: shown });
+  const [typed, setTyped] = useState(restored ?? { shown, index, text: shown });
   const text = typed.shown === shown && typed.index === index ? typed.text : shown;
-  const setText = (next: string) => setTyped({ shown, index, text: next });
+  const setText = (next: string) => {
+    setTyped({ shown, index, text: next });
+    // At once, not in an effect: the page may be torn down before the next render.
+    if (segment !== undefined && next !== shown) writeDraft(transcriptId, sha, segment, next);
+  };
+  // The browser's copy follows the box: kept while it differs from its
+  // sentence, cleared once its words are in the list and the list is saved.
+  // A draft from another sha, or one the list already says, goes here too.
+  useEffect(() => {
+    if (text !== shown) {
+      if (segment !== undefined) writeDraft(transcriptId, sha, segment, text);
+    } else if (edits.state === "saved") {
+      clearDraft(transcriptId);
+    }
+  }, [text, shown, segment, edits.state, transcriptId, sha]);
 
   const document = useMemo(
     () => documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments, corrections: fixes }),
@@ -273,7 +303,8 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   };
 
   const choose = (next: ReviewPass) => {
-    const to = entryOf(next);
+    // A box filled again from the browser's copy keeps its sentence, whatever the pass.
+    const to = text !== shown ? index : entryOf(next);
     if (to === null) {
       setNotice("There are no likely errors in this transcript. Every sentence is the pass to take.");
       return;
