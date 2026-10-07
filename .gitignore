@@ -62,3 +62,7 @@ graphify-out/
 # written by a gate hook and referenced by nothing in this repository.
 /config.yaml
 .beads.gate.lock
+
+# impeccable runtime: decision-page logs and per-machine config
+.impeccable/questions/
+.impeccable/config.local.json
