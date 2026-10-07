@@ -1,0 +1,184 @@
+{
+ "schemaVersion": 2,
+ "generatedAt": "2026-10-07T23:12:26+00:00",
+ "title": "Design System: dsj",
+ "extensions": {
+  "colorMeta": {
+   "field": {
+    "role": "neutral",
+    "displayName": "Lapis Field"
+   },
+   "ground-light": {
+    "role": "neutral",
+    "displayName": "Cool Vellum"
+   },
+   "ground-dark": {
+    "role": "neutral",
+    "displayName": "Night Ground"
+   },
+   "ink-light": {
+    "role": "neutral",
+    "displayName": "Iron-gall Ink"
+   },
+   "ink-dark": {
+    "role": "neutral",
+    "displayName": "Moonlit Ink"
+   },
+   "gold": {
+    "role": "primary",
+    "displayName": "Manuscript Gold"
+   },
+   "gold-ink-light": {
+    "role": "primary",
+    "displayName": "Gold Ink"
+   },
+   "correction-light": {
+    "role": "secondary",
+    "displayName": "Correction Red"
+   },
+   "checked-light": {
+    "role": "secondary",
+    "displayName": "Checked Green"
+   }
+  },
+  "shadows": [
+   {
+    "name": "floating-tool",
+    "value": "0 10px 15px -3px rgb(0 0 0 / 0.15), 0 4px 6px -4px rgb(0 0 0 / 0.15)",
+    "purpose": "Selection toolbar, in-place Correct, timing strip: things over the words."
+   },
+   {
+    "name": "phone-card",
+    "value": "0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05)",
+    "purpose": "The review card on a phone."
+   }
+  ],
+  "motion": [
+   {
+    "name": "reduced",
+    "value": "prefers-reduced-motion: reduce sets every animation and transition to 0.01ms",
+    "purpose": "Respected everywhere (ui/src/index.css)."
+   }
+  ],
+  "breakpoints": [
+   {
+    "name": "phone",
+    "value": "max-width: 767px or pointer: coarse"
+   },
+   {
+    "name": "sm",
+    "value": "640px"
+   }
+  ]
+ },
+ "components": [
+  {
+   "name": "Primary Button",
+   "kind": "button",
+   "refersTo": "button-primary",
+   "description": "The one gold action on a screen.",
+   "html": "<button class=\"ds-btn-primary\">Review</button>",
+   "css": ".ds-btn-primary{background:var(--primary,#c8a24a);color:var(--primary-foreground,#16203a);height:32px;padding:0 10px;border:0;border-radius:8px;font:500 14px/1 system-ui,-apple-system,sans-serif;transition:background .15s}.ds-btn-primary:hover{background:color-mix(in srgb,#c8a24a 80%,transparent)}.ds-btn-primary:focus-visible{outline:2px solid var(--ring,#7f6016);outline-offset:2px}.ds-btn-primary:active{transform:translateY(1px)}"
+  },
+  {
+   "name": "Outline Button",
+   "kind": "button",
+   "refersTo": "button-outline",
+   "description": "Every action that is not the screen's one primary.",
+   "html": "<button class=\"ds-btn-outline\">Back</button>",
+   "css": ".ds-btn-outline{background:var(--background,#f3f5f9);color:var(--foreground,#16203a);height:32px;padding:0 10px;border:1px solid var(--border,#c9d0de);border-radius:8px;font:500 14px/1 system-ui,-apple-system,sans-serif}.ds-btn-outline:hover{background:var(--muted,#e2e6ee)}.ds-btn-outline:focus-visible{outline:2px solid var(--ring,#7f6016);outline-offset:2px}"
+  },
+  {
+   "name": "Top Bar",
+   "kind": "nav",
+   "refersTo": "top-bar",
+   "description": "The blue field owns the shell.",
+   "html": "<header class=\"ds-bar\"><span class=\"ds-bar-title\">budget call</span><button class=\"ds-btn-primary\">Review</button></header>",
+   "css": ".ds-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;height:56px;padding:0 24px;background:#132447;color:#e6eaf2}.ds-bar-title{font:600 18px/1.2 'Literata Variable',Georgia,serif}.ds-bar .ds-btn-primary{background:#c8a24a;color:#16203a;height:32px;padding:0 10px;border:0;border-radius:8px;font:500 14px system-ui,sans-serif}.ds-bar :focus-visible{outline:2px solid #c8a24a;outline-offset:2px}"
+  },
+  {
+   "name": "Language Tag",
+   "kind": "chip",
+   "refersTo": "language-tag",
+   "description": "Urdu, mixed or English, on a library row.",
+   "html": "<span class=\"ds-tag\">Urdu</span>",
+   "css": ".ds-tag{display:inline-block;padding:0 8px;border:1px solid var(--border,#c9d0de);border-radius:9999px;font:400 12px/20px system-ui,sans-serif;color:var(--foreground,#16203a)}"
+  },
+  {
+   "name": "The Margin",
+   "kind": "custom",
+   "refersTo": null,
+   "description": "Who, when, how long and what changed, on the left of every turn.",
+   "html": "<div class=\"ds-turn\"><div class=\"ds-margin\"><span class=\"ds-name\">Speaker 1</span><span>0:04</span><span class=\"ds-tick\"></span><del>charlie</del></div><p class=\"ds-text\">Theek hai, main slides bana deta hoon.</p></div>",
+   "css": ".ds-turn{display:grid;grid-template-columns:9.5rem minmax(0,68ch);column-gap:1.75rem;background:#f3f5f9;padding:16px}.ds-margin{display:flex;flex-direction:column;gap:.3rem;font:500 13px/1.35 system-ui,sans-serif;color:#4a5672;font-variant-numeric:tabular-nums}.ds-name{color:#2f5e9e;font-weight:650}.ds-tick{display:block;height:3px;width:30%;border-radius:2px;background:#2f5e9e;opacity:.55}.ds-margin del{color:#b8402a;font:400 14px/1.4 'Literata Variable',Georgia,serif}.ds-text{margin:0;font:400 18px/1.7 'Literata Variable',Georgia,serif;color:#16203a}"
+  },
+  {
+   "name": "Review Box",
+   "kind": "input",
+   "refersTo": "review-box",
+   "description": "The sentence in hand, already in an edit box.",
+   "html": "<textarea class=\"ds-review-box\">Yaar, kal ki meeting 10 baje hai.</textarea>",
+   "css": ".ds-review-box{width:100%;min-height:4.75rem;padding:12px 16px;border:2px solid #7f6016;border-radius:12px;background:#fff;color:#16203a;font:400 24px/1.6 'Literata Variable',Georgia,serif;resize:none}.ds-review-box:focus-visible{outline:none}"
+  }
+ ],
+ "narrative": {
+  "northStar": "Hashiya, the manuscript margin",
+  "overview": "In Persian and Urdu manuscripts the main text, the matn, sits in a ruled panel, and the corrections and commentary run in the margin, the hashiya, beside it. dsj is built on that page. The words a person said are the matn: large, calm, set at a reading measure, and the first thing on every screen. Everything about the words (who spoke, when, for how long, whether it was checked, what a correction replaced) lives in a narrow margin on their left. The world lends type, palette, density and that one signature move; navigation and controls stay ordinary web controls, because this is a tool used in focused hour-long sessions, not a page to admire.\n\nColour owns regions, not decoration. A deep blue field owns the shell (the top bar and the player rail) in both schemes. A pale cool ground in light, or a deep blue-black in dark, carries the words; it is never cream. Gold means \"here\": the word being said, the keyboard focus, the one primary action on a screen. Red is a correction and nothing else; green is \"checked\" and nothing else. Six soft speaker colours stay fixed per speaker for the life of a transcript.\n\nIt is calm by default. Tools appear on selection or tap; bleeping lives in a drawer; there are no help paragraphs on the page, only one key sheet behind `?` or Ctrl+/. In Review the sentence in hand is the only thing at full contrast, and the sentences around it drop to the dim ink.",
+  "keyCharacteristics": [
+   "The margin on the left of every turn, for Urdu and English alike, so the eye finds who and when in one place.",
+   "Urdu as a first-class script: Noto Nastaliq Urdu, bundled, about 1.3x the English size, 2.1 leading, set right to left inside a left-to-right grid.",
+   "Blue field shell, pale or blue-black reading ground, gold for \"here\", red and green held to one meaning each.",
+   "Tabular figures for every time and count.",
+   "Thumb-sized targets (44 px) wherever touch is the input; the player rail at the bottom, in thumb reach."
+  ],
+  "rules": [
+   {
+    "name": "The One Meaning Rule",
+    "body": "Red is a correction, green is checked, gold is \"here\". A colour that already means something is never borrowed for emphasis, a badge or a speaker.",
+    "section": "colors"
+   },
+   {
+    "name": "The One Gold Rule",
+    "body": "One gold primary action per screen. Every other button is outline, secondary or ghost.",
+    "section": "colors"
+   },
+   {
+    "name": "The Measured Pair Rule",
+    "body": "Every text and non-text pair is held to WCAG AA by `ui/tests/unit/palette.test.ts` (4.5:1 for text, 3:1 for a focus ring, a field's edge and the waveform). A new colour enters through `ui/src/styles/theme.css` and that test, not as a literal in a component.",
+    "section": "colors"
+   },
+   {
+    "name": "The Script Follows the Line Rule",
+    "body": "Each paragraph sets its own direction (`dir=\"auto\"`, `unicode-bidi: plaintext`) and an Urdu line carries `lang=\"ur\"`; the grid around it stays left to right, so the margin never swaps sides.",
+    "section": "typography"
+   },
+   {
+    "name": "The Tabular Time Rule",
+    "body": "Every time, length and count is in tabular figures, so columns of times line up and a ticking clock does not jitter.",
+    "section": "typography"
+   },
+   {
+    "name": "The Float Only Rule",
+    "body": "A shadow means \"this sits over the words\". Rows, the library list and the review box on the laptop are flat.",
+    "section": "elevation"
+   }
+  ],
+  "dos": [
+   "**Do** put every fact about the words in the margin, on the left, for Urdu and English turns alike.",
+   "**Do** take every colour from `ui/src/styles/theme.css` and keep `ui/tests/unit/palette.test.ts` green.",
+   "**Do** use Gold Ink (`gold-ink-light`) for gold text or a gold ring on the pale ground; plain gold only on the blue field, on the dark ground, and as a fill.",
+   "**Do** set Urdu in the bundled Noto Nastaliq Urdu at about 1.3x and 2.1 leading, with `lang=\"ur\"` and `dir=\"auto\"`.",
+   "**Do** make every target 44px where touch is the input, and keep the player rail at the bottom.",
+   "**Do** add a new control with `npx shadcn@4.21.0 add <name>` and theme it, never hand-built."
+  ],
+  "donts": [
+   "**Don't** use a cream or warm ground; the reading ground is cool.",
+   "**Don't** use red, green or gold for anything but correction, checked and \"here\".",
+   "**Don't** put a second gold action on a screen.",
+   "**Don't** load a hosted font; every face ships with the app.",
+   "**Don't** put help paragraphs on the page; the key sheet holds them.",
+   "**Don't** move the margin to the right for an Urdu turn.",
+   "**Don't** use pure white text on the dark ground; the dark ink is `ink-dark`."
+  ]
+ }
+}

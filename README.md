@@ -596,14 +596,19 @@ any other capitals and a colon (`NOTE: `) stay in the text as words.
 ### ui: the app
 
 `dsj ui` opens the app in your browser: a page served from this machine, on
-`127.0.0.1` and a port the kernel picks. It lists every recording in the
-library ([below](#the-library)), newest first, and under each its transcripts:
-when each finished, which engine and model made it, its speakers and its marks.
-A transcript the library adopted rather than saw being made shows its engine
-as "unknown"; one never labelled says "speakers not labelled", which is not
-"1 speaker"; a recording whose file has moved stays listed, greyed, at the
-path it was last seen. Importing, transcribing and reading arrive with the rest
-of v0.3.0 ([#127](https://github.com/m2moiz/dekho-suno-jaano/issues/127)).
+`127.0.0.1` and a port the kernel picks. The library ([below](#the-library))
+lists every recording, newest first, by a readable title: the date and time
+its file's name says it was recorded ("Sat 20 Sep, 9:42 am"), else the file's
+name, until you rename it with the pencil beside it. Each row shows its length,
+whether its latest transcript is Urdu, mixed or English, its speakers as
+coloured dots, and how far its review got ("212 of 252 checked"); the whole row
+opens the latest transcript, and older ones fold under "earlier versions".
+**Details** holds the model, the file and **Transcribe again**. A recording with
+no transcript shows **Transcribe**, which asks one question, what is spoken
+(mixed Urdu and English, mostly Urdu, English, or not sure), picks the engine
+the measurements favour for it, and says how long it should take; the flags are
+under **Advanced**. A recording whose file has moved stays listed with
+**Relink**. Search filters by title.
 
 ```bash
 dsj ui                # opens the browser
@@ -612,27 +617,6 @@ dsj ui --print-url    # prints the URL and serves, without opening one
 
 It needs the `ui` extra, which `dsj[mac]` carries. The page is built ahead of
 time and ships inside the package, so an install needs no Node.
-
-**On your phone or tablet**, through [Tailscale](https://tailscale.com): start
-Tailscale on the Mac and on the phone, then
-
-```bash
-dsj ui --tailnet      # prints the phone address and a QR code to scan
-```
-
-The server still listens on this Mac only. Tailscale's own proxy (`tailscale
-serve`, over HTTPS) passes requests from your tailnet's devices to it, and
-nothing reaches it from the public internet. It takes the first of ports 8443,
-8444, 8445 and 10000 that serves nothing yet, never 443, and never replaces
-something you already serve: if all four are in use it names them and stops.
-The phone address carries the same key after `#` as the Mac's, and every
-request still needs it. When the server stops (Ctrl-C, `kill`, closing the
-Terminal window, the idle stop, an error), its own entry goes with it and no
-other. `kill -9` or a power cut leaves it; the next `dsj ui` removes it first. A phone sends no sign of life from the background, and says goodbye
-whenever you switch apps or lock the screen, so with `--tailnet` a goodbye does
-not stop the server: it waits 30 minutes without a sign of life instead of
-three. dsj never starts Tailscale and never uses `tailscale funnel`. A plain
-`dsj ui` already running must be stopped first.
 
 Only this Mac's own page can use it. The URL carries a key after `#`, which
 the page takes and wipes from the address bar; every request has to bring it
@@ -644,44 +628,129 @@ running, and a transcription started from the page outlives the window. Run
 `dsj ui` again while it is open and you get the running one's address, not a
 second copy.
 
-A transcript with word end times (v0.2.0 on) can be edited in the app: select
-words and mute them, or retype them with **Correct…** when the recogniser
-misheard. A correction keeps the same stretch of the recording, so no word
-around it moves; the new words share it in proportion to their length, lose
-their unsure tint, and the library lists the transcript as edited. When a word's
-edge is in the wrong place, which matters most for whisper, whose word ends are
-inferred, select the word and press **Timing…**: drag either edge over the
-waveform, or focus it and use the arrow keys. The word next to it gives up the
-time the edge moves into, and never overlaps; a whole drag is one undo step.
-An edit changes the transcript's edit list, the same file
-`dsj hatao` walks, kept beside the library in `edits/`; the recording and the
-transcript JSON are never written to. Every edit is saved as you make it.
-Cmd+Z undoes and Cmd+Shift+Z redoes, up to 1,000 steps, stepping only through
-edits, never through clicks, scrolling or playback. **The undo history does not
-survive closing or reloading the page:** the edits do, their history does not.
-An older transcript, or a `parho` import, reads as before and says why it
-cannot be edited.
+**On your phone or tablet**, through [Tailscale](https://tailscale.com)
+(#250): Tailscale must be running on the Mac and on the phone, with MagicDNS
+and HTTPS certificates turned on for your tailnet (the admin console's DNS
+page). Then
 
-Above the transcript, **Words to bleep** lists every word the word lists match
-(the same lists and matcher `dsj hatao` uses), each with its time and the entry
-that matched it; when nothing matches it says how many words it searched.
-**Mute all** mutes them, **Dismiss** gives one its sound back, and each is an
-undo step. Pressing play mutes every muted word live, over exactly the
-stretches a render would silence (the server works them out with the render's
-own code), and **Hear** plays one match with a second either side and stops.
-A word typed into the box is added to your own `words.toml`, the file `dsj
-hatao` reads too, and what the next pass finds of it is muted.
+```bash
+dsj ui --tailnet      # prints the phone link and a QR code to scan
+```
 
-**Render** writes the bleeped copy as a job, with the render `dsj hatao` runs:
-beside the recording as `<name>.bleeped.<ext>` (then `.bleeped-2`, never over
-an earlier one), with the same `.bleeps.json` log and `.source.txt` note, and
-a link and a player for it in the page. **Render alone** does the same with
-only one match muted. A render waits for the machine like a transcription
-does: one run at a time, from the app or the terminal.
+The server still listens on this Mac only. Tailscale's own proxy (`tailscale
+serve`, over HTTPS) passes requests from your tailnet's devices to it, and
+nothing reaches it from the public internet. It takes the first of ports 8443,
+8444, 8445 and 10000 that serves nothing yet, never 443, and never replaces
+something you already serve: if all four are in use it names them and stops.
+The phone link carries the same key in its fragment, after `#`, as the Mac's
+does, and every request still needs it. A phone sends no sign of life from the
+background, and says goodbye whenever you switch apps or lock the screen, so
+with `--tailnet` a goodbye does not stop the server: it stops after 30 minutes
+without a sign of life instead of three. Every way of stopping it (Ctrl-C,
+`kill`, closing the Terminal window, the idle stop, an error) removes its own
+serve entry and no other; `kill -9` or a power cut leaves the entry, and the
+next `dsj ui`, plain or not, removes it first. dsj never starts Tailscale and
+never uses `tailscale funnel`. A plain `dsj ui` already running must be stopped
+first. **Not yet observed on a real phone:** Tailscale was stopped while this
+was built, so the first run on a phone is still to be seen; the tests drive a
+stand-in `tailscale`.
 
-It follows the Mac's light or dark Appearance, live, until you pick Light or
-Dark in the corner; the pick is kept in a cookie on `127.0.0.1`, which, unlike
-the browser's per-port storage, survives the new port each launch gets.
+A transcript reads as one paragraph per speaker turn, with a margin on its left
+holding who spoke (in that speaker's colour; click the name to rename them
+everywhere in that transcript), when, and for how long. Urdu turns are set right
+to left in Noto Nastaliq Urdu, which ships with the app; English words and
+numbers inside them keep their order. The blue rail at the bottom plays the
+recording: click a word to hear it, click or arrow along the waveform, and the
+word being said is highlighted in gold as it plays. Space plays and pauses; `?`
+lists every key.
+
+A transcript with word end times (v0.2.0 on) can be edited. Select words (or
+tap one on a phone) and a toolbar offers **Correct**, which retypes them in
+place, **Hear**, **Timing** (drag the word's edges over the waveform, or use the
+arrow keys) and **Mute**. A correction keeps the same stretch of the recording,
+so no word around it moves; the margin shows what it replaced, struck through
+in red. The unsure count in the bar steps through the words the recogniser was
+unsure of (`[` and `]`). Every edit goes into the transcript's edit list, the
+file `dsj hatao` walks, kept beside the library in `edits/`; the recording and
+the transcript JSON are never written to. Edits are saved as you make them, and
+Cmd+Z and Cmd+Shift+Z step through them, up to 1,000, while the page is open.
+If a transcript is made again with the same settings, its old edits no longer
+fit its words: they are kept aside in `edits/`, not applied, and the page says
+so.
+
+**Review** (or R) checks a transcript sentence by sentence against its audio.
+Each sentence plays as you arrive on it and sits in an edit box: type what was
+said and press Enter to mark it checked and go on. Ctrl+1 to Ctrl+9 say who
+said it, Ctrl+S splits it at the cursor and Ctrl+M merges it with the one
+before, Ctrl+U and Ctrl+F flag it, Tab plays and pauses, and Ctrl+/ shows the
+rest. When another transcript of the same recording exists, its reading of the
+same stretch shows beneath as a second opinion, the words that differ
+underlined, and Ctrl+G takes it. The **Likely errors** pass visits only the
+sentences with unsure words, flags or a disagreement. On a phone each sentence
+is a card: swipe left for checked, right for back. Progress is saved as you go.
+At the end, **Save as answer key** writes `<name>.reference.json` (each
+sentence's span, speaker, final words and flags, and the transcript and model
+it was checked against) and `<name>.reference.txt` beside the transcript.
+
+You pick the pass on the way in, and can switch it in the top bar: **Every
+sentence**, in order, for an answer key, or **Likely errors**. Arriving on a
+sentence plays it from 0.3 s before its start to 0.2 s after its end; typing
+pauses it, and playing again backs up 1.5 s. A footer line always shows the
+five keys used most. Every key, as the key sheet lists them:
+
+| Key | Does |
+|---|---|
+| Enter | Mark checked (with any edits), go to the next sentence, play it |
+| Shift+Enter | Previous sentence |
+| Tab | Play or pause (playing again backs up 1.5 s) |
+| Shift+Tab | Replay the sentence from its start |
+| Ctrl+, and Ctrl+. | Slower and faster, through 0.75x, 1x, 1.25x and 1.5x |
+| Ctrl+1 to Ctrl+9 | This sentence was said by speaker n |
+| Ctrl+G | Take the second opinion's reading |
+| Ctrl+U | Flag: can't make it out (adds `[?]` at the cursor when text is selected or empty) |
+| Ctrl+F | Flag menu: not speech, overlapping talk, cut off |
+| Ctrl+S | Split the sentence at the cursor |
+| Ctrl+M | Merge with the previous sentence |
+| Ctrl+J and Ctrl+Shift+J | Next and previous likely error |
+| Ctrl+/ | The key sheet |
+| Esc | Leave Review (progress is saved) |
+
+Three trades sit behind those keys. Ctrl+F moves the cursor one character
+forward in a Mac text field; here it opens the flag menu, and the arrow key
+still moves the cursor. Ctrl+1 to Ctrl+9 reach the page unless macOS's "Switch
+to Desktop n" shortcuts are on. Ctrl+Space is left alone, because it switches
+input sources, which typing Urdu needs. Tab stays in the box, so Option+Tab
+moves to the page's other controls, such as the pass switch.
+
+On a phone or tablet (below 768 px wide, or a touch screen), each sentence is a
+card: the margin line on top, the words below (tap to edit), the second opinion
+beneath, then **Play again**, **Flag** and a row of speaker chips to say who
+said it. Swipe left, or **Checked, next**, to mark it checked and go on; swipe
+right, or **Back**, to go back. Only a finger or a pen swipes: a mouse drag
+selects words. With a keyboard attached the keys above work on the card too,
+after one tap in the sentence. What is typed in the box is kept in the browser
+until it is saved, so a page the phone closes in the background gives it back
+on reopening.
+
+The answer key is a person's checked reading of the recording, to score
+transcription models against. `<name>.reference.json` holds `format:
+"dsj-reference"`, `version: 1`, the transcript's file name, its `engine` and
+`model`, whether every sentence was checked (`complete`), and `segments`, each
+with `start`, `end`, `speaker`, `text`, `flags` and `checked`.
+`<name>.reference.txt` is one `[m:ss] Speaker: words (flags)` line a sentence.
+Saving before every sentence is checked asks first; the key then marks the
+sentences that were not checked, and `complete` is false.
+
+The menu (**⋯**) holds **Bleep**, a drawer listing every word the word lists
+match (the same lists and matcher `dsj hatao` uses) with **Mute all**,
+**Dismiss**, **Hear** and **Render**, which writes the bleeped copy beside the
+recording as `<name>.bleeped.<ext>` with the render `dsj hatao` runs; and
+**Export**, the transcript as edited, corrections and speaker names included, as
+SRT, WebVTT or text.
+
+The colours follow the Mac's light or dark Appearance, live, until you pick
+Light or Dark in the settings menu; the pick is kept in a cookie on
+`127.0.0.1`, which survives the new port each launch gets.
 
 ## Output
 

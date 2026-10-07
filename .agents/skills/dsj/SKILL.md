@@ -338,6 +338,37 @@ with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_cou
 `mark_count`, `language`) and serves one transcript's JSON unchanged at
 `GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
 
+A review made in the app leaves two files beside the transcript JSON:
+`<name>.reference.json` (`format: "dsj-reference"`, `version: 1`, the transcript's file
+name, `engine`, `model`, `complete`, and `segments`, each with `start`, `end`,
+`speaker`, `text`, `flags` and `checked`) and `<name>.reference.txt`, one
+`[m:ss] Speaker: words (flags)` line a sentence. They are a person's checked reading of
+the recording: prefer them to the transcript where they exist, and read `complete`
+first, since a key saved part way through marks its unchecked sentences
+`checked: false`. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
+review itself, and each transcript's edit list (`dsj hatao`'s file, with an optional
+`names` map from speaker label to the name a person gave it), live beside the library in
+`reviews/` and `edits/`.
+
+Review is the owner's, by hand: sentence by sentence against the audio, in one of two
+passes, every sentence in order (for an answer key) or only the likely errors
+(unsure words, flags, or where another transcript of the same recording, shown as a
+second opinion, reads the span differently). On the Mac it is keyboard-first; on a
+phone or tablet each sentence is a card, swiped left for checked and right for back.
+The keys, for answering the owner's questions about them:
+
+| Key | Does |
+|---|---|
+| Enter / Shift+Enter | checked and next / previous |
+| Tab / Shift+Tab | play or pause / replay the sentence |
+| Ctrl+, / Ctrl+. | slower / faster (0.75x to 1.5x) |
+| Ctrl+1 to Ctrl+9 | said by speaker n |
+| Ctrl+G | take the second opinion's reading |
+| Ctrl+U / Ctrl+F | flag can't make it out / flag menu |
+| Ctrl+S / Ctrl+M | split at the cursor / merge with the previous |
+| Ctrl+J / Ctrl+Shift+J | next / previous likely error |
+| Ctrl+/ / Esc | key sheet / leave (progress is saved) |
+
 With `--tailnet` (for a phone or tablet, #250) it still listens on `127.0.0.1`, and
 runs `tailscale serve --bg --https=<https> http://127.0.0.1:<port>` in front of it, so
 only devices on the owner's tailnet reach it. `<https>` is the first of 8443, 8444, 8445
@@ -353,10 +384,15 @@ run's port. A record stays until its entry is confirmed gone.
 It waits 30 minutes for a page instead of three, and a page's goodbye does not stop it,
 because a phone sends one on every app switch or screen lock. It exits 1 with one line,
 changing nothing, when `tailscale` is not on PATH, when Tailscale is not running (it
-never starts it), when all four ports already serve something (it names each), or when a
-`dsj ui` without `--tailnet` is already running. It never runs `tailscale funnel`, so
+never starts it), when MagicDNS is off (the Mac has no tailnet name), when all four ports
+already serve something (it names each), or when a `dsj ui` without `--tailnet` is
+already running. A `tailscale` command that hangs is given up after 30 s, with what it
+printed: with HTTPS certificates off for the tailnet, `serve --bg` prints the URL that
+turns them on, and that line carries it. A start that finds a recorded entry says so on
+stderr before it asks tailscale. It never runs `tailscale funnel`, so
 nothing is on the public internet. An agent should not run it: the phone check belongs
-to the owner.
+to the owner, and has not been observed yet (Tailscale was stopped while #250 was built;
+the tests drive a stand-in `tailscale`).
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.
