@@ -93,10 +93,12 @@
   background: color-mix(in oklch, var(--speaker, var(--muted-foreground)) 20%, transparent);
 }
 
-/* A 44 px target where the touch layouts take over (lib/media.ts TOUCH). */
+/* A 44 px target where the touch layouts take over (lib/media.ts TOUCH), in
+   both directions: a short name such as "Al" is a narrow word (Task 5 review). */
 @media (pointer: coarse), (max-width: 767px) {
   .transcript .margin .nameplate {
     min-height: 44px;
+    min-width: 44px;
   }
 }
 

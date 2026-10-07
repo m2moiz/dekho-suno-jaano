@@ -45,4 +45,10 @@ test("on a phone the nameplate and its field are 44 px targets", async ({ page }
   await plate.click();
   const field = page.getByRole("textbox", { name: "Name for Speaker 1" });
   expect((await field.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  // A short name is a narrow word: the target is 44 px wide all the same (Task 5 review).
+  await field.fill("Al");
+  await field.press("Enter");
+  const short = await page.getByRole("button", { name: "Al, rename" }).boundingBox();
+  expect(short?.width).toBeGreaterThanOrEqual(44);
+  expect(short?.height).toBeGreaterThanOrEqual(44);
 });
