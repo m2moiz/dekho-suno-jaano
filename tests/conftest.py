@@ -10,6 +10,7 @@ re-reads on every call.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import shutil
@@ -451,6 +452,12 @@ def page() -> TestClient:
     return TestClient(
         app, base_url="http://127.0.0.1:8721", headers={"Authorization": f"Bearer {token}"}
     )
+
+
+def update(seeded: dict[str, Any], content: list[dict[str, Any]]) -> dict[str, Any]:
+    """A PUT of `content` as the transcript's edit list, against the transcript as it is (#249)."""
+    digest = hashlib.sha256(seeded["json"].read_bytes()).hexdigest()
+    return {"content": content, "transcript_sha": digest}
 
 
 def tokens(*words: tuple[float, float, str, float]) -> list[dict[str, Any]]:

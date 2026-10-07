@@ -312,6 +312,10 @@ export interface paths {
          *     A transcript without word end times (before v0.2.0, or a `dsj parho`
          *     import) has none, and is answered 422 with the reason: it still reads,
          *     but cannot be edited without guessing where each word stops.
+         *
+         *     This is the page's own read of the list, so it is the one that hands on,
+         *     and clears, the sentence saying a list was put aside because the
+         *     transcript was made again (#249), whichever route put it aside.
          */
         get: operations["read_edits_api_transcripts__transcript_id__edits_get"];
         /**
@@ -530,6 +534,8 @@ export interface components {
             unrenderable: string | null;
             /** Replaced */
             replaced: string | null;
+            /** Transcript Sha */
+            transcript_sha: string;
         };
         /**
          * EditsUpdate
@@ -538,6 +544,8 @@ export interface components {
         EditsUpdate: {
             /** Content */
             content: components["schemas"]["EditEntry"][];
+            /** Transcript Sha */
+            transcript_sha: string;
         };
         /**
          * Engine
@@ -631,6 +639,14 @@ export interface components {
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
         /** @enum {string} */
         LanguageTag: "urdu" | "mixed" | "english";
+        /**
+         * ListContent
+         * @description The page's whole edit list as it is now, for a route that reads it and saves nothing.
+         */
+        ListContent: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+        };
         /**
          * Match
          * @description One word, or phrase, a word list matched (dsj.hatao.Match).
@@ -1246,7 +1262,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["EditsUpdate"];
+                "application/json": components["schemas"]["ListContent"];
             };
         };
         responses: {
@@ -1474,7 +1490,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["EditsUpdate"];
+                "application/json": components["schemas"]["ListContent"];
             };
         };
         responses: {

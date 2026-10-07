@@ -9,11 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
-from conftest import page, tokens
+import pytest
+from conftest import page, tokens, update
 
 from dsj import hatao
+from dsj.ui import edits
 from dsj.ui.edits import edits_path, source_path
 from dsj.ui.review import review_path
 
@@ -58,7 +64,7 @@ def correct_there(seeded: dict[str, Any]) -> None:
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     next(e for e in content if e.get("text") == " there")["text"] = " their"
-    assert client.put(route, json={"content": content}).status_code == 200
+    assert client.put(route, json=update(seeded, content)).status_code == 200
 
 
 def test_a_transcript_with_no_review_says_so_and_names_its_own_sha(
@@ -215,5 +221,174 @@ def test_a_list_saved_before_its_source_was_kept_is_trusted_and_gains_one(
     opened = client.get(route).json()
     assert opened["replaced"] is None
     assert " their" in [e.get("text") for e in opened["content"]]
-    client.put(route, json={"content": opened["content"]})
+    client.put(route, json=update(seeded, opened["content"]))
     assert note.is_file()
+
+
+# -- fix round 1: what a re-transcription must never do ---------------------------------
+
+
+def test_a_page_loaded_before_the_transcript_was_made_again_cannot_save_over_it(
+    seeded: dict[str, Any],
+) -> None:
+    """The reviewer's probe, inverted: the old words are refused, kept aside, and not trusted."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    correct_there(seeded)
+    loaded = client.get(route).json()
+    old = loaded["transcript_sha"]
+    assert old == sha(seeded)
+
+    transcribe_again(seeded)
+
+    reply = client.put(route, json={"content": loaded["content"], "transcript_sha": old})
+    assert reply.status_code == 409, reply.text
+    assert reply.json()["error"] == "TranscriptChanged"
+    assert "Reload the page" in reply.json()["message"]
+    # The new transcript's words open; the old ones were not saved over them.
+    opened = client.get(route).json()
+    words = "".join(e["text"] for e in opened["content"] if e["kind"] == "item")
+    assert "world" in words and "their" not in words
+    assert opened["transcript_sha"] == sha(seeded)
+    # Nothing typed is lost: the saved list and the page's own copy are both kept aside.
+    listed = edits_path(seeded["json"])
+    kept = [listed.with_name(f"{listed.stem}.{old[:12]}{n}.json") for n in ("", "-2")]
+    assert all("their" in path.read_text() for path in kept)
+    assert reply.json()["message"].count(kept[1].name) == 1
+
+
+def test_an_answer_key_of_a_review_checked_before_the_transcript_was_made_again_is_refused(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    correct_there(seeded)
+    client.put(f"{route}/review", json=document(sha(seeded), "checked", "checked"))
+    transcribe_again(seeded)
+    for asked in ({}, {"allow_partial": True}):
+        reply = client.post(f"{route}/reference", json=asked)
+        assert reply.status_code == 409, reply.text
+        assert reply.json()["error"] == "TranscriptChanged"
+        assert "Open Review" in reply.json()["message"]
+    assert not (seeded["json"].parent / "talk.reference.json").exists()
+    # Refused before the list was opened: nothing was put aside behind the page's back.
+    listed = edits_path(seeded["json"])
+    assert sorted(p.name for p in listed.parent.iterdir()) == [
+        listed.name,
+        source_path(listed).name,
+    ]
+
+
+def test_a_word_starting_before_its_sentence_span_is_still_in_the_answer_key(
+    seeded: dict[str, Any],
+) -> None:
+    """" Hello" starts at 0.2 s; the sentence a person split starts at 0.3 s."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    late = document(sha(seeded), "checked", "checked")
+    late["segments"][0]["start"] = 0.3
+    client.put(f"{route}/review", json=late)
+    assert client.post(f"{route}/reference", json={}).status_code == 200
+    key = json.loads((seeded["json"].parent / "talk.reference.json").read_text())
+    assert [s["text"] for s in key["segments"]] == ["Hello there.", "Fine."]
+    assert key["complete"] is True
+
+
+def test_a_list_put_aside_by_an_export_is_still_told_to_the_page_once(
+    seeded: dict[str, Any],
+) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    correct_there(seeded)
+    transcribe_again(seeded)
+    exported = client.get(f"{route}/export/txt")
+    assert exported.status_code == 200
+    assert "world" in exported.text
+    told = client.get(f"{route}/edits").json()["replaced"]
+    assert told is not None and "made again" in told
+    assert client.get(f"{route}/edits").json()["replaced"] is None
+
+
+def test_a_note_that_does_not_read_leaves_the_list_trusted(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/edits"
+    correct_there(seeded)
+    note = source_path(edits_path(seeded["json"]))
+    for broken in ("{not json", '{"other": 1}', "[]"):
+        note.write_text(broken)
+        opened = client.get(route)
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["replaced"] is None
+        assert " their" in [e.get("text") for e in opened.json()["content"]]
+
+
+def test_a_partial_answer_key_keeps_the_complete_one_before_it(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    folder = seeded["json"].parent
+    client.put(f"{route}/review", json=document(sha(seeded), "checked", "checked"))
+    assert client.post(f"{route}/reference", json={}).status_code == 200
+    client.put(f"{route}/review", json=document(sha(seeded), "checked", "unchecked"))
+    assert client.post(f"{route}/reference", json={"allow_partial": True}).status_code == 200
+    assert json.loads((folder / "talk.reference.json").read_text())["complete"] is False
+    assert json.loads((folder / "talk.reference-2.json").read_text())["complete"] is True
+    assert "[not checked]" not in (folder / "talk.reference-2.txt").read_text()
+    # A second partial replaces the first partial; the complete key stays where it was.
+    assert client.post(f"{route}/reference", json={"allow_partial": True}).status_code == 200
+    assert not (folder / "talk.reference-3.json").exists()
+
+
+def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Drive download must not hold every request up; two saves still never interleave."""
+    reads_free: list[bool] = []
+    read = edits._read  # pyright: ignore[reportPrivateUsage]
+
+    def watched(transcript_id: int) -> tuple[dict[str, Any], str]:
+        # Another thread can take the lock while the transcript is being read.
+        got: list[bool] = []
+
+        def other() -> None:
+            got.append(edits.WRITING.acquire(timeout=0))
+            if got[0]:
+                edits.WRITING.release()
+
+        thread = threading.Thread(target=other)
+        thread.start()
+        thread.join()
+        reads_free.append(got[0])
+        return read(transcript_id)
+
+    active, most = [0], [0]
+    save = hatao.save
+
+    def slow(doc: hatao.Document, path: Path) -> None:
+        active[0] += 1
+        most[0] = max(most[0], active[0])
+        time.sleep(0.05)
+        save(doc, path)
+        active[0] -= 1
+
+    monkeypatch.setattr(edits, "_read", watched)
+    monkeypatch.setattr(hatao, "save", slow)
+    opened = edits.open_edits(seeded["id"])
+    content = tuple(
+        replace(e, text=" their") if isinstance(e, hatao.Item) and e.text == " there" else e
+        for e in opened.doc.content
+    )
+    workers = [
+        threading.Thread(
+            target=edits.save_edits, args=(seeded["id"], content, opened.transcript_sha)
+        ),
+        threading.Thread(target=edits.save_names, args=(seeded["id"], {"SPEAKER_00": "Ali"})),
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert most[0] == 1
+    assert reads_free and all(reads_free)
+    doc = hatao.load(edits_path(seeded["json"]))
+    assert doc.names == {"SPEAKER_00": "Ali"}
+    assert " their" in [e.text for e in doc.content if isinstance(e, hatao.Item)]

@@ -51,6 +51,30 @@ describe("a view that crashes", () => {
   });
 });
 
+describe("a save refused because the transcript was made again (#249)", () => {
+  it("offers a reload, the only way on", () => {
+    render(<ShownErrorDialog />);
+    act(() =>
+      showError({
+        error: "TranscriptChanged",
+        message: "This transcript was made again while it was open. Reload the page to see the new transcript.",
+        request: "/api/transcripts/7/edits",
+      }),
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("offers no reload for any other failure", () => {
+    render(<ShownErrorDialog />);
+    act(() => showError(FFMPEG));
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+});
+
 describe("a failed request", () => {
   it("shows dsj's own sentence, unchanged", () => {
     const reply = new Response(null, { status: 503 });

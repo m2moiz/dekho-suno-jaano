@@ -10,7 +10,7 @@ const fetchMock = vi.hoisted(() => {
 });
 
 import { type Editable, Latest, NotSaved, useSave } from "../../src/features/edit/editing";
-import { dismissError } from "../../src/features/errors/appError";
+import { currentError, dismissError } from "../../src/features/errors/appError";
 import { type Content, Editor, type Entry } from "../../src/lib/editOps";
 
 const PARAGRAPH: Entry = { kind: "paragraph", speaker: null, language: null };
@@ -20,7 +20,7 @@ const CONTENT: Content = [
   { kind: "item", source: "0", sourceStart: 0.5, length: 0.3, text: " there", muted: false, confidence: 0.9 },
 ];
 
-const SAVED = { content: [], names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null, replaced: null };
+const SAVED = { content: [], names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null, replaced: null, transcript_sha: "sha-1" };
 
 function editable(): Editable {
   return {
@@ -28,6 +28,7 @@ function editable(): Editable {
     padS: 0.05,
     renderable: new Latest({ spans: null, unrenderable: null }),
     names: new Latest({}),
+    sha: "sha-1",
   };
 }
 
@@ -107,5 +108,37 @@ describe("useSave settle", () => {
     muteOne(e.editor, 1);
     await expect(result.current.settle()).rejects.toBeInstanceOf(NotSaved);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the sha of the transcript the list was loaded against (#249)", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const bodies: unknown[] = [];
+    fetchMock.mockImplementation(async (request) => {
+      bodies.push(await request.clone().json());
+      return ok();
+    });
+    muteOne(e.editor, 1);
+    await result.current.settle();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ transcript_sha: "sha-1" });
+  });
+
+  it("stops saving once the transcript was made again, and says to reload", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const refusal = {
+      error: "TranscriptChanged",
+      message: "This transcript was made again while it was open. Reload the page.",
+      request: "/api/transcripts/7/edits",
+    };
+    fetchMock.mockImplementation(async () => Response.json(refusal, { status: 409 }));
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(currentError()?.error).toBe("TranscriptChanged"));
+    await vi.waitFor(() => expect(result.current.state).toBe("failed"));
+    // Each refused save is kept aside by the server: the page must not send another per keystroke.
+    muteOne(e.editor, 2);
+    await expect(result.current.settle()).rejects.toThrow(/Reload the page/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

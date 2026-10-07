@@ -23,6 +23,7 @@ from dsj.ui.schemas import (
     Edits,
     EditsUpdate,
     ItemEntry,
+    ListContent,
     Match,
     Matches,
     NamesUpdate,
@@ -79,6 +80,7 @@ def _wire(opened: edits.Opened) -> Edits:
         spans=spans,
         unrenderable=unrenderable,
         replaced=opened.replaced,
+        transcript_sha=opened.transcript_sha,
     )
 
 
@@ -88,7 +90,7 @@ def _entry(wire: EditEntry) -> hatao.Entry:
     return hatao.Item(wire.source, wire.sourceStart, wire.length, wire.text, wire.muted)
 
 
-def entries(update: EditsUpdate) -> tuple[hatao.Entry, ...]:
+def entries(update: ListContent) -> tuple[hatao.Entry, ...]:
     """The page's entries as dsj.hatao's, `confidence` left behind: it is not in the file."""
     return tuple(_entry(entry) for entry in update.content)
 
@@ -100,14 +102,19 @@ def read_edits(transcript_id: str) -> Edits:
     A transcript without word end times (before v0.2.0, or a `dsj parho`
     import) has none, and is answered 422 with the reason: it still reads,
     but cannot be edited without guessing where each word stops.
+
+    This is the page's own read of the list, so it is the one that hands on,
+    and clears, the sentence saying a list was put aside because the
+    transcript was made again (#249), whichever route put it aside.
     """
-    return _wire(edits.open_edits(transcript_number(transcript_id)))
+    return _wire(edits.open_edits(transcript_number(transcript_id), report=True))
 
 
 @router.put("/transcripts/{transcript_id}/edits")
 def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
-    return _wire(edits.save_edits(transcript_number(transcript_id), entries(update)))
+    found = transcript_number(transcript_id)
+    return _wire(edits.save_edits(found, entries(update), update.transcript_sha))
 
 
 @router.put("/transcripts/{transcript_id}/names")
@@ -141,7 +148,7 @@ def export(transcript_id: str, fmt: str) -> Response:
 
 
 @router.post("/transcripts/{transcript_id}/matches")
-def find_matches(transcript_id: str, update: EditsUpdate) -> Matches:
+def find_matches(transcript_id: str, update: ListContent) -> Matches:
     """Every word of the page's edit list a word list spells, by dsj.hatao.find itself.
 
     The page sends its list as it is now, so a word it has just retyped

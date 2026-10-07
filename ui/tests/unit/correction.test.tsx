@@ -133,7 +133,7 @@ describe("the Correct button", () => {
       if (path === "/api/transcripts/7/edits") {
         const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
         if (request.method === "PUT") saved.push(content);
-        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null });
+        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [], words_searched: 6, lists: ["en"], recall: "recall: x" });

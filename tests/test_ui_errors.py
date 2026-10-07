@@ -21,7 +21,7 @@ from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordLi
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream, probe
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
-from dsj.ui.edits import NoSuchTranscript
+from dsj.ui.edits import NoSuchTranscript, TranscriptChanged
 from dsj.ui.errors import STATUS, describe, status_of
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
@@ -100,6 +100,7 @@ def build(cls: type[BaseException]) -> BaseException:
         (AlreadyRunning, 409),
         (PickerBusy, 409),
         (ReviewIncomplete, 409),
+        (TranscriptChanged, 409),
         (MediaError, 500),
     ],
 )
@@ -124,7 +125,7 @@ def test_the_table_above_is_the_whole_table() -> None:
         UIUnavailable, NoAudioStream, NoVideoStream, MarkError, NotATranscript,
         NotTheSameRecording, NotStarted, AlreadyRunning, MediaError, NoFilePicker, PickerBusy,
         TranscriptUnusable, InvalidDocument, NoSuchTranscript, WordListError, RenderRefused,
-        InvalidReview, ReviewIncomplete,
+        InvalidReview, ReviewIncomplete, TranscriptChanged,
     }
     assert set(STATUS) == tested
 

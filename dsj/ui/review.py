@@ -37,16 +37,17 @@ __all__ = [
 import json
 import logging
 import math
+from bisect import bisect_right
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from dsj import hatao
-from dsj.atomic import atomic_write_text
+from dsj.atomic import atomic_write_text, atomic_write_texts
 from dsj.suno import clock
 from dsj.ui import edits
-from dsj.ui.edits import NoSuchTranscript, edits_path, transcript_sha
+from dsj.ui.edits import NoSuchTranscript, TranscriptChanged, edits_path, transcript_sha
 from dsj.ui.schemas import ReferenceWritten, ReviewDocument, ReviewSegment
 from dsj.ui.store import Library, Transcript, library_path
 
@@ -114,20 +115,24 @@ def _transcript(transcript_id: int) -> Transcript:
 def read_review(transcript_id: int) -> tuple[ReviewDocument | None, str]:
     """The transcript's review, or None, and the sha of the transcript as it is now.
 
+    The transcript is hashed before WRITING is taken (it may be a Google Drive
+    download); the review, a small file beside the library, is read under it,
+    where the library says the transcript is now.
+
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
         InvalidReview: the saved review cannot be read, named.
     """
+    digest = transcript_sha(_transcript(transcript_id).json_path)
     with edits.WRITING:
-        json_path = _transcript(transcript_id).json_path
-        path = review_path(json_path)
-        digest = transcript_sha(json_path)
-        if not path.is_file():
-            return None, digest
-        try:
-            return ReviewDocument.model_validate_json(path.read_text(encoding="utf-8")), digest
-        except ValueError as exc:
-            raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
+        path = review_path(_transcript(transcript_id).json_path)
+        raw = path.read_text(encoding="utf-8") if path.is_file() else None
+    if raw is None:
+        return None, digest
+    try:
+        return ReviewDocument.model_validate_json(raw), digest
+    except ValueError as exc:
+        raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
 
 
 def _check(document: ReviewDocument) -> None:
@@ -169,17 +174,43 @@ def save_review(transcript_id: int, document: ReviewDocument) -> ReviewDocument:
     return document
 
 
+def _segment_of(entry: hatao.Item, segments: Sequence[ReviewSegment], ends: list[float]) -> int:
+    """The segment a word belongs to: the one it overlaps most, else the nearest one.
+
+    So every word lands in exactly one segment, whatever its times: a word that
+    starts a little before its sentence's span still belongs to that sentence.
+    """
+    a, b = entry.source_start, entry.source_end
+    first = bisect_right(ends, a + EPS)  # the first segment ending after the word starts
+    best, most = -1, 0.0
+    k = first
+    while k < len(segments) and segments[k].start < b - EPS:
+        overlap = min(b, segments[k].end) - max(a, segments[k].start)
+        if overlap > most:
+            best, most = k, overlap
+        k += 1
+    if best >= 0:
+        return best
+
+    def gap(k: int) -> float:
+        return max(segments[k].start - b, a - segments[k].end, 0.0)
+
+    return min((k for k in (first - 1, first) if 0 <= k < len(segments)), key=gap)
+
+
 def _texts(
     content: Sequence[hatao.Entry], segments: Sequence[ReviewSegment]
 ) -> list[tuple[str, str | None]]:
-    """Each segment's words and the label of who says its first word, in one pass.
+    """Each segment's words, in the list's order, and the label of who says its first word.
 
-    The list's items and the segments are both in time order, so one walk
-    covers a 2.5 h call's 1,500 sentences without searching the list for each.
+    Each word is placed by a binary search over the segments' ends, so a 2.5 h
+    call's 1,500 sentences cost a few comparisons a word.
     """
     out: list[tuple[str, str | None]] = [("", None) for _ in segments]
+    if not segments:
+        return out
     started = [False] * len(segments)
-    k = 0
+    ends = [s.end for s in segments]
     speaker: str | None = None
     for entry in content:
         if isinstance(entry, hatao.Paragraph):
@@ -187,12 +218,7 @@ def _texts(
             continue
         if not entry.text:
             continue
-        while k < len(segments) and entry.source_start >= segments[k].end - EPS:
-            k += 1
-        if k == len(segments):
-            break
-        if entry.source_start < segments[k].start - EPS:
-            continue
+        k = _segment_of(entry, segments, ends)
         text, who = out[k]
         out[k] = (text + entry.text, who if started[k] else speaker)
         started[k] = True
@@ -211,63 +237,109 @@ def _plain(segments: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+_MADE_AGAIN = (
+    "The transcript was made again after this review was checked, so its checks are of "
+    "words the transcript no longer has. Open Review, which re-checks the sentences by their "
+    "span and says how many need checking again, then save the answer key."
+)
+
+
+def _keep_earlier(as_json: Path, as_text: Path) -> None:
+    """Move a complete answer key out of the way of a partial one, under a numbered name.
+
+    A partial key written over a complete one would lose the finished pass. A
+    key that cannot be read is kept too: nobody can say it was not complete.
+    """
+    if not as_json.is_file():
+        return
+    try:
+        complete = cast("dict[str, Any]", json.loads(as_json.read_text(encoding="utf-8")))[
+            "complete"
+        ]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _log.warning("the answer key %s could not be read, so it is kept: %s", as_json, exc)
+        complete = True
+    if complete is not True:
+        return
+    stem = as_json.name.removesuffix(".json")
+    n = 2
+    while (as_json.with_name(f"{stem}-{n}.json")).exists() or (
+        as_text.with_name(f"{stem}-{n}.txt")
+    ).exists():
+        n += 1
+    as_json.replace(as_json.with_name(f"{stem}-{n}.json"))
+    if as_text.is_file():
+        as_text.replace(as_text.with_name(f"{stem}-{n}.txt"))
+    _log.warning("kept the earlier complete answer key as %s-%d.json", stem, n)
+
+
 def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWritten:
     """Write the review as the transcript's answer key, beside the transcript JSON.
 
-    The review, the edit list and the files written are all read and written
-    under the edit-list lock, so the key is one moment's words and review, and
-    it lands beside the transcript, not where a run has just moved it from.
+    Refused, before the edit list is opened, when the review was checked
+    against a transcript since made again: its checks vouch for other words,
+    and `allow_partial` does not change that. A partial key never writes over
+    a complete one: that is kept under a numbered name. The JSON and the text
+    are written together (dsj.atomic.atomic_write_texts).
 
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
         InvalidReview: the saved review cannot be read, named.
+        dsj.ui.edits.TranscriptChanged: the review was checked against an
+            earlier version of the transcript.
         ReviewIncomplete: there is no review, or sentences are unchecked and
             `allow_partial` is not set; it says how many.
     """
-    with edits.WRITING:
-        document, _ = read_review(transcript_id)
-        if document is None:
-            raise ReviewIncomplete(
-                "This transcript has no review yet. Open Review, check its sentences, then save "
-                "the answer key."
-            )
-        total = len(document.segments)
-        unchecked = sum(1 for s in document.segments if s.state != "checked")
-        if unchecked and not allow_partial:
-            raise ReviewIncomplete(
-                f"{unchecked} of {total} sentences are not checked yet. Finish the pass, or save "
-                f"a partial answer key, which says it is partial."
-            )
-        opened = edits.open_edits(transcript_id)
-        labels = edits.labels_of(opened)
-        row = _transcript(transcript_id)
-        segments = [
-            {
-                "start": s.start,
-                "end": s.end,
-                "speaker": edits.display_name(who, labels, opened.doc.names),
-                "label": who,
-                "text": text.strip(),
-                "flags": list(s.flags),
-                "checked": s.state == "checked",
-            }
-            for s, (text, who) in zip(
-                document.segments, _texts(opened.doc.content, document.segments), strict=True
-            )
-        ]
-        key = {
-            "format": "dsj-reference",
-            "version": 1,
-            "transcript": row.json_path.name,
-            "engine": row.engine,
-            "model": row.model,
-            "reviewed_against": document.transcript_sha,
-            "made_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "complete": unchecked == 0,
-            "segments": segments,
+    document, digest = read_review(transcript_id)
+    if document is None:
+        raise ReviewIncomplete(
+            "This transcript has no review yet. Open Review, check its sentences, then save "
+            "the answer key."
+        )
+    if document.transcript_sha != digest:
+        raise TranscriptChanged(_MADE_AGAIN)
+    total = len(document.segments)
+    unchecked = sum(1 for s in document.segments if s.state != "checked")
+    if unchecked and not allow_partial:
+        raise ReviewIncomplete(
+            f"{unchecked} of {total} sentences are not checked yet. Finish the pass, or save "
+            f"a partial answer key, which says it is partial."
+        )
+    opened = edits.open_edits(transcript_id)
+    if opened.transcript_sha != document.transcript_sha:
+        # Made again in the moment between the two reads.
+        raise TranscriptChanged(_MADE_AGAIN)
+    labels = edits.labels_of(opened)
+    row = _transcript(transcript_id)
+    segments = [
+        {
+            "start": s.start,
+            "end": s.end,
+            "speaker": edits.display_name(who, labels, opened.doc.names),
+            "label": who,
+            "text": text.strip(),
+            "flags": list(s.flags),
+            "checked": s.state == "checked",
         }
-        as_json = row.json_path.with_name(f"{row.json_path.stem}.reference.json")
-        as_text = row.json_path.with_name(f"{row.json_path.stem}.reference.txt")
-        atomic_write_text(as_json, json.dumps(key, ensure_ascii=False, indent=1), fsync=True)
-        atomic_write_text(as_text, _plain(segments), fsync=True)
+        for s, (text, who) in zip(
+            document.segments, _texts(opened.doc.content, document.segments), strict=True
+        )
+    ]
+    key = {
+        "format": "dsj-reference",
+        "version": 1,
+        "transcript": row.json_path.name,
+        "engine": row.engine,
+        "model": row.model,
+        "reviewed_against": document.transcript_sha,
+        "made_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "complete": unchecked == 0,
+        "segments": segments,
+    }
+    as_json = row.json_path.with_name(f"{row.json_path.stem}.reference.json")
+    as_text = row.json_path.with_name(f"{row.json_path.stem}.reference.txt")
+    if unchecked:
+        _keep_earlier(as_json, as_text)
+    text = json.dumps(key, ensure_ascii=False, indent=1)
+    atomic_write_texts([(as_json, text), (as_text, _plain(segments))], fsync=True)
     return ReferenceWritten(files=[as_json.name, as_text.name], segments=total, unchecked=unchecked)

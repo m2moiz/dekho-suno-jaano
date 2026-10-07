@@ -78,5 +78,7 @@ export function ErrorDialog({
 export function ShownErrorDialog() {
   const error = useShownError();
   if (error === null) return null;
-  return <ErrorDialog error={error} onClose={dismissError} />;
+  // The transcript was made again under the page (#249): the only way on is a reload.
+  const reload = error.error === "TranscriptChanged" ? () => window.location.reload() : undefined;
+  return <ErrorDialog error={error} onClose={dismissError} onReload={reload} />;
 }

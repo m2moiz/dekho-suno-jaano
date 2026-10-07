@@ -28,6 +28,7 @@ __all__ = [
     "Job",
     "JobState",
     "LanguageTag",
+    "ListContent",
     "Match",
     "Matches",
     "NamesUpdate",
@@ -232,12 +233,23 @@ class Edits(BaseModel):
     unrenderable: str | None
     # Why the saved list was put aside and this one built fresh, or None (#249).
     replaced: str | None
+    # The sha256 of the transcript JSON this list goes with: the page sends it
+    # back with each save, so a list loaded before the transcript was made
+    # again is never saved over the new one (#249).
+    transcript_sha: str
 
 
-class EditsUpdate(BaseModel):
-    """The page's whole edit list, to save in place of the one before."""
+class ListContent(BaseModel):
+    """The page's whole edit list as it is now, for a route that reads it and saves nothing."""
 
     content: list[EditEntry]
+
+
+class EditsUpdate(ListContent):
+    """The page's whole edit list, to save in place of the one before."""
+
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: str
 
 
 class NamesUpdate(BaseModel):

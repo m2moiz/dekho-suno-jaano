@@ -35,11 +35,14 @@ __all__ = [
     "WRITING",
     "NoSuchTranscript",
     "Opened",
+    "TranscriptChanged",
     "as_payload",
     "display_name",
     "edits_path",
     "engine_of",
+    "kept_with",
     "labels_of",
+    "notice_path",
     "open_edits",
     "save_edits",
     "save_names",
@@ -74,13 +77,18 @@ SOURCE = "0"
 # entries, from before. Also held while a stale list is moved aside (#249),
 # while a review is saved (dsj/ui/review.py, #248), and while a run moves a
 # transcript's files to another name (dsj/ui/jobs.py, keep_earlier_roman_run),
-# so none of them reads a path the other is moving. Re-entrant, because
-# save_names opens the list, and opening may move it aside.
+# so none of them reads a path the other is moving. Never held while the
+# transcript itself is read (see _read), which may be a Google Drive download.
+# Re-entrant, so code holding it may call a function that takes it.
 WRITING = threading.RLock()
 
 
 class NoSuchTranscript(LookupError):
     """The library has no transcript with this id, or its JSON file is gone."""
+
+
+class TranscriptChanged(RuntimeError):
+    """The transcript was made again since the page, or the review, was made from it (#249)."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,8 @@ class Opened:
     confidence: list[float | None]
     # The recording's length as the library knows it, or None when unknown.
     duration_s: float | None
+    # The sha256 of the transcript JSON the list was opened or saved against (#249).
+    transcript_sha: str
     # The transcript's own speaker labels, in its order: what "Speaker n" counts by.
     legend: tuple[str, ...] = ()
     # Why a saved list was put aside, when the transcript was made again (#249).
@@ -125,8 +135,15 @@ def _row(transcript_id: int) -> _Row:
     return _Row(found.json_path, recording.path, recording.duration_s, found.language)
 
 
-def _read(row: _Row, transcript_id: int) -> tuple[dict[str, Any], str]:
-    """The transcript's payload and its sha, from one read, so the two cannot disagree."""
+def _read(transcript_id: int) -> tuple[dict[str, Any], str]:
+    """The transcript's payload and its sha, from one read, so the two cannot disagree.
+
+    Read before WRITING is taken, never under it: the transcript may sit in an
+    online-only Google Drive folder, and its download must not hold up every
+    other request. A run that moves the file (keep_earlier_roman_run) moves its
+    bytes unchanged, so the sha still holds at its new name.
+    """
+    row = _row(transcript_id)
     try:
         raw = row.json_path.read_bytes()
     except FileNotFoundError:
@@ -137,8 +154,8 @@ def _read(row: _Row, transcript_id: int) -> tuple[dict[str, Any], str]:
     return cast("dict[str, Any]", json.loads(raw)), hashlib.sha256(raw).hexdigest()
 
 
-def _payload(row: _Row, transcript_id: int) -> dict[str, Any]:
-    return _read(row, transcript_id)[0]
+def _payload(transcript_id: int) -> dict[str, Any]:
+    return _read(transcript_id)[0]
 
 
 def transcript_sha(json_path: Path) -> str:
@@ -151,11 +168,36 @@ def source_path(path: Path) -> Path:
     return path.with_name(f"{path.stem}.source.json")
 
 
+def notice_path(path: Path) -> Path:
+    """Where the sentence saying the list at `path` was put aside waits for the page (#249)."""
+    return path.with_name(f"{path.stem}.replaced.txt")
+
+
+def kept_with(json_path: Path) -> tuple[Path, ...]:
+    """Every file the app keeps for the transcript at `json_path` under its key, but the review.
+
+    A run that moves the transcript to another name moves these with it
+    (dsj/ui/jobs.py, keep_earlier_roman_run).
+    """
+    path = edits_path(json_path)
+    return path, source_path(path), notice_path(path)
+
+
 def _made_from(path: Path) -> str | None:
-    """The sha the list at `path` was saved against, or None for a list saved before #249."""
+    """The sha the list at `path` was saved against, or None when that is not known.
+
+    None for a list saved before #249, which has no note, and for a note that
+    no longer reads, which is logged: either way the list is trusted as lists
+    were before #249, and its next save writes the note again. A broken note
+    must not make the transcript unopenable.
+    """
     try:
-        return str(json.loads(source_path(path).read_text(encoding="utf-8"))["transcript_sha"])
+        raw = json.loads(source_path(path).read_text(encoding="utf-8"))
+        return str(cast("dict[str, Any]", raw)["transcript_sha"])
     except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _log.warning("the note %s could not be read, so the list is trusted: %s", path, exc)
         return None
 
 
@@ -164,24 +206,36 @@ def _note_source(path: Path, digest: str) -> None:
     atomic_write_text(source_path(path), json.dumps({"transcript_sha": digest}), fsync=True)
 
 
-def _put_aside(path: Path, made_from: str) -> str:
-    """Move a stale list and its note aside, never deleting them; the sentence the page shows.
+def _aside(path: Path, digest: str) -> Path:
+    """A free name beside `path` for a list made from the transcript with sha `digest`.
 
     A transcript made again to the very words of an earlier one has the same
-    sha, so an earlier list put aside under it is never written over: the
-    later one takes the next free numbered name.
+    sha, so an earlier list kept under it is never written over: the later one
+    takes the next free numbered name.
     """
-    aside, n = path.with_name(f"{path.stem}.{made_from[:12]}.json"), 1
+    aside, n = path.with_name(f"{path.stem}.{digest[:12]}.json"), 1
     while aside.exists():
         n += 1
-        aside = path.with_name(f"{path.stem}.{made_from[:12]}-{n}.json")
+        aside = path.with_name(f"{path.stem}.{digest[:12]}-{n}.json")
+    return aside
+
+
+def _put_aside(path: Path, made_from: str) -> None:
+    """Move a stale list and its note aside, never deleting them, and leave word for the page.
+
+    The sentence waits beside the list until a GET of the list hands it to
+    the page (`open_edits(report=True)`), so a list put aside by an export, a
+    match or a render, which show the page no such sentence, is still told.
+    """
+    aside = _aside(path, made_from)
     path.replace(aside)
     source_path(path).replace(source_path(aside))
-    return (
+    said = (
         "This transcript was made again after it was last edited, so the old edits no longer "
         f"fit its words. They are kept beside the library as {aside.name}; this list starts "
         "again from the new transcript."
     )
+    atomic_write_text(notice_path(path), said, fsync=True)
 
 
 def _names_of_stale(path: Path) -> dict[str, str]:
@@ -195,6 +249,28 @@ def _names_of_stale(path: Path) -> dict[str, str]:
     except hatao.InvalidDocument as exc:
         _log.warning("the speaker names in %s could not be carried to the new list: %s", path, exc)
         return {}
+
+
+def _settle(row: _Row, payload: dict[str, Any], digest: str) -> Path:
+    """Put the transcript's list aside if it was made from other words; where the list lives.
+
+    Held under WRITING. A list with speaker names gets a fresh list in its
+    place holding them, since names belong to the voices and not to the words,
+    so the next open finds them and has nothing to put aside.
+    """
+    path = edits_path(row.json_path)
+    made_from = _made_from(path) if path.is_file() else None
+    if made_from is None or made_from == digest:
+        return path
+    names = _names_of_stale(path)
+    _put_aside(path, made_from)
+    if names:
+        fresh = hatao.from_transcript(
+            payload, row.media, duration_s=row.duration_s, language=row.language
+        )
+        hatao.save(hatao.Document(fresh.sources, fresh.content, names), path)
+        _note_source(path, digest)
+    return path
 
 
 def _confidences(payload: dict[str, Any], doc: hatao.Document) -> list[float | None]:
@@ -237,8 +313,27 @@ def _edited_at(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(timespec="seconds")
 
 
-def open_edits(transcript_id: int) -> Opened:
+def _current(row: _Row, payload: dict[str, Any], path: Path) -> tuple[hatao.Document, str | None]:
+    """The list at `path` and when it was saved, or the untouched one built from `payload`."""
+    if path.is_file():
+        saved = hatao.load(path)
+        doc = hatao.validate(
+            hatao.Document({SOURCE: str(row.media.resolve())}, saved.content, saved.names)
+        )
+        return doc, _edited_at(path)
+    doc = hatao.from_transcript(
+        payload, row.media, duration_s=row.duration_s, language=row.language
+    )
+    return doc, None
+
+
+def open_edits(transcript_id: int, *, report: bool = False) -> Opened:
     """The transcript's saved edit list, or its untouched one built from the transcript.
+
+    A list made from a transcript since made again is put aside first (#249).
+    The sentence saying so waits until it is reported: `report` is the page's
+    own GET of the list, which hands it on and clears it. Every other caller
+    (export, matches, render, the answer key) leaves it waiting.
 
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
@@ -246,43 +341,40 @@ def open_edits(transcript_id: int) -> Opened:
             so no list can be built without guessing where words stop.
         dsj.hatao.InvalidDocument: the saved list is broken, named.
     """
+    payload, digest = _read(transcript_id)
     with WRITING:
+        # The row again, under the lock: a run may have moved the transcript
+        # since, and its list is where the row says now.
         row = _row(transcript_id)
-        payload, digest = _read(row, transcript_id)
-        path = edits_path(row.json_path)
-        replaced: str | None = None
-        made_from = _made_from(path) if path.is_file() else None
-        if made_from is not None and made_from != digest:
-            names = _names_of_stale(path)
-            replaced = _put_aside(path, made_from)
-            if names:
-                # The names come across in the fresh list itself, so the next
-                # open finds them and has nothing to put aside.
-                fresh = hatao.from_transcript(
-                    payload, row.media, duration_s=row.duration_s, language=row.language
-                )
-                hatao.save(hatao.Document(fresh.sources, fresh.content, names), path)
-                _note_source(path, digest)
-        if path.is_file():
-            saved = hatao.load(path)
-            doc = hatao.validate(
-                hatao.Document({SOURCE: str(row.media.resolve())}, saved.content, saved.names)
-            )
-            edited_at: str | None = _edited_at(path)
-        else:
-            doc = hatao.from_transcript(
-                payload, row.media, duration_s=row.duration_s, language=row.language
-            )
-            edited_at = None
+        path = _settle(row, payload, digest)
+        notice = notice_path(path)
+        replaced = notice.read_text(encoding="utf-8") if notice.is_file() else None
+        if report and replaced is not None:
+            notice.unlink()
+        doc, edited_at = _current(row, payload, path)
     return Opened(
-        doc, edited_at, _confidences(payload, doc), row.duration_s, _legend(payload), replaced
+        doc,
+        edited_at,
+        _confidences(payload, doc),
+        row.duration_s,
+        digest,
+        _legend(payload),
+        replaced,
     )
 
 
-def _save(transcript_id: int, content: tuple[hatao.Entry, ...], names: Mapping[str, str]) -> Opened:
-    """Write `content` and `names` as the transcript's edit list, whole or not at all."""
+def _save(
+    transcript_id: int,
+    content: tuple[hatao.Entry, ...],
+    names: Mapping[str, str],
+    payload: dict[str, Any],
+    digest: str,
+) -> Opened:
+    """Write `content` and `names` as the transcript's edit list, whole or not at all.
+
+    Held under WRITING, with the transcript as read before it was taken.
+    """
     row = _row(transcript_id)
-    payload, digest = _read(row, transcript_id)
     doc = hatao.validate(hatao.Document({SOURCE: str(row.media.resolve())}, content, dict(names)))
     path = edits_path(row.json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,20 +384,46 @@ def _save(transcript_id: int, content: tuple[hatao.Entry, ...], names: Mapping[s
     # So the library list can say this transcript was corrected by hand (#83).
     with Library.open() as library:
         library.mark_edited(transcript_id, edited_at)
-    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s, _legend(payload))
+    return Opened(
+        doc, edited_at, _confidences(payload, doc), row.duration_s, digest, _legend(payload)
+    )
 
 
-def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
+def save_edits(
+    transcript_id: int, content: tuple[hatao.Entry, ...], transcript_sha: str
+) -> Opened:
     """Save the page's entries as the transcript's edit list, keeping the speaker names it has.
+
+    `transcript_sha` is the sha of the transcript the page loaded the list
+    against. When the transcript has been made again since (#249), the page's
+    entries are words the transcript no longer has: they are kept aside under
+    their own name, nothing typed is lost, and the save is refused so the page
+    reloads, rather than saved over the new transcript and trusted.
 
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
         dsj.hatao.InvalidDocument: the entries are broken, named; nothing is written.
+        TranscriptChanged: the transcript was made again since the page loaded the list.
     """
+    payload, digest = _read(transcript_id)
     with WRITING:
-        path = edits_path(_row(transcript_id).json_path)
+        row = _row(transcript_id)
+        path = _settle(row, payload, digest)
         names: Mapping[str, str] = hatao.load(path).names if path.is_file() else {}
-        return _save(transcript_id, content, names)
+        if transcript_sha != digest:
+            doc = hatao.validate(
+                hatao.Document({SOURCE: str(row.media.resolve())}, content, dict(names))
+            )
+            aside = _aside(path, transcript_sha)
+            aside.parent.mkdir(parents=True, exist_ok=True)
+            hatao.save(doc, aside)
+            _note_source(aside, transcript_sha)
+            raise TranscriptChanged(
+                "This transcript was made again while it was open, so these edits are to "
+                f"words it no longer has. They are kept beside the library as {aside.name}. "
+                "Reload the page to see the new transcript."
+            )
+        return _save(transcript_id, content, names, payload, digest)
 
 
 def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
@@ -319,8 +437,11 @@ def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
         dsj.hatao.InvalidDocument: a label is blank; nothing is written.
     """
     kept = {label: name.strip() for label, name in names.items() if name.strip()}
+    payload, digest = _read(transcript_id)
     with WRITING:
-        return _save(transcript_id, open_edits(transcript_id).doc.content, kept)
+        row = _row(transcript_id)
+        doc, _ = _current(row, payload, _settle(row, payload, digest))
+        return _save(transcript_id, doc.content, kept, payload, digest)
 
 
 def engine_of(transcript_id: int) -> str:
@@ -328,12 +449,11 @@ def engine_of(transcript_id: int) -> str:
 
     The library's record of the run first, then the file's own `engine`, then its model id.
     """
-    row = _row(transcript_id)
     with Library.open() as library:
         found = library.transcript(transcript_id)
     if found is not None and found.engine:
         return found.engine
-    payload = _payload(row, transcript_id)
+    payload = _payload(transcript_id)
     return str(payload.get("engine") or payload.get("model") or "this engine")
 
 

@@ -105,7 +105,7 @@ describe("the Render buttons", () => {
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [[0.2, 0.8], [0.9, 1.5]], unrenderable: null, replaced: null });
+        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [[0.2, 0.8], [0.9, 1.5]], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [BRAVO], words_searched: 3, lists: ["en"], recall: "recall: x" });

@@ -342,7 +342,7 @@ describe("the words to bleep, on the transcript page", () => {
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
         const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null });
+        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: x" });
@@ -443,7 +443,7 @@ describe("the words to bleep, on the transcript page", () => {
     // The save has not come back, so the server's copy is behind the page's: no export yet.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(exported).toEqual([]);
-    answer(Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null }));
+    answer(Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" }));
     await vi.waitFor(() => expect(exported).toEqual(["/api/transcripts/7/export/srt"]));
   });
 

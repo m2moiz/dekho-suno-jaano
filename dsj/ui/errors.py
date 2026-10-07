@@ -28,7 +28,7 @@ from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordLi
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
-from dsj.ui.edits import NoSuchTranscript
+from dsj.ui.edits import NoSuchTranscript, TranscriptChanged
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
 from dsj.ui.review import InvalidReview, ReviewIncomplete
@@ -72,6 +72,8 @@ STATUS: dict[type[Exception], int] = {
     PickerBusy: 409,
     # An answer key while sentences are unchecked: the request was fine, the review is not done.
     ReviewIncomplete: 409,
+    # The transcript was made again since the page loaded its list or checked its review (#249).
+    TranscriptChanged: 409,
     # ffmpeg failed on the file in a way nobody named. Genuinely unexpected.
     MediaError: 500,
 }

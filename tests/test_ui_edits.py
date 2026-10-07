@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import page
+from conftest import page, update
 
 from dsj import hatao
 from dsj.ui.edits import edits_path
@@ -50,7 +50,7 @@ def test_a_saved_list_comes_back_as_it_was_saved_and_the_recording_is_untouched(
     content = client.get(route).json()["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["muted"] = True
-    saved = client.put(route, json={"content": content})
+    saved = client.put(route, json=update(seeded, content))
     assert saved.status_code == 200, saved.text
     assert saved.json()["edited_at"] is not None
     again = page().get(route).json()
@@ -68,7 +68,7 @@ def test_the_list_is_kept_beside_the_library_and_never_beside_the_recording(
 ) -> None:
     client = page()
     route = f"/api/transcripts/{seeded['id']}/edits"
-    client.put(route, json={"content": client.get(route).json()["content"]})
+    client.put(route, json=update(seeded, client.get(route).json()["content"]))
     path = edits_path(seeded["json"])
     assert path.parent == library_path().parent / "edits"
     assert path.is_file()
@@ -80,7 +80,7 @@ def test_a_broken_list_is_refused_whole_naming_the_entry(seeded: dict[str, Any])
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2]["length"] = -1.0
-    reply = client.put(route, json={"content": content})
+    reply = client.put(route, json=update(seeded, content))
     assert reply.status_code == 422
     assert reply.json()["error"] == "InvalidDocument"
     assert "entry 2" in reply.json()["message"]
@@ -94,7 +94,7 @@ def test_a_page_cannot_name_a_source_the_server_did_not_give_it(
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[1]["source"] = "/etc/passwd"
-    reply = client.put(route, json={"content": content})
+    reply = client.put(route, json=update(seeded, content))
     assert reply.status_code == 422
     assert "no such source" in reply.json()["message"]
 
@@ -105,7 +105,7 @@ def test_a_word_edited_by_hand_reads_as_sure(seeded: dict[str, Any]) -> None:
     content = client.get(route).json()["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["text"] = " their"
-    body = client.put(route, json={"content": content}).json()
+    body = client.put(route, json=update(seeded, content)).json()
     assert body["content"][there]["confidence"] == 1.0
     hello = next(e for e in body["content"] if e.get("text") == " Hello")
     assert hello["confidence"] == 0.99
@@ -136,7 +136,7 @@ def test_a_rebuilt_library_finds_the_same_list(seeded: dict[str, Any]) -> None:
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[1]["muted"] = True
-    client.put(route, json={"content": content})
+    client.put(route, json=update(seeded, content))
     library_path().unlink()
     with Library.open() as library:
         rebuilt = library.adopt([seeded["json"]]).transcripts[0]
@@ -237,7 +237,7 @@ def test_the_spans_a_render_would_mute_come_with_every_list(seeded: dict[str, An
     content = opened["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["muted"] = True
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     # hatao.spans_to_mute's own answer: the word, padded PAD_S each side.
     assert saved["spans"] == [[0.46, 0.9]]
     assert saved["unrenderable"] is None
@@ -248,7 +248,7 @@ def test_a_list_a_render_would_refuse_says_why(seeded: dict[str, Any]) -> None:
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2], content[3] = content[3], content[2]
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     assert saved["spans"] is None
     assert "deleted or moved" in saved["unrenderable"]
 
@@ -265,7 +265,7 @@ def test_saving_an_edit_marks_the_transcript_edited_in_the_library(
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2]["text"] = " Hullo"
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     listed = client.get("/api/recordings").json()[0]["transcripts"][0]
     assert listed["last_edited_at"] == saved["edited_at"]
     # The transcript's own file is never written.
@@ -315,7 +315,7 @@ def test_saving_the_words_keeps_the_names(seeded: dict[str, Any]) -> None:
     client.put(f"{route}/names", json={"names": {"SPEAKER_01": "Sara"}})
     content = client.get(f"{route}/edits").json()["content"]
     content[2]["muted"] = True
-    saved = client.put(f"{route}/edits", json={"content": content}).json()
+    saved = client.put(f"{route}/edits", json=update(seeded, content)).json()
     assert saved["names"] == {"SPEAKER_01": "Sara"}
 
 
