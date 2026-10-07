@@ -64,6 +64,8 @@ elif len(argv) == 4 and argv[:2] == ["serve", "--bg"] and argv[2].startswith("--
     state["serve"] = serve
     with open(path, "w") as f:
         json.dump(state, f)
+    # What tailscale prints while it waits, such as the URL to turn HTTPS on.
+    print(state["bg_says"], end="", flush=True)
     # The entry is in place; a slow command keeps dsj waiting after it.
     time.sleep(state["bg_sleep"])
 elif argv[2:] == ["off"] and state["off_fails"]:
@@ -97,7 +99,7 @@ class FakeTailscale:
         exe.chmod(0o755)
         self.write(
             backend="Running", dns=f"{NAME}.", serve=None, calls=[], off_fails=False,
-            bg_sleep=0,
+            bg_sleep=0, bg_says="",
         )
 
     def read(self) -> dict[str, Any]:
@@ -190,6 +192,38 @@ def test_tailscale_stopped_says_what_to_do_and_starts_nothing(
         "then run dsj ui --tailnet again."
     ) in captured.err
     assert tailscale.calls == [STATUS], "only the status may be read; never `tailscale up`"
+
+
+def test_magicdns_off_is_named_not_reported_as_tailscale_stopped(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Running, but no tailnet name: MagicDNS is off (Task 15b review, Minor 4)."""
+    tailscale.write(dns="")
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    assert main(["ui", "--tailnet", "--print-url"]) == 1
+    captured = capsys.readouterr()
+    assert "not running" not in captured.err
+    assert "MagicDNS is off" in captured.err
+    assert tailscale.calls == [STATUS]
+
+
+def test_a_serve_that_waits_for_https_to_be_enabled_says_what_tailscale_said(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`serve --bg` prints an enable URL and waits; it must reach the owner (Minor 3)."""
+    tailscale.write(
+        bg_sleep=5,
+        bg_says="Serve is not enabled on your tailnet.\nTo enable, visit:\n\n"
+        "         https://login.tailscale.com/f/serve?node=abc\n",
+    )
+    monkeypatch.setattr("dsj.ui.tailnet._COMMAND_S", 1.0)
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    assert main(["ui", "--tailnet", "--print-url"]) == 1
+    captured = capsys.readouterr()
+    assert "did not finish in 1 s" in captured.err
+    assert "https://login.tailscale.com/f/serve?node=abc" in captured.err
 
 
 def test_8443_taken_goes_to_the_next_port_and_leaves_8443_alone(
@@ -461,6 +495,19 @@ def test_a_plain_dsj_ui_removes_a_killed_runs_entry(
     assert tailscale.proxy() is None
     assert tailscale.calls == [SERVE_STATUS, OFF, SERVE_STATUS]
     assert dsj.ui.server.lock_path().read_text() == ""
+
+
+def test_a_plain_start_says_so_before_it_waits_on_tailscale(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A hung tailscale can hold a plain start 30 s an entry; never in silence (Minor 10)."""
+    write_killed_run()
+    tailscale.write(serve=dead_entry())
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    assert main(["ui", "--print-url"]) == 0
+    first = capsys.readouterr().err.splitlines()[0]
+    assert first.startswith("Checking for the tailscale serve entry an earlier dsj ui left"), first
 
 
 def test_the_record_outlives_runs_that_cannot_remove_the_entry(

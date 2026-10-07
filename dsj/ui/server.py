@@ -491,6 +491,10 @@ def _retry_removal(
     """
     if not entries:
         return []
+    # Said first: while tailscale hangs, each entry costs up to _COMMAND_S
+    # before the start goes on (Task 15b review, Minor 10).
+    print("Checking for the tailscale serve entry an earlier dsj ui left behind...",
+          file=sys.stderr, flush=True)
     try:
         proxy = tailnet or Tailnet()
     except TailnetUnavailable:

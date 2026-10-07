@@ -59,6 +59,14 @@ _NOT_RUNNING = (
     "Tailscale is not running. Start it from the menu bar, then run dsj ui --tailnet again."
 )
 
+# Running, with no name for this Mac on the tailnet: MagicDNS gives it one, and
+# the phone's URL is that name (Task 15b review, Minor 4).
+_NO_NAME = (
+    "Tailscale is running, but this Mac has no tailnet name, so MagicDNS is off. Turn on "
+    "MagicDNS and HTTPS certificates in the Tailscale admin console's DNS page, then run "
+    "dsj ui --tailnet again."
+)
+
 
 class TailnetUnavailable(UIUnavailable):
     """`dsj ui --tailnet` cannot serve the tailnet here. Nothing was changed."""
@@ -95,9 +103,15 @@ class Tailnet:
                 [self.exe, *args], stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=_COMMAND_S, check=False,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            # What it printed while it waited: `serve --bg` with HTTPS
+            # certificates off prints the URL that turns them on, and the
+            # owner needs it (Task 15b review, Minor 3). Always bytes here,
+            # whatever `text` says.
+            said = " ".join((exc.stdout or b"").decode(errors="replace").split())
             raise TailnetUnavailable(
                 f"`tailscale {' '.join(args)}` did not finish in {_COMMAND_S:g} s."
+                + (f" Tailscale said: {said}" if said else "")
             ) from None
         if done.returncode != 0:
             said = (done.stderr or done.stdout).strip().splitlines()
@@ -114,8 +128,10 @@ class Tailnet:
         """
         status = _object(self._json("status", "--json"))
         name = _object(status.get("Self")).get("DNSName")
-        if status.get("BackendState") != "Running" or not isinstance(name, str) or not name:
+        if status.get("BackendState") != "Running":
             raise TailnetUnavailable(_NOT_RUNNING)
+        if not isinstance(name, str) or not name:
+            raise TailnetUnavailable(_NO_NAME)
         self.name = name.rstrip(".").lower()
         return self.name
 
