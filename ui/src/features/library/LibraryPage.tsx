@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { transcriptHref } from "@/lib/route";
 import { useFinishedCount } from "@/features/transcribe/jobs";
+import { AppBar } from "@/features/shell/AppBar";
 import { TranscribeControl } from "@/features/transcribe/TranscribeControl";
 import {
   durationLabel,
@@ -60,22 +61,36 @@ export function LibraryPage() {
 
   // No skeleton: the list is one local request, and a flash of placeholder is
   // worse than a few milliseconds of nothing (#57 section 11.7).
-  if (loaded.state === "loading") return null;
+  if (loaded.state === "loading") {
+    return (
+      <>
+        <AppBar>
+          <h1 className="sr-only">Library</h1>
+        </AppBar>
+        <main className="mx-auto w-full max-w-3xl flex-1 px-3 py-6 sm:px-6" />
+      </>
+    );
+  }
   return (
-    <div className="flex flex-col gap-6">
-      <AddRecording onAdded={reload} />
-      {loaded.state === "failed" ? (
-        <p className="text-muted-foreground">The library could not be read.</p>
-      ) : loaded.rows.length === 0 ? (
-        <p className="text-muted-foreground">The library is empty.</p>
-      ) : (
-        <ul className="flex flex-col gap-6" aria-label="Recordings">
-          {loaded.rows.map((row) => (
-            <Recording key={row.id} row={row} onChanged={reload} />
-          ))}
-        </ul>
-      )}
-    </div>
+    <>
+      <AppBar>
+        <h1 className="sr-only">Library</h1>
+      </AppBar>
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-3 py-6 sm:px-6">
+        <AddRecording onAdded={reload} />
+        {loaded.state === "failed" ? (
+          <p className="text-muted-foreground">The library could not be read.</p>
+        ) : loaded.rows.length === 0 ? (
+          <p className="text-muted-foreground">The library is empty.</p>
+        ) : (
+          <ul className="flex flex-col gap-6" aria-label="Recordings">
+            {loaded.rows.map((row) => (
+              <Recording key={row.id} row={row} onChanged={reload} />
+            ))}
+          </ul>
+        )}
+      </main>
+    </>
   );
 }
 

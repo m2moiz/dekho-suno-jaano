@@ -21,6 +21,7 @@ import {
 import { LibraryPage } from "../../src/features/library/LibraryPage";
 import type { RecordingRow, TranscriptRow } from "../../src/features/library/types";
 import { takeToken } from "../../src/features/session/session";
+import { stubMatchMedia } from "./media";
 
 function transcript(overrides: Partial<TranscriptRow>): TranscriptRow {
   return {
@@ -80,6 +81,7 @@ function serve(rows: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  stubMatchMedia();
   window.history.replaceState(null, "", "/#t=a-token");
   takeToken();
 });

@@ -1,7 +1,8 @@
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type RefObject, useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import { durationLabel } from "@/features/library/describe";
 
 // The shape of the recording's sound (#61), drawn from the envelope the server
 // computed (dsj.media.envelope), so the browser never loads the audio to draw
@@ -63,9 +64,29 @@ type Props = {
   onSeek: (seconds: number) => void;
 };
 
+// One arrow key press moves this far; with Shift, SHIFT_STEP_S.
+const STEP_S = 5;
+const SHIFT_STEP_S = 30;
+
+/**
+ * The recording's shape as the only scrubber (Hashiya spec, Reader: "the
+ * waveform as the only scrubber with the played part tinted gold"). Two
+ * canvases drawn once, the second in gold and cut by clip-path to the played
+ * part, so a frame moves one clip and draws nothing. A slider to the keyboard
+ * and to a screen reader (critique: "waveform unreachable by keyboard").
+ *
+ * The played canvas is text-gold on the rail's bg-field, the one ground the
+ * full gold reads on (index.css, --gold-ink).
+ *
+ * Hand-built rather than a shadcn slider: a slider picks a value from a track
+ * it draws itself, and this one is the drawing of the recording, with the
+ * playhead's frame moving its cursor outside React.
+ */
 export function Waveform({ recordingId, media, frames, onSeek }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const played = useRef<HTMLCanvasElement>(null);
   const cursor = useRef<HTMLDivElement>(null);
+  const slider = useRef<HTMLDivElement>(null);
   const [peaks, setPeaks] = useState<Int8Array | null>(null);
 
   useEffect(() => {
@@ -90,12 +111,16 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
 
   // Drawn again when the canvas changes size or the colours change scheme.
   useEffect(() => {
-    const element = canvas.current;
-    if (element === null || peaks === null) return;
-    const redraw = () => draw(element, peaks);
+    const base = canvas.current;
+    const gold = played.current;
+    if (base === null || gold === null || peaks === null) return;
+    const redraw = () => {
+      draw(base, peaks);
+      draw(gold, peaks);
+    };
     redraw();
     const resized = new ResizeObserver(redraw);
-    resized.observe(element);
+    resized.observe(base);
     const themed = new MutationObserver(redraw);
     themed.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -107,14 +132,24 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
     };
   }, [peaks]);
 
-  // The cursor is moved by the playhead's own frame, never by React state.
+  // The cursor and the gold clip move with the playhead's own frame, never
+  // with React state; the slider's value is written at most once a second.
   useEffect(() => {
+    let lastSecond = -1;
     const move = (seconds: number) => {
-      const element = cursor.current;
       const duration = media.current?.duration ?? Number.NaN;
-      if (element === null || !Number.isFinite(duration) || duration <= 0) return;
-      const width = element.parentElement?.clientWidth ?? 0;
-      element.style.transform = `translateX(${(Math.min(seconds, duration) / duration) * width}px)`;
+      if (!Number.isFinite(duration) || duration <= 0) return;
+      const share = Math.min(seconds, duration) / duration;
+      const width = cursor.current?.parentElement?.clientWidth ?? 0;
+      if (cursor.current !== null) cursor.current.style.transform = `translateX(${share * width}px)`;
+      if (played.current !== null) played.current.style.clipPath = `inset(0 ${(1 - share) * 100}% 0 0)`;
+      const second = Math.floor(seconds);
+      if (second !== lastSecond && slider.current !== null) {
+        lastSecond = second;
+        slider.current.setAttribute("aria-valuenow", String(second));
+        slider.current.setAttribute("aria-valuemax", String(Math.round(duration)));
+        slider.current.setAttribute("aria-valuetext", `${durationLabel(seconds) ?? "0:00"} of ${durationLabel(duration) ?? "0:00"}`);
+      }
     };
     frames.add(move);
     return () => {
@@ -122,9 +157,37 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
     };
   }, [frames, media]);
 
+  const key = (event: KeyboardEvent<HTMLDivElement>) => {
+    const element = media.current;
+    if (element === null) return;
+    const duration = Number.isFinite(element.duration) ? element.duration : Number.POSITIVE_INFINITY;
+    const step = event.shiftKey ? SHIFT_STEP_S : STEP_S;
+    const to =
+      event.key === "ArrowRight" || event.key === "ArrowUp"
+        ? element.currentTime + step
+        : event.key === "ArrowLeft" || event.key === "ArrowDown"
+          ? element.currentTime - step
+          : event.key === "Home"
+            ? 0
+            : event.key === "End" && Number.isFinite(duration)
+              ? duration
+              : null;
+    if (to === null) return;
+    event.preventDefault();
+    onSeek(Math.min(Math.max(0, to), duration));
+  };
+
   return (
     <div
-      className="relative h-12 w-full cursor-pointer"
+      ref={slider}
+      role="slider"
+      tabIndex={0}
+      aria-label="Position"
+      aria-valuemin={0}
+      aria-valuemax={0}
+      aria-valuenow={0}
+      className="relative h-11 min-w-0 flex-1 cursor-pointer rounded-md"
+      onKeyDown={key}
       onClick={(event) => {
         const duration = media.current?.duration ?? Number.NaN;
         if (!Number.isFinite(duration)) return;
@@ -132,8 +195,14 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
         onSeek(((event.clientX - box.left) / box.width) * duration);
       }}
     >
-      <canvas ref={canvas} aria-label="Waveform" className="h-full w-full text-muted-foreground" />
-      <div ref={cursor} aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-px bg-foreground" />
+      <canvas ref={canvas} aria-label="Waveform" className="h-full w-full text-field-wave" />
+      <div ref={cursor} aria-hidden className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded bg-gold" />
+      <canvas
+        ref={played}
+        aria-hidden
+        className="pointer-events-none absolute inset-0 h-full w-full text-gold"
+        style={{ clipPath: "inset(0 100% 0 0)" }}
+      />
     </div>
   );
 }

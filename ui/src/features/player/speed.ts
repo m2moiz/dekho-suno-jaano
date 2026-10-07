@@ -44,3 +44,13 @@ export function applySpeed(media: HTMLMediaElement, speed: Speed): void {
 export function speedLabel(speed: number): string {
   return `${speed}×`;
 }
+
+// Review's four steps (Hashiya spec, key table: Ctrl+, and Ctrl+.). Slower
+// than 0.75x drags Urdu's long vowels apart; faster than 1.5x outruns typing.
+export const REVIEW_SPEEDS = [0.75, 1, 1.25, 1.5] as const;
+
+/** The next of Review's speeds from `current` in direction `by`, staying at either end. */
+export function stepSpeed(current: Speed, by: 1 | -1): Speed {
+  if (by > 0) return REVIEW_SPEEDS.find((s) => s > current) ?? REVIEW_SPEEDS[REVIEW_SPEEDS.length - 1] ?? current;
+  return [...REVIEW_SPEEDS].reverse().find((s) => s < current) ?? REVIEW_SPEEDS[0] ?? current;
+}

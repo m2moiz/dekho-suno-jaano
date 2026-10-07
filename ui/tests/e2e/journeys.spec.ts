@@ -170,9 +170,10 @@ test.describe("journey 4: change the theme, quit, start again, see it kept", () 
     let second: Server | null = null;
     try {
       await page.goto(first.url);
-      await expect(page.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "Settings" }).click();
+      await expect(page.getByRole("menuitemradio", { name: "Same as the Mac" })).toHaveAttribute("aria-checked", "true");
       expect(await lightness(page)).toBeGreaterThan(0.8);
-      await page.getByRole("button", { name: "Dark" }).click();
+      await page.getByRole("menuitemradio", { name: "Dark" }).click();
       await expect.poll(() => lightness(page)).toBeLessThan(0.2);
 
       // Quit it, as a person would, and start it again: a new port, a new token.
@@ -180,7 +181,8 @@ test.describe("journey 4: change the theme, quit, start again, see it kept", () 
       second = await startUi(library);
       expect(new URL(second.url).port).not.toBe(new URL(first.url).port);
       await page.goto(second.url);
-      await expect(page.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "Settings" }).click();
+      await expect(page.getByRole("menuitemradio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
       expect(await page.evaluate(() => document.documentElement.style.colorScheme)).toBe("dark");
       expect(await lightness(page)).toBeLessThan(0.2);
     } finally {

@@ -10,11 +10,12 @@ import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/app
 import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
+import { AppBar } from "@/features/shell/AppBar";
 import { parseTranscript, read, type Reading, type TranscriptDoc } from "./document";
 import { TranscriptView } from "./TranscriptView";
 import { UnsureToggle } from "./UnsureToggle";
 
-type Opened = {
+export type Opened = {
   recording: RecordingRow;
   doc: TranscriptDoc;
   /** The edit list, or why this transcript has none (#66). */
@@ -22,7 +23,7 @@ type Opened = {
 };
 type Loaded = { state: "loading" } | { state: "failed" } | ({ state: "ready" } & Opened);
 
-async function open(recordingId: number, transcriptId: number): Promise<Opened> {
+export async function openTranscript(recordingId: number, transcriptId: number): Promise<Opened> {
   const transcriptRoute = `/api/transcripts/${transcriptId}`;
   const [list, file, editable] = await Promise.all([
     api.GET("/api/recordings"),
@@ -53,7 +54,7 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   useEffect(() => {
     let live = true;
-    open(recording, transcript).then(
+    openTranscript(recording, transcript).then(
       (opened) => {
         if (live) setLoaded({ state: "ready", ...opened });
       },
@@ -68,23 +69,24 @@ export function TranscriptPage({ recording, transcript }: { recording: number; t
     };
   }, [recording, transcript]);
 
-  return (
-    <>
-      <nav className="mb-6 text-sm">
-        <a href="/" className="text-muted-foreground underline-offset-4 hover:underline">
-          ← Library
-        </a>
-      </nav>
-      {loaded.state === "failed" && (
-        <p className="text-muted-foreground">This transcript could not be opened.</p>
-      )}
-      {loaded.state === "ready" &&
-        ("editor" in loaded.editable ? (
-          <EditablePage opened={loaded} editable={loaded.editable} transcriptId={transcript} />
-        ) : (
-          <ReadOnlyPage opened={loaded} reason={loaded.editable.reason} />
-        ))}
-    </>
+  if (loaded.state !== "ready") {
+    return (
+      <>
+        <AppBar back>
+          <h1 className="truncate text-lg">Transcript</h1>
+        </AppBar>
+        {loaded.state === "failed" && (
+          <main className="mx-auto w-full max-w-3xl px-3 py-6 sm:px-6">
+            <p className="text-muted-foreground">This transcript could not be opened.</p>
+          </main>
+        )}
+      </>
+    );
+  }
+  return "editor" in loaded.editable ? (
+    <EditablePage opened={loaded} editable={loaded.editable} transcriptId={transcript} />
+  ) : (
+    <ReadOnlyPage opened={loaded} reason={loaded.editable.reason} />
   );
 }
 
@@ -166,17 +168,16 @@ function Page({ opened, reading, article, children, muteSpans, controls }: PageP
   const { recording, doc } = opened;
   return (
     <>
-      <header className="mb-8 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-balance">{fileName(recording.path)}</h2>
-          <p className="text-sm text-muted-foreground">{doc.model}</p>
-        </div>
+      <AppBar back>
+        <h1 className="min-w-0 flex-1 truncate font-reading text-lg font-semibold">{fileName(recording.path)}</h1>
         <UnsureToggle reading={reading} model={doc.model} article={article} />
-      </header>
-      {children}
-      <TranscriptView reading={reading} articleRef={article} />
+      </AppBar>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-3 pt-6 pb-10 sm:px-6">
+        {children}
+        <TranscriptView reading={reading} articleRef={article} />
+      </main>
       {recording.missing ? (
-        <p className="sticky bottom-0 mt-8 border-t bg-background/95 py-3 text-sm text-muted-foreground">
+        <p className="sticky bottom-0 bg-field px-4 py-3 text-sm text-field-foreground">
           The recording is not where it was last seen, so this transcript cannot play. Last seen at{" "}
           <span className="font-mono break-all">{recording.path}</span>
         </p>

@@ -128,6 +128,8 @@ QUERIES = {
     "bleep": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "library-focus": lambda ids: "",
     "menu": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
+    "settings": lambda ids: "",
+    "reader-focus": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "reader": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "reader-urdu": lambda ids: "?recording={}&transcript={}".format(*ids["urdu"]),
     "reader-english": lambda ids: "?recording={}&transcript={}".format(*ids["english"]),
@@ -141,8 +143,14 @@ PRESS = (
     "el?.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: 'mouse', button: 0 })); };"
 )
 # Keys to press on a page before its shot: two Tabs land on the bar's second control.
-KEYS = {"library-focus": ["Tab", "Tab"]}
+KEYS = {
+    "library-focus": ["Tab", "Tab"],
+    # Backwards from the page's start: the rail's speed, its waveform, then its Play button.
+    "reader-focus": ["Shift+Tab", "Shift+Tab", "Shift+Tab"],
+}
 ACTIONS = {
+    # The bar's settings menu, open (Task 2).
+    "settings": PRESS + "press(document.querySelector('button[aria-label=Settings]'));",
     # The untranscribed recording's Transcribe dialog (Task 9).
     "transcribe": PRESS + "press(Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === 'Transcribe'));",
     # The reader's menu, open (Tasks 4 and 6).
@@ -190,14 +198,24 @@ def main() -> None:
                 for scheme in SCHEMES:
                     browse("set", "viewport", str(width), str(height))
                     browse("set", "media", scheme)
+                    # Blank first: the same address differs from the last only by its
+                    # hash, which the browser takes as no navigation, so the page
+                    # would keep the last shot's focus and open menus.
+                    browse("open", "about:blank")
                     browse("open", address)
                     browse("wait", "1200")
                     if name in ACTIONS:
-                        browse("eval", ACTIONS[name])
+                        # A block, because a second shot of the same address does not reload
+                        # the page and `const press` would be declared twice.
+                        browse("eval", "{" + ACTIONS[name] + "}")
                         browse("wait", "900")
                     # Real key presses, so the browser shows its keyboard focus ring.
                     for key in KEYS.get(name, []):
                         browse("press", key)
+                    if name in KEYS:
+                        # The focus ring fades in (transition-all); a shot taken at
+                        # once catches it half drawn.
+                        browse("wait", "500")
                     shot = out / f"{name}-{width}x{height}-{scheme}.png"
                     browse("screenshot", str(shot))
                     print(shot)

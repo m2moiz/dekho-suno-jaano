@@ -101,6 +101,8 @@
        into view (a Cmd+F match, #230) centres above it. The player writes its
        own height here while it is on the page (PLAYER_HEIGHT in playhead.ts). */
     scroll-padding-bottom: var(--dsj-player-height, 0px);
+    /* And the bar at the top, which writes its own height (AppBar.tsx). */
+    scroll-padding-top: var(--dsj-bar-height, 0px);
     }
 }
 
@@ -132,6 +134,18 @@
 /* On the blue field the ring is the full gold, which reads there. */
 .bg-field :focus-visible {
   outline-color: var(--gold);
+}
+
+/* A menu takes focus onto its own box when it opens; its items show their own
+   focus, so the ring would only frame the whole menu. */
+[data-slot="dropdown-menu-content"]:focus-visible {
+  outline: none;
+}
+
+/* The primitives also turn their border to the ring colour on focus, which
+   inside the field is a second, dim ring within the gold one. */
+.bg-field [data-slot]:focus-visible {
+  border-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

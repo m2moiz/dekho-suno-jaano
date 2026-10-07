@@ -51,7 +51,16 @@ export function UnsureToggle({ reading, model, article }: Props) {
 
   if (cutoff === null || !reading.words.confidence.some((c) => !Number.isNaN(c))) return null;
   return (
-    <Toggle variant="outline" size="sm" pressed={on} onPressedChange={setOn}>
+    // It lives in the blue bar: light text, a pale border, a faint fill when
+    // pressed, and 44 px tall on a phone (the default's pale hover fill would
+    // leave its white text unreadable).
+    <Toggle
+      variant="outline"
+      size="sm"
+      pressed={on}
+      onPressedChange={setOn}
+      className="h-11 border-white/30 text-field-foreground hover:bg-white/10 hover:text-field-foreground aria-pressed:bg-white/20 sm:h-8"
+    >
       Unsure words ({words.length})
     </Toggle>
   );
