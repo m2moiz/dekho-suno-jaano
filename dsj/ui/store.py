@@ -24,7 +24,9 @@ from __future__ import annotations
 
 __all__ = [
     "LIBRARY_ENV",
+    "MIXED_SHARE",
     "SCHEMA_VERSION",
+    "URDU_SHARE",
     "Adoption",
     "Library",
     "LibraryError",
@@ -33,6 +35,7 @@ __all__ = [
     "Recording",
     "Transcript",
     "library_path",
+    "urdu_share_of",
 ]
 
 import json
@@ -336,6 +339,20 @@ def _counts(payload: dict[str, Any]) -> tuple[int | None, int | None, int | None
 _URDU_LETTER = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
 
 
+# A transcript is Urdu when half its letters or more are in Urdu script, and
+# mixed when a twentieth are, or when it was run as Urdu and written in Latin
+# letters (--roman-urdu sets language "ur"). Set from the measured scripts on
+# #148's public Urdu-English podcast (README, "The model matters more than it
+# looks"; .agents/skills/dsj/references/engines.md): whisper-large-v3-turbo
+# writes 3% Urdu script under --roman-urdu and 78% under --language ur, the
+# full model 61 to 63% either way. English runs write none. The shares were
+# measured with `just urdu-fixture`, then `dsj suno scratch/urdu_cs/podcast.wav
+# --roman-urdu --no-diarize --model <id>` (and `--engine whisper --language ur`
+# for the 78%); the thresholds sit between them.
+URDU_SHARE = 0.5
+MIXED_SHARE = 0.05
+
+
 def _urdu_share(payload: dict[str, Any]) -> float:
     """The share of the transcript's letters in Urdu script, to three places; 0 with no letters."""
     letters = urdu = 0
@@ -346,6 +363,15 @@ def _urdu_share(payload: dict[str, Any]) -> float:
                 if _URDU_LETTER.match(ch):
                     urdu += 1
     return round(urdu / letters, 3) if letters else 0.0
+
+
+def urdu_share_of(path: Path) -> float:
+    """The share of the letters of the transcript at `path` in Urdu script.
+
+    Raises:
+        NotATranscript: the file is not a transcript the library can read.
+    """
+    return _urdu_share(_read_payload(path))
 
 
 def _migrate(db: sqlite3.Connection, version: int) -> int:
@@ -590,6 +616,18 @@ class Library:
         found = self.transcript(transcript_id)
         assert found is not None
         return found
+
+    def move_transcript(self, old: Path, new: Path) -> None:
+        """Point the row of the transcript at `old` at `new`, where it has been moved (#246).
+
+        Its id, and so its place in the list and everything keyed to it, stays.
+        Nothing happens when the library has no row for `old`.
+        """
+        with self._db:
+            self._db.execute(
+                "UPDATE transcripts SET json_path = ? WHERE json_path = ?",
+                (str(new.expanduser().resolve()), str(old.expanduser().resolve())),
+            )
 
     def mark_edited(self, transcript_id: int, when: str) -> None:
         """Record that the app saved an edit to this transcript's edit list at `when` (#83)."""

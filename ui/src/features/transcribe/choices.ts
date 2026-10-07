@@ -13,17 +13,20 @@
 //   not sure: as mixed, the owner's usual speech.
 //
 // The speeds are times realtime, wall clock with model load, on the owner's
-// 16 GB M2, one run at a time, the slower of each mode's two runs on the set
-// that matches the answer, so the estimate errs long. Every one was measured
-// by `uv run python scratch/accuracy/run.py --plan 184` (or `--plan 236`)
-// and read back with `uv run --with uroman --with rapidfuzz --with num2words
-// python scratch/accuracy/score.py wall`:
+// 16 GB M2, one run at a time, and each answer takes the slowest its mode was
+// measured at on any set its speech could be, so the estimate errs long. The
+// owner's calls are Urdu-heavy, so a Roman Urdu answer takes the Urdu set's
+// speed, not the quicker podcast's. Every one was measured by `uv run python
+// scratch/accuracy/run.py --plan 184` (or `--plan 236`) and read back with
+// `uv run --with uroman --with rapidfuzz --with num2words python
+// scratch/accuracy/score.py wall`:
 //
-//   --roman-urdu cut at speech, #148's podcast (854 s): 3.76x (#236, 3.8 min);
-//     on the Urdu set (2,045 s) 2.53x (#236, 13.5 min), the slowest of that
-//     mode on any set, which is what "not sure" uses;
-//   --language ur, the Urdu set: 4.10x (#184, 8.3 min);
-//   parakeet, the podcast: 23.32x (#184, 0.6 min), its slowest;
+//   --roman-urdu cut at speech: 2.53x on the Urdu set (2,045 s; #236, 13.5
+//     min), its slowest (3.76x on #148's podcast, 5.60x on the call), for both
+//     "mixed" and "not sure";
+//   --language ur: 4.10x on the Urdu set (#184, 8.3 min). It is only offered
+//     for mostly Urdu speech: on the mixed podcast it loops, at 1.37x;
+//   parakeet: 23.32x on the podcast (#184, 0.6 min), its slowest;
 //   whisper with the language detected, picked by hand: 2.49x on the Urdu
 //     set (#184, 13.7 min), its slowest.
 //
@@ -43,14 +46,14 @@ export type Choice = {
   engine: EngineName;
   roman_urdu: boolean;
   language: string | null;
-  /** Measured times realtime, the slower run. */
+  /** Measured times realtime, the slowest seen for this answer's speech. */
   speed: number;
   /** What the dialog says it will use. */
   says: string;
 };
 
 export const CHOICES: readonly Choice[] = [
-  { id: "mixed", label: "Mixed Urdu and English", engine: "whisper", roman_urdu: true, language: null, speed: 3.76, says: "whisper, writing Urdu in Roman letters" },
+  { id: "mixed", label: "Mixed Urdu and English", engine: "whisper", roman_urdu: true, language: null, speed: 2.53, says: "whisper, writing Urdu in Roman letters" },
   { id: "urdu", label: "Mostly Urdu", engine: "whisper", roman_urdu: false, language: "ur", speed: 4.1, says: "whisper, writing Urdu script" },
   { id: "english", label: "English or European languages", engine: "parakeet", roman_urdu: false, language: null, speed: 23.32, says: "parakeet" },
   { id: "unsure", label: "Not sure", engine: "whisper", roman_urdu: true, language: null, speed: 2.53, says: "whisper with Roman Urdu, which handles both" },

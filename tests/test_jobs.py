@@ -536,3 +536,97 @@ def test_a_roman_urdu_run_from_the_page_writes_to_its_own_name(
     last_job(client, finished)
     expected = f"{recording[1]}-whisper-whisper-large-v3-turbo-ur-roman.json"
     assert [out.name for out in outs] == [expected]
+
+
+# -- a Roman Urdu transcript from before #246 ---------------------------------------
+
+
+def earlier_run(media: Path, recording_id: int, words: str) -> Path:
+    """A whisper transcript at the plain Urdu run's name, in the library, as before #246."""
+    out = jobs_mod.transcript_path(recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "audio": str(media),
+        "engine": "whisper",
+        "model": DEFAULT_WHISPER_MODEL,
+        "text": words,
+        "sentences": [{"text": words, "start": 0.0, "end": 1.0, "tokens": []}],
+    }
+    out.write_text(json.dumps(payload), encoding="utf-8")
+    with Library.open() as library:
+        library.record_run(out, engine="whisper", language="ur")
+    return out
+
+
+def run_plain_urdu(monkeypatch: pytest.MonkeyPatch, recording_id: int) -> list[str]:
+    """Start a `--language ur` run from the page; return what was at its path when it began."""
+    seen: list[str] = []
+
+    def transcribe(**arguments: Any) -> None:
+        out: Path = arguments["out"]
+        seen.append(out.read_text(encoding="utf-8") if out.exists() else "")
+        raise RuntimeError("stopped here: only what the run finds is under test")
+
+    monkeypatch.setattr(suno, "transcribe", transcribe)
+    client = page()
+    body = {"engine": "whisper", "language": "ur", "diarize": False}
+    reply = client.post(f"/api/recordings/{recording_id}/transcribe", json=body)
+    assert reply.status_code == 202, reply.text
+    last_job(client, finished)
+    return seen
+
+
+def test_a_plain_urdu_run_moves_an_earlier_roman_run_off_its_name_with_its_edits_first(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before #246 a Roman run took the Urdu name; the next Urdu run must not write over it."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "Yaar kal ki meeting das baje hai")
+    before = plain.read_text(encoding="utf-8")
+    edits = jobs_mod.edits.edits_path(plain)
+    edits.parent.mkdir(parents=True, exist_ok=True)
+    edits.write_text('{"made up": "edit list"}', encoding="utf-8")
+
+    assert run_plain_urdu(monkeypatch, recording_id) == [""]
+
+    roman = jobs_mod.transcript_path(
+        recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur", roman_urdu=True
+    )
+    assert roman.read_text(encoding="utf-8") == before
+    moved_edits = jobs_mod.edits.edits_path(roman)
+    assert moved_edits.read_text(encoding="utf-8") == '{"made up": "edit list"}'
+    assert not edits.exists()
+    with Library.open() as library:
+        paths = [t.json_path for t in library.transcripts(recording_id)]
+    assert paths == [roman.resolve()]
+
+
+def test_a_plain_urdu_run_leaves_an_earlier_urdu_run_where_it_is(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same settings again: the run resumes or replaces its own file, as before (#246)."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "کل کی میٹنگ دس بجے ہے")
+    before = plain.read_text(encoding="utf-8")
+    assert run_plain_urdu(monkeypatch, recording_id) == [before]
+
+
+def test_an_earlier_roman_run_never_replaces_a_later_one(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a -roman file already there, the earlier one takes the next free name (#246)."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "Yaar kal ki meeting das baje hai")
+    before = plain.read_text(encoding="utf-8")
+    roman = jobs_mod.transcript_path(
+        recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur", roman_urdu=True
+    )
+    roman.write_text("later", encoding="utf-8")
+
+    run_plain_urdu(monkeypatch, recording_id)
+
+    assert roman.read_text(encoding="utf-8") == "later"
+    assert roman.with_name(f"{roman.stem}-2.json").read_text(encoding="utf-8") == before

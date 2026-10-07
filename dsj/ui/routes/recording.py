@@ -25,22 +25,9 @@ from dsj.ui import pick
 from dsj.ui import store as store_mod
 from dsj.ui.review import progress
 from dsj.ui.schemas import LanguageTag, Recording, TitleUpdate, Transcript
-from dsj.ui.store import Library
+from dsj.ui.store import MIXED_SHARE, URDU_SHARE, Library
 
 router = APIRouter(prefix="/api")
-
-# A transcript is Urdu when half its letters or more are in Urdu script, and
-# mixed when a twentieth are, or when it was run as Urdu and written in Latin
-# letters (--roman-urdu sets language "ur"). Set from the measured scripts on
-# #148's public Urdu-English podcast (README, "The model matters more than it
-# looks"; .agents/skills/dsj/references/engines.md): whisper-large-v3-turbo
-# writes 3% Urdu script under --roman-urdu and 78% under --language ur, the
-# full model 61 to 63% either way. English runs write none. The shares were
-# measured with `just urdu-fixture`, then `dsj suno scratch/urdu_cs/podcast.wav
-# --roman-urdu --no-diarize --model <id>` (and `--engine whisper --language ur`
-# for the 78%); the thresholds sit between them.
-URDU_SHARE = 0.5
-MIXED_SHARE = 0.05
 
 
 def _language_tag(t: store_mod.Transcript) -> LanguageTag | None:

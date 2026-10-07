@@ -120,9 +120,9 @@ describe("the Transcribe dialog", () => {
 
   it("asks what is spoken first, says how long and what it will use, and runs it", async () => {
     const posted = await open();
-    // 2,520 s at --roman-urdu's measured 3.76x (choices.ts).
+    // 2,520 s at --roman-urdu's slowest measured 2.53x (choices.ts).
     expect(screen.getByRole("status").textContent).toBe(
-      "About 11 minutes for this 42-minute recording. Uses whisper, writing Urdu in Roman letters.",
+      "About 17 minutes for this 42-minute recording. Uses whisper, writing Urdu in Roman letters.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await vi.waitFor(() => expect(posted).toHaveLength(1));
@@ -180,10 +180,46 @@ describe("the Transcribe dialog", () => {
     expect(screen.getByText("Sends the recording's sound to parakeet, off this Mac.")).toBeTruthy();
   });
 
+  it("starts on Enter from an answer or an engine", async () => {
+    const posted = await open();
+    const urdu = screen.getByRole("radio", { name: "Mostly Urdu" });
+    choose(urdu);
+    fireEvent.keyDown(urdu, { key: "Enter" });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "whisper", language: "ur" });
+  });
+
+  it("says plainly when the answer's engine cannot run, why, and the way round it, and Start says so too", async () => {
+    const reason = "the whisper engine cannot run here: mlx-whisper is not installed. Install it with uv sync --extra whisper.";
+    const posted = await open(ENGINES.map((e) => (e.name === "whisper" ? { ...e, reason } : e)));
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(
+      "whisper can't run on this Mac, so this can't start." +
+        "mlx-whisper is not installed. Install it with uv sync --extra whisper." +
+        "Fix that, then open this again, or pick parakeet below.",
+    );
+    expect(status.textContent).not.toContain("About");
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(start.hasAttribute("disabled")).toBe(true);
+    expect(start.getAttribute("aria-describedby")).toBe(status.id);
+    // Said once, in the status, not again as a grey line under the engines.
+    expect(screen.queryByText("whisper can't run on this Mac.")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("radio", { name: "Mixed Urdu and English" }), { key: "Enter" });
+
+    choose(screen.getByRole("radio", { name: "parakeet" }));
+    expect(screen.getByRole("status").textContent).toContain("Uses parakeet.");
+    expect(start.hasAttribute("aria-describedby")).toBe(false);
+    fireEvent.click(start);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "parakeet" });
+  });
+
   it("folds the rest under Advanced", async () => {
     await open();
     expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+    expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("true");
     expect((screen.getByLabelText("Model") as HTMLInputElement).placeholder).toBe("mlx-community/whisper-large-v3-turbo");
     expect(screen.getByLabelText("Prompt")).toBeTruthy();
     choose(screen.getByRole("radio", { name: "English or European languages" }));

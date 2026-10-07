@@ -1,8 +1,17 @@
-import { useEffect, useId, useState } from "react";
+import { ChevronRight, XIcon } from "lucide-react";
+import { type KeyboardEvent, useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -66,7 +75,11 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
   const request = requestFor(choice, advanced);
   const engine = engines.find((e) => e.name === request.engine);
   const runnable = engines.filter((e) => e.reason === null);
-  const unavailable = engines.filter((e) => e.reason !== null);
+  // The engine this answer needs, when it cannot run: the status says so in
+  // full, so its grey line below would only repeat it.
+  const blocked = engine === undefined || engine.reason !== null ? request.engine : null;
+  const unavailable = engines.filter((e) => e.reason !== null && e.name !== blocked);
+  const canStart = !sending && blocked === null;
   const speed = speedFor(choice, advanced);
   const expected = speed === null ? null : expectedLabel(recording.duration_s, speed);
   const title = displayTitle(recording);
@@ -86,6 +99,7 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
   };
 
   const start = () => {
+    if (!canStart) return;
     setSending(true);
     startJob(recording.id, request).then(
       () => onClose(),
@@ -97,6 +111,13 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
       },
     );
   };
+  // Enter on an answer or an engine starts the run, as Enter in a form
+  // would: the radio itself takes Enter and does nothing with it.
+  const startOnEnter = (event: KeyboardEvent) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    start();
+  };
 
   return (
     <Dialog
@@ -105,9 +126,9 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto sm:max-w-lg" showCloseButton={false}>
         {/* Clear of the close button in the corner. */}
-        <DialogHeader className="pr-8">
+        <DialogHeader className={touch ? "pr-10" : "pr-8"}>
           <DialogTitle className="text-balance">
             Transcribe{" "}
             <bdi lang={face.lang} className={face.className}>
@@ -130,6 +151,7 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             className="gap-0"
             value={answer}
             onValueChange={(picked: ChoiceId) => pickAnswer(picked)}
+            onKeyDown={startOnEnter}
           >
             {CHOICES.map((c) => (
               <label key={c.id} className={ROW}>
@@ -141,11 +163,17 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
         </fieldset>
 
         {/* The expected time first and large: speed is what the owner weighs. */}
-        <div role="status" className="flex flex-col gap-0.5">
-          {expected !== null && <p className="text-lg font-semibold tabular-nums">{expected}. </p>}
-          <p className="text-sm text-muted-foreground">
-            Uses {advanced.engine === null ? choice.says : advanced.engine}.
-          </p>
+        <div role="status" id={`${ids}-status`} className="flex flex-col gap-0.5">
+          {blocked === null ? (
+            <>
+              {expected !== null && <p className="text-lg font-semibold tabular-nums">{expected}. </p>}
+              <p className="text-sm text-muted-foreground">
+                Uses {advanced.engine === null ? choice.says : advanced.engine}.
+              </p>
+            </>
+          ) : (
+            <Blocked name={blocked} reason={engine?.reason ?? null} others={runnable.map((e) => e.name)} />
+          )}
         </div>
 
         <fieldset className="flex flex-col">
@@ -158,6 +186,7 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             className="gap-0"
             value={request.engine}
             onValueChange={(picked: EngineName) => pickEngine(picked)}
+            onKeyDown={startOnEnter}
           >
             {runnable.map((e) => {
               const cost = costLabel(recording.duration_s, e.usd_per_hour);
@@ -190,7 +219,13 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
         </fieldset>
 
         <Collapsible>
-          <CollapsibleTrigger className="min-h-11 text-sm font-medium underline-offset-4 hover:underline">Advanced</CollapsibleTrigger>
+          <CollapsibleTrigger className="group flex min-h-11 items-center gap-1 text-sm font-medium underline-offset-4 hover:underline">
+            <ChevronRight
+              aria-hidden
+              className="size-4 transition-transform group-data-[panel-open]:rotate-90 motion-reduce:transition-none"
+            />
+            Advanced
+          </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${ids}-model`}>Model</Label>
@@ -232,12 +267,44 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             Cancel
           </Button>
           {/* The one gold action: the default variant is gold. Off for an engine the server does not list or cannot run. */}
-          <Button onClick={start} disabled={sending || engine?.reason !== null} className={cn("font-semibold", tall)}>
+          <Button
+            onClick={start}
+            disabled={!canStart}
+            aria-describedby={blocked === null ? undefined : `${ids}-status`}
+            className={cn("font-semibold", tall)}
+          >
             Start
           </Button>
         </DialogFooter>
+        {/* The primitive's own close is 28 px; this one is 44 on a touch screen (F15), as KeySheet's.
+            Last, as the primitive puts it, so the dialog opens with focus on the answer, not on Close. */}
+        <DialogClose render={<Button variant="ghost" size="icon" className={cn("absolute top-2 right-2", touch ? "size-11" : "size-7")} />}>
+          <XIcon aria-hidden />
+          <span className="sr-only">Close</span>
+        </DialogClose>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The answer's engine cannot run here: say so where the time would be, with
+ * the engine's own reason, which names the install, and the way round it.
+ */
+function Blocked({ name, reason, others }: { name: string; reason: string | null; others: string[] }) {
+  // "the whisper engine cannot run here: mlx-whisper is not installed. ..." (dsj/asr.py
+  // get_engine): the heading already says the first half. The rest starts with a
+  // package's own name, so it keeps its case.
+  const why = (reason ?? `${name} is not one of the engines this server lists.`).replace(/^the \S+ engine cannot run here: /, "");
+  const around = others.length > 0 ? `, or pick ${others.join(" or ")} below` : "";
+  return (
+    <>
+      <p className="text-lg font-semibold">{name} can't run on this Mac, so this can't start.</p>
+      <p className="text-sm whitespace-pre-wrap select-text">{why}</p>
+      <p className="text-sm text-muted-foreground">
+        Fix that, then open this again{around}.
+      </p>
+    </>
   );
 }
 

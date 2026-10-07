@@ -101,6 +101,8 @@ describe("the Hashiya palette", () => {
     for (const scheme of SCHEMES) {
       expect(measured("--ring", "--background", scheme)).toBeGreaterThanOrEqual(3);
       expect(measured("--input", "--background", scheme)).toBeGreaterThanOrEqual(3);
+      // A dialog sits on --popover: a radio's or a box's edge there too (Task 9).
+      expect(measured("--input", "--popover", scheme)).toBeGreaterThanOrEqual(3);
     }
     expect(measured("--field-wave", "--field", "light")).toBeGreaterThanOrEqual(3);
   });

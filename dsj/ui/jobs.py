@@ -30,11 +30,13 @@ __all__ = [
     "NotStarted",
     "Render",
     "engine_choices",
+    "keep_earlier_roman_run",
     "render_path",
     "transcript_path",
 ]
 
 import contextlib
+import glob
 import json
 import logging
 import os
@@ -59,8 +61,9 @@ from dsj.filetag import source_sidecar_for
 from dsj.parakeet import DEFAULT_MODEL as PARAKEET_MODEL
 from dsj.sherpa import DEFAULT_MODEL as SHERPA_MODEL
 from dsj.ui import edits
+from dsj.ui.review import review_path
 from dsj.ui.schemas import TranscribeRequest
-from dsj.ui.store import Library, library_path
+from dsj.ui.store import URDU_SHARE, Library, NotATranscript, library_path, urdu_share_of
 from dsj.whisper import DEFAULT_WHISPER_MODEL
 
 # Each engine's own default, which the page's model box starts on. Not what
@@ -133,6 +136,53 @@ def transcript_path(
     return library_path().parent / "transcripts" / f"{stem}.json"
 
 
+def keep_earlier_roman_run(out: Path, roman: Path) -> Path | None:
+    """Move a Roman Urdu transcript found at a plain Urdu run's `out` to its own name (#246).
+
+    Before #246 a Roman Urdu run from the page took the plain Urdu run's name,
+    so the next plain Urdu run would write over it, and over whatever the owner
+    corrected in it. Called by that run before it starts: a transcript at `out`
+    mostly in Latin letters is a Roman one (under URDU_SHARE, which sits
+    between the 3% Urdu script --roman-urdu writes and the 78% --language ur
+    does, dsj/ui/store.py), and it goes to `roman`, or `roman`'s
+    next free numbered name when a later Roman run already has it, so neither
+    is written over. Its edit list, review and the files beside it named after
+    it go with it, and the library's row follows, keeping its id.
+
+    Returns where it went, or None when `out` holds no Roman transcript: the
+    run then resumes from or replaces its own earlier file, as it always has.
+    """
+    if not out.is_file():
+        return None
+    try:
+        share = urdu_share_of(out)
+    except NotATranscript:
+        # Not a transcript the library can read: nothing of the owner's to keep.
+        return None
+    if share >= URDU_SHARE:
+        return None
+    target, n = roman, 1
+    while target.exists():
+        n += 1
+        target = roman.with_name(f"{roman.stem}-{n}{roman.suffix}")
+    beside = [p for p in out.parent.glob(f"{glob.escape(out.stem)}.*") if p != out]
+    moves = [(out, target)]
+    moves += [(p, target.with_name(target.stem + p.name[len(out.stem) :])) for p in beside]
+    moves += [(where(out), where(target)) for where in (edits.edits_path, review_path)]
+    for source, dest in moves:
+        if source.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            source.replace(dest)
+    with Library.open() as library:
+        library.move_transcript(out, target)
+    logging.getLogger("dsj.suno").warning(
+        "kept an earlier Roman Urdu transcript of this recording: it was at %s and is now at %s",
+        out.name,
+        target.name,
+    )
+    return target
+
+
 @dataclass
 class Job:
     """One transcription started from the page, and what has become of it."""
@@ -146,6 +196,9 @@ class Job:
     started_at: str
     out: Path
     status_path: Path
+    # Where a plain Urdu run moves a Roman Urdu transcript it finds at `out`
+    # before it starts (keep_earlier_roman_run, #246); None for any other run.
+    roman_twin: Path | None = None
     # Set by the worker when the run is over, and only then.
     outcome: str | None = None
     error: str | None = None
@@ -365,6 +418,11 @@ class Jobs:
                 started_at=datetime.now(UTC).isoformat(timespec="seconds"),
                 out=out,
                 status_path=status_path,
+                roman_twin=(
+                    transcript_path(recording_id, engine, model, language, roman_urdu=True)
+                    if engine == "whisper" and language == "ur" and not request.roman_urdu
+                    else None
+                ),
             )
             self._jobs[job_id] = job
             run_arguments = arguments | {"out": out, "status_path": status_path}
@@ -533,6 +591,8 @@ class Jobs:
         error: str | None = None
         try:
             with self._hold():
+                if job.roman_twin is not None:
+                    keep_earlier_roman_run(job.out, job.roman_twin)
                 # Looked up at call time, so a test can stand in for it.
                 suno.transcribe(**arguments)
                 with Library.open() as library:

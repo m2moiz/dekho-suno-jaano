@@ -134,6 +134,7 @@ def seed(root: Path) -> dict[str, tuple[int, int]]:
 QUERIES = {
     "library": lambda ids: "",
     "transcribe": lambda ids: "",
+    "transcribe-advanced": lambda ids: "",
     "bleep": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "library-focus": lambda ids: "",
     "menu": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
@@ -186,6 +187,10 @@ ACTIONS = {
     "settings": PRESS + "press(document.querySelector('button[aria-label=Settings]'));",
     # The untranscribed recording's Transcribe dialog (Task 9).
     "transcribe": PRESS + "press(Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === 'Transcribe'));",
+    # Then Advanced, unfolded (Task 9 review).
+    "transcribe-advanced": PRESS + "press(Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === 'Transcribe'));"
+    "setTimeout(() => press(Array.from(document.querySelectorAll('[role=dialog] button'))"
+    ".find((b) => b.textContent.trim() === 'Advanced')), 300);",
     # The reader's menu, open (Tasks 4 and 6).
     "menu": PRESS + "press(document.querySelector('button[aria-label=More]'));",
     # The reader's menu, then Bleep: the drawer (Task 4).
