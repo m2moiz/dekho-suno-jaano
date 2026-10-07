@@ -6,17 +6,26 @@
 
 import { api } from "@/api/client";
 import { ApiError, fromBody } from "@/features/errors/appError";
+import { MEDIA } from "@/features/library/title";
 
 export type ExportFormat = "srt" | "vtt" | "txt";
 
 /**
  * `title` as a file name: a recording's own extension dropped (talk.wav is
- * talk.srt, not talk.wav.srt), and the characters Finder or a phone refuses in
- * one become a dot or a space. An extension starts with a letter, so the ".2" of
- * "Notes v1.2" stays.
+ * talk.srt, not talk.wav.srt), by the library's list of them, so a typed
+ * "acme.com" or "Notes v1.2" keeps its dot. The characters Finder or a phone
+ * refuses in one become a dot or a space, a control character a space, and a
+ * leading dot, which would hide the file, goes.
  */
 function fileStem(title: string): string {
-  return title.replace(/\.[A-Za-z][A-Za-z0-9]{0,4}$/, "").replace(/:/g, ".").replace(/[/\\*?"<>|]+/g, " ").trim() || "transcript";
+  const stem = title
+    .replace(MEDIA, "")
+    .replace(/:/g, ".")
+    .replace(/[/\\*?"<>|\u0000-\u001f\u007f]+/g, " ")
+    .replace(/ {2,}/g, " ")
+    .replace(/^[\s.]+/, "")
+    .trim();
+  return stem || "transcript";
 }
 
 export async function exportTranscript(transcriptId: number, format: ExportFormat, title: string): Promise<void> {

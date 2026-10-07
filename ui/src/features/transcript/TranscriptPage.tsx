@@ -11,7 +11,7 @@ import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
 import { type Correction, corrections, tokensOf } from "@/features/edit/corrections";
 import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
-import { type Editable, loadEditable, Outdated, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
+import { type Editable, loadEditable, NotSaved, Outdated, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { InlineCorrect } from "@/features/edit/InlineCorrect";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
@@ -249,15 +249,28 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
   const renderable = useLatest(editable.renderable);
   // The speakers' names (#243): saved on their own route, kept beside the editor.
   const names = useLatest(editable.names);
+  // The names as last asked for, not as last saved: a second rename made while
+  // the first is in flight builds on the first, or it would send the table
+  // without it and the first name would be lost (Task 5 review).
+  const asked = useRef<Names | null>(null);
   const rename = useCallback(
     (label: string, name: string) => {
-      const next: Record<string, string> = { ...names };
+      const next: Record<string, string> = { ...(asked.current ?? editable.names.value) };
       if (name.trim() === "") delete next[label];
       else next[label] = name.trim();
+      asked.current = next;
       // In turn with the list's own saves (#251); the names it keeps are set by the hook.
-      saveNames(next).catch((thrown: unknown) => showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/names`)));
+      saveNames(next).then(
+        () => {
+          if (asked.current === next) asked.current = null;
+        },
+        (thrown: unknown) => {
+          asked.current = null;
+          showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/names`));
+        },
+      );
     },
-    [names, transcriptId, saveNames],
+    [editable.names, transcriptId, saveNames],
   );
   // Stable between renames, so the memoised TranscriptView redraws only when a name changes.
   const nameplate = useCallback(
@@ -320,7 +333,10 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
           message:
             thrown instanceof Outdated
               ? `Review did not open: ${thrown.message}`
-              : "Review did not open, because the latest edits here are not saved yet. Try again once the bar says Saved.",
+              : // The save's own reason, which this message replaces in the one error dialog (Task 13 re-review).
+                `Review did not open, because the latest edits here are not saved yet. Try again once the bar says Saved.${
+                  thrown instanceof NotSaved && thrown.reason !== null ? ` The save failed: ${thrown.reason}` : ""
+                }`,
           request: `/api/transcripts/${transcriptId}/edits`,
         }),
     );

@@ -365,6 +365,37 @@ describe("the reader", () => {
     expect(screen.getByRole("button", { name: "Speaker 2, rename" })).toBeTruthy();
   });
 
+  it("keeps a first rename when a second is made before the first is saved", async () => {
+    // A rename built from the names last saved would send only the second,
+    // and the first would be lost (Task 5 review, deferred to Task 16).
+    const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fetchMock.mockImplementation(async (request: Request) => {
+      if (new URL(request.url).pathname === "/api/transcripts/7/names" && named.length === 0) {
+        const reply = answer(request);
+        await held;
+        return reply;
+      }
+      return answer(request);
+    });
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 1, rename" }));
+    let field = screen.getByRole("textbox", { name: "Name for Speaker 1" });
+    fireEvent.change(field, { target: { value: "Ali" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Speaker 2, rename" }));
+    field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
+    fireEvent.change(field, { target: { value: "Sara" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    release();
+    expect(await screen.findByRole("button", { name: "Sara, rename" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ali, rename" })).toBeTruthy();
+    expect(named).toEqual([{ SPEAKER_00: "Ali" }, { SPEAKER_00: "Ali", SPEAKER_01: "Sara" }]);
+  });
+
   it("keeps the old name on Esc, and an emptied name gives the speaker its own label back", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));

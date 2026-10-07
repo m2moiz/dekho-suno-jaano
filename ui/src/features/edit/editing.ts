@@ -187,9 +187,18 @@ export function onPageHide(onHide: () => void): () => void {
   };
 }
 
-/** The list could not be brought up to date on the server, for the reason in the message. */
+/**
+ * The list could not be brought up to date on the server, for the reason in
+ * the message. `reason` is the last save's own refusal, when one was seen, for
+ * a caller whose message stands in for it in the one error dialog.
+ */
 export class NotSaved extends Error {
   override name = "NotSaved";
+  readonly reason: string | null;
+  constructor(message: string, reason: string | null = null) {
+    super(message);
+    this.reason = reason;
+  }
 }
 
 /**
@@ -233,6 +242,8 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
     // changed in another tab (#251). Every later save would be refused the
     // same way, so nothing more is sent.
     let outdated: string | null = null;
+    // Why the last save failed, in the server's words, until one succeeds.
+    let failure: string | null = null;
     // Every request that changes the list on the server, one after another,
     // each made once the one before has answered (#251).
     let turn: Promise<unknown> = Promise.resolve();
@@ -332,6 +343,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
         setState("saving");
         try {
           await inTurn(() => patch(content));
+          failure = null;
         } catch (thrown) {
           let shown = thrown;
           if (thrown instanceof ApiError && thrown.detail.error === TRANSCRIPT_CHANGED) {
@@ -350,6 +362,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
           pending.current = editor.content !== saved.content;
           if (live) {
             setState("failed");
+            failure = fromThrown(shown, route).message;
             showError(fromThrown(shown, route));
           }
           return false;
@@ -376,7 +389,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
       if (!(await start())) {
         // The save just refused may be the one that found the transcript made again.
         if (outdated !== null) throw new Outdated(outdated);
-        throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.");
+        throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.", failure);
       }
     };
     // The page hidden or left: what the server lacks goes now, a save that

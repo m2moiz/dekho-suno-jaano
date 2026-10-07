@@ -306,7 +306,9 @@ describe("Review mode, fix round 1", () => {
   it("Ctrl+/ opens Review's key sheet (I4)", async () => {
     render(<KeySheet />);
     key(await start(), { key: "/", code: "Slash", ctrlKey: true });
-    expect(await screen.findByRole("dialog", { name: "Keys in Review" })).toBeTruthy();
+    const sheet = await screen.findByRole("dialog", { name: "Keys in Review" });
+    // A tablet focuses the box only on a tap, so its keyboard needs one first (Task 14 review, Minor 4).
+    expect(sheet.textContent).toContain("On a tablet, tap the sentence once");
   });
 
   it("asks before the browser leaves with words in the box not yet in the list (Minor 2)", async () => {

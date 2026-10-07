@@ -58,6 +58,7 @@ export const REVIEW_SHEET: Sheet = {
     "Ctrl+Space is left alone: it switches input sources, which typing Urdu needs. The keys work by their place on the keyboard, so they work with the Urdu input source too.",
     "Tab plays and pauses inside the sentence's box. Option+Tab and Option+Shift+Tab move out of it to the page's other controls, such as the pass switch in the top bar.",
     "Every change is saved as you go; leaving and coming back resumes at the same sentence.",
+    "On a tablet, tap the sentence once before using a keyboard: a touch screen does not put the cursor in it by itself, so the keys have nowhere to go until then.",
   ],
 };
 

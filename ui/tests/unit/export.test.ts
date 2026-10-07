@@ -44,7 +44,12 @@ describe("exportTranscript", () => {
     await exportTranscript(7, "vtt", "talk.wav");
     await exportTranscript(7, "txt", "board.review.final.mp4");
     await exportTranscript(7, "srt", "Notes v1.2");
-    expect(clicked).toEqual(["talk.vtt", "board.review.final.txt", "Notes v1.2.srt"]);
+    // Only a recording's own extension goes: a typed title keeps its ".com",
+    // and a leading dot or a control character would hide or break the file
+    // (Task 6 review, deferred to Task 16).
+    await exportTranscript(7, "srt", "call with acme.com");
+    await exportTranscript(7, "txt", "..hidden\u0007 notes");
+    expect(clicked).toEqual(["talk.vtt", "board.review.final.txt", "Notes v1.2.srt", "call with acme.com.srt", "hidden notes.txt"]);
   });
 
   it("downloads an empty file for a transcript with no words", async () => {

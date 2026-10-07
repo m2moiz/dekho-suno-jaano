@@ -328,6 +328,9 @@ describe("TranscriptPage, editing", () => {
     });
     save.release();
     await vi.waitFor(() => expect(currentError()?.message).toMatch(/^Review did not open/));
+    // The one error dialog shows this message in place of the save's own, so
+    // it carries the server's reason too (Task 13 re-review round 2).
+    expect(currentError()?.message).toContain("The disk is full.");
     // A 500 may have been written all the same: the list is read, found without
     // the change, and the change sent once more, which fails too (#251 fix round 1).
     expect(save.log).toEqual(["saved", "saved"]);

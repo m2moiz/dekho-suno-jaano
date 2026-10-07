@@ -22,7 +22,7 @@ const STAMP = /(\d{4})-?(\d{2})-?(\d{2})(?:\s+at\s+|[ _T-])(\d{1,2})[.:-]?(\d{2}
 const CUT = /_(\d+)m(\d{2})-(\d+)m(\d{2})(?=\.[^.]*$|$)/;
 // The sound and picture containers a recording comes in. Only these are cut
 // from a file name standing in for a title: "notes.v2" keeps its ".v2".
-const MEDIA = /\.(?:wav|m4a|mp3|mp4|mov|aac|flac|ogg|oga|opus|webm|mkv|m4v|caf|aiff?|amr|3gp|wma)$/i;
+export const MEDIA = /\.(?:wav|m4a|mp3|mp4|mov|aac|flac|ogg|oga|opus|webm|mkv|m4v|caf|aiff?|amr|3gp|wma)$/i;
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
