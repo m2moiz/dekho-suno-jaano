@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { BleepDrawer } from "@/features/bleep/BleepDrawer";
@@ -9,7 +9,7 @@ import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
 import { type Correction, corrections, tokensOf } from "@/features/edit/corrections";
 import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
-import { type Editable, loadEditable, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
+import { type Editable, loadEditable, saveNames, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { InlineCorrect } from "@/features/edit/InlineCorrect";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
@@ -25,6 +25,7 @@ import { KeysItem } from "@/features/shell/KeySheet";
 import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
 import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
 import { MoreMenu } from "./MoreMenu";
+import { Nameplate } from "./Nameplate";
 import { useReaderKeys } from "./readerKeys";
 import type { Names } from "./speakers";
 import { type ReviewMarks, TranscriptView } from "./TranscriptView";
@@ -185,6 +186,25 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const saving = useSave(transcriptId, editable);
   const selected = useSelection(edit, article);
   const renderable = useLatest(editable.renderable);
+  // The speakers' names (#243): saved on their own route, kept beside the editor.
+  const names = useLatest(editable.names);
+  const rename = useCallback(
+    (label: string, name: string) => {
+      const next: Record<string, string> = { ...names };
+      if (name.trim() === "") delete next[label];
+      else next[label] = name.trim();
+      saveNames(transcriptId, next).then(
+        (saved) => editable.names.set(saved),
+        (thrown: unknown) => showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/names`)),
+      );
+    },
+    [names, transcriptId, editable.names],
+  );
+  // Stable between renames, so the memoised TranscriptView redraws only when a name changes.
+  const nameplate = useCallback(
+    (_speaker: number, label: string, name: string) => <Nameplate label={label} name={name} onRename={rename} />,
+    [rename],
+  );
   const controls = useRef<PlayerControls | null>(null);
   // The word whose edges are being dragged (#85), while the strip is open.
   const [timing, setTiming] = useState<number | null>(null);
@@ -235,6 +255,8 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
       muteSpans={renderable.spans}
       controls={controls}
       corrections={fixed}
+      names={names}
+      nameplate={nameplate}
       selectOnTap
       tools={
         <>

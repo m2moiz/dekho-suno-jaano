@@ -30,10 +30,13 @@ __all__ = [
     "engine_of",
     "open_edits",
     "save_edits",
+    "save_names",
 ]
 
 import hashlib
 import json
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +47,13 @@ from dsj.ui.store import Library, library_path
 
 # The one source id a list built from a transcript plays from (hatao.from_transcript).
 SOURCE = "0"
+
+# Held while a save reads the list and writes it back. The page saves its
+# entries and its speaker names by two routes (#243), each keeping what the
+# other last wrote, and the server runs requests on a thread pool: without it
+# a rename landing during an entries save could write back the names, or the
+# entries, from before.
+_WRITING = threading.Lock()
 
 
 class NoSuchTranscript(LookupError):
@@ -62,6 +72,8 @@ class Opened:
     confidence: list[float | None]
     # The recording's length as the library knows it, or None when unknown.
     duration_s: float | None
+    # The transcript's own speaker labels, in its order: what "Speaker n" counts by.
+    legend: tuple[str, ...] = ()
 
 
 def edits_path(json_path: Path) -> Path:
@@ -129,6 +141,11 @@ def _confidences(payload: dict[str, Any], doc: hatao.Document) -> list[float | N
     return out
 
 
+def _legend(payload: dict[str, Any]) -> tuple[str, ...]:
+    """The transcript's speaker labels, text only: an old file's non-text entries are skipped."""
+    return tuple(s for s in cast("list[Any]", payload.get("speakers") or []) if isinstance(s, str))
+
+
 def _edited_at(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(timespec="seconds")
 
@@ -147,26 +164,23 @@ def open_edits(transcript_id: int) -> Opened:
     path = edits_path(row.json_path)
     if path.is_file():
         saved = hatao.load(path)
-        doc = hatao.validate(hatao.Document({SOURCE: str(row.media.resolve())}, saved.content))
+        doc = hatao.validate(
+            hatao.Document({SOURCE: str(row.media.resolve())}, saved.content, saved.names)
+        )
         edited_at: str | None = _edited_at(path)
     else:
         doc = hatao.from_transcript(
             payload, row.media, duration_s=row.duration_s, language=row.language
         )
         edited_at = None
-    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s)
+    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s, _legend(payload))
 
 
-def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
-    """Save the page's entries as the transcript's edit list, whole or not at all.
-
-    Raises:
-        NoSuchTranscript: no such transcript, or its JSON file is gone.
-        dsj.hatao.InvalidDocument: the entries are broken, named; nothing is written.
-    """
+def _save(transcript_id: int, content: tuple[hatao.Entry, ...], names: Mapping[str, str]) -> Opened:
+    """Write `content` and `names` as the transcript's edit list, whole or not at all."""
     row = _row(transcript_id)
     payload = _payload(row, transcript_id)
-    doc = hatao.validate(hatao.Document({SOURCE: str(row.media.resolve())}, content))
+    doc = hatao.validate(hatao.Document({SOURCE: str(row.media.resolve())}, content, dict(names)))
     path = edits_path(row.json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     hatao.save(doc, path)
@@ -174,7 +188,36 @@ def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
     # So the library list can say this transcript was corrected by hand (#83).
     with Library.open() as library:
         library.mark_edited(transcript_id, edited_at)
-    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s)
+    return Opened(doc, edited_at, _confidences(payload, doc), row.duration_s, _legend(payload))
+
+
+def save_edits(transcript_id: int, content: tuple[hatao.Entry, ...]) -> Opened:
+    """Save the page's entries as the transcript's edit list, keeping the speaker names it has.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        dsj.hatao.InvalidDocument: the entries are broken, named; nothing is written.
+    """
+    row = _row(transcript_id)
+    path = edits_path(row.json_path)
+    with _WRITING:
+        names: Mapping[str, str] = hatao.load(path).names if path.is_file() else {}
+        return _save(transcript_id, content, names)
+
+
+def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
+    """Save the names a person gave the speakers (#243), keeping the entries as they are.
+
+    Names are trimmed, and a blank one is left out, so that speaker shows its
+    own label ("Speaker 2") again.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        dsj.hatao.InvalidDocument: a label is blank; nothing is written.
+    """
+    kept = {label: name.strip() for label, name in names.items() if name.strip()}
+    with _WRITING:
+        return _save(transcript_id, open_edits(transcript_id).doc.content, kept)
 
 
 def engine_of(transcript_id: int) -> str:

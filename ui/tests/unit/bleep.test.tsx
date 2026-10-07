@@ -342,7 +342,7 @@ describe("the words to bleep, on the transcript page", () => {
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
         const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        return Response.json({ content, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: x" });

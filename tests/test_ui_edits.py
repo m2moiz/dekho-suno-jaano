@@ -335,3 +335,36 @@ def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
     assert again.last_edited_at == "2026-10-03T00:00:00+00:00"
     with sqlite3.connect(library_path()) as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+# -- speaker names (#243) ---------------------------------------------------------
+
+
+def test_a_name_given_to_a_speaker_is_kept_and_sent_back(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    assert client.get(f"{route}/edits").json()["names"] == {}
+    reply = client.put(f"{route}/names", json={"names": {"SPEAKER_00": "  Ali  "}})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["names"] == {"SPEAKER_00": "Ali"}
+    assert page().get(f"{route}/edits").json()["names"] == {"SPEAKER_00": "Ali"}
+    # In the file `dsj hatao` reads, beside the library.
+    assert hatao.load(edits_path(seeded["json"])).names == {"SPEAKER_00": "Ali"}
+
+
+def test_saving_the_words_keeps_the_names(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    client.put(f"{route}/names", json={"names": {"SPEAKER_01": "Sara"}})
+    content = client.get(f"{route}/edits").json()["content"]
+    content[2]["muted"] = True
+    saved = client.put(f"{route}/edits", json={"content": content}).json()
+    assert saved["names"] == {"SPEAKER_01": "Sara"}
+
+
+def test_a_blank_name_gives_the_speaker_its_own_label_back(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/names"
+    client.put(route, json={"names": {"SPEAKER_00": "Ali", "SPEAKER_01": "Sara"}})
+    cleared = client.put(route, json={"names": {"SPEAKER_00": "", "SPEAKER_01": "Sara"}}).json()
+    assert cleared["names"] == {"SPEAKER_01": "Sara"}

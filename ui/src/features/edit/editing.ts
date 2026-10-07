@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import type { Names } from "@/features/transcript/speakers";
 import { type Content, Editor } from "@/lib/editOps";
 import { devCheck } from "@/lib/linter";
 
@@ -52,6 +53,8 @@ export type Editable = {
    * itself, so its preview mutes what a render mutes.
    */
   renderable: Latest<Renderable>;
+  /** The speakers' names, by label (#243), as last saved. */
+  names: Latest<Names>;
 };
 
 /**
@@ -70,6 +73,7 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
       editor: new Editor(data.content, { check: devCheck(data.content) }),
       padS: data.pad_s,
       renderable: new Latest<Renderable>({ spans: spansOf(data.spans), unrenderable: data.unrenderable }),
+      names: new Latest<Names>(data.names),
     };
   }
   const detail = fromBody(error, response, route);
@@ -77,6 +81,17 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
   // other refusal (a saved list that is broken, say) is a failure, shown.
   if (detail.error !== "TranscriptUnusable") showError(detail);
   return { reason: detail.message };
+}
+
+/** Save every speaker's name; the server's answer is what is kept. Throws ApiError in the server's words. */
+export async function saveNames(transcriptId: number, names: Names): Promise<Names> {
+  const route = `/api/transcripts/${transcriptId}/names`;
+  const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/names", {
+    params: { path: { transcript_id: String(transcriptId) } },
+    body: { names: { ...names } },
+  });
+  if (data === undefined) throw new ApiError(fromBody(error, response, route));
+  return data.names;
 }
 
 /** The editor's list as it is now, re-rendering on each change. */

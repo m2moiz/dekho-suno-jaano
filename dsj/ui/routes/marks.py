@@ -25,6 +25,7 @@ from dsj.ui.schemas import (
     ItemEntry,
     Match,
     Matches,
+    NamesUpdate,
     ParagraphEntry,
     WordAdded,
     WordRequest,
@@ -72,6 +73,7 @@ def _wire(opened: edits.Opened) -> Edits:
         unrenderable = str(exc)
     return Edits(
         content=content,
+        names=dict(opened.doc.names),
         pad_s=hatao.PAD_S,
         edited_at=opened.edited_at,
         spans=spans,
@@ -105,6 +107,12 @@ def read_edits(transcript_id: str) -> Edits:
 def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
     return _wire(edits.save_edits(_id(transcript_id), entries(update)))
+
+
+@router.put("/transcripts/{transcript_id}/names")
+def save_names(transcript_id: str, update: NamesUpdate) -> Edits:
+    """Save the speakers' names in the transcript's edit list, the words untouched (#243)."""
+    return _wire(edits.save_names(_id(transcript_id), update.names))
 
 
 @router.post("/transcripts/{transcript_id}/matches")

@@ -48,6 +48,8 @@ const DOC = {
 };
 
 let saved: Content[] = [];
+// Each name table the page sent to PUT /names (#243).
+let named: Record<string, string>[] = [];
 
 beforeEach(() => {
   installHighlights();
@@ -55,6 +57,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/?recording=2&transcript=7#t=a-token");
   takeToken();
   saved = [];
+  named = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
@@ -69,7 +72,12 @@ beforeEach(() => {
     if (path === "/api/transcripts/7/edits") {
       const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
       if (request.method === "PUT") saved.push(content);
-      return Response.json({ content, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+      return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+    }
+    if (path === "/api/transcripts/7/names" && request.method === "PUT") {
+      const body = (await request.json()) as { names: Record<string, string> };
+      named.push(body.names);
+      return Response.json({ content: CONTENT, names: body.names, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
     }
     if (path === "/api/transcripts/7/matches") return Response.json({ matches: [], words_searched: 4, lists: ["en"], recall: "recall: x" });
     if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
@@ -230,7 +238,7 @@ describe("the reader", () => {
     const answer = fetchMock.getMockImplementation() as (request: Request) => Promise<Response>;
     fetchMock.mockImplementation(async (request: Request) =>
       new URL(request.url).pathname === "/api/transcripts/7/edits" && request.method === "GET"
-        ? Response.json({ content: sure, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null })
+        ? Response.json({ content: sure, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null })
         : answer(request),
     );
     render(<TranscriptPage recording={2} transcript={7} />);
@@ -317,6 +325,40 @@ describe("the reader", () => {
     });
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByRole("combobox", { name: "Version" })).toBeTruthy();
+  });
+
+  it("renames a speaker from the margin, everywhere they speak", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 1, rename" }));
+    const field = screen.getByRole("textbox", { name: "Name for Speaker 1" });
+    fireEvent.change(field, { target: { value: "  Ali " } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "Ali, rename" })).toBeTruthy();
+    expect(named).toEqual([{ SPEAKER_00: "Ali" }]);
+    // Enter hands focus back to the nameplate, for the next key.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Ali, rename" }));
+    expect(screen.getByRole("button", { name: "Speaker 2, rename" })).toBeTruthy();
+  });
+
+  it("keeps the old name on Esc, and an emptied name gives the speaker its own label back", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));
+    let field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
+    fireEvent.change(field, { target: { value: "Sara" } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Speaker 2, rename" }));
+    expect(named).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Speaker 2, rename" }));
+    field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
+    fireEvent.change(field, { target: { value: "Sara" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Sara, rename" }));
+    field = screen.getByRole("textbox", { name: "Name for Sara" });
+    fireEvent.change(field, { target: { value: "   " } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "Speaker 2, rename" })).toBeTruthy();
+    expect(named).toEqual([{ SPEAKER_01: "Sara" }, {}]);
   });
 
   it("opens the key sheet with ?, and it says the undo history does not outlive the page", async () => {

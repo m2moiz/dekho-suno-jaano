@@ -29,6 +29,7 @@ __all__ = [
     "JobState",
     "Match",
     "Matches",
+    "NamesUpdate",
     "ParagraphEntry",
     "Recording",
     "RenderJob",
@@ -184,6 +185,8 @@ class Edits(BaseModel):
     """A transcript's edit list as the page edits it, and what it needs beside it."""
 
     content: list[EditEntry]
+    # The names a person gave the speakers, by label (#243); {} when none.
+    names: dict[str, str]
     # How far a mute reaches past each side of a word, in seconds (dsj.hatao.PAD_S).
     pad_s: float
     # When the list was last saved, or None while it is as the transcript made it.
@@ -200,6 +203,12 @@ class EditsUpdate(BaseModel):
     """The page's whole edit list, to save in place of the one before."""
 
     content: list[EditEntry]
+
+
+class NamesUpdate(BaseModel):
+    """Every speaker's name, by label, in place of the ones before; a blank name clears one."""
+
+    names: dict[str, str]
 
 
 class Match(BaseModel):

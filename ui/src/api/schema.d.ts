@@ -306,6 +306,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transcripts/{transcript_id}/names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Names
+         * @description Save the speakers' names in the transcript's edit list, the words untouched (#243).
+         */
+        put: operations["save_names_api_transcripts__transcript_id__names_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/transcripts/{transcript_id}/matches": {
         parameters: {
             query?: never;
@@ -406,6 +426,10 @@ export interface components {
         Edits: {
             /** Content */
             content: components["schemas"]["EditEntry"][];
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
             /** Pad S */
             pad_s: number;
             /** Edited At */
@@ -543,6 +567,16 @@ export interface components {
             lists: string[];
             /** Recall */
             recall: string;
+        };
+        /**
+         * NamesUpdate
+         * @description Every speaker's name, by label, in place of the ones before; a blank name clears one.
+         */
+        NamesUpdate: {
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
         };
         /**
          * ParagraphEntry
@@ -1098,6 +1132,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EditsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_names_api_transcripts__transcript_id__names_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NamesUpdate"];
             };
         };
         responses: {

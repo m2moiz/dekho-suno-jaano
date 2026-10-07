@@ -64,6 +64,42 @@
   overflow-wrap: anywhere;
 }
 
+/* The nameplate a person can rename (Nameplate.tsx, #243): the Button and
+   Input primitives with their box taken off, so it reads as the speaker's
+   name in their colour, and only the hover wash and the focus ring say it
+   can be pressed. Unlayered, so it outranks the primitives' utilities. */
+.transcript .margin .nameplate {
+  height: auto;
+  margin-inline: -0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  font: inherit;
+  font-weight: 650;
+}
+
+/* No border: the focus ring is an outline (index.css), and the primitive's
+   transparent 1 px edge pushed every turn 2 px apart and the name 1 px in. */
+.transcript .margin button.nameplate {
+  border-width: 0;
+  justify-content: flex-start;
+  text-align: start;
+  white-space: normal;
+  cursor: text;
+}
+
+/* A wash of the speaker's own colour: the primitive's grey hover hardly showed
+   on the page (t5 screenshots, light). */
+.transcript .margin button.nameplate:hover {
+  background: color-mix(in oklch, var(--speaker, var(--muted-foreground)) 20%, transparent);
+}
+
+/* A 44 px target where the touch layouts take over (lib/media.ts TOUCH). */
+@media (pointer: coarse), (max-width: 767px) {
+  .transcript .margin .nameplate {
+    min-height: 44px;
+  }
+}
+
 /* How long the turn lasted, to scale: a minute fills the margin. */
 .transcript .tick {
   display: block;
