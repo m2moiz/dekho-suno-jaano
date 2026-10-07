@@ -22,6 +22,7 @@ import { currentError, dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
 import { choose, openBleepPanel } from "./menus";
 
@@ -312,6 +313,7 @@ afterEach(() => {
 describe("the words to bleep, on the transcript page", () => {
   let words: string[] = [];
   let listed: (typeof BRAVO)[] = [];
+  let held: Content = CONTENT;
   let registry: ReturnType<typeof installHighlights>;
 
   beforeEach(() => {
@@ -327,6 +329,7 @@ describe("the words to bleep, on the transcript page", () => {
     takeToken();
     words = [];
     listed = [BRAVO];
+    held = CONTENT;
     fetchMock.mockReset();
     fetchMock.mockImplementation(async (request: Request) => {
       const path = new URL(request.url).pathname;
@@ -341,8 +344,8 @@ describe("the words to bleep, on the transcript page", () => {
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
+        if (saves(request)) held = await savedList(request, held);
+        return listReply(saves(request) ? held : CONTENT);
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: x" });
@@ -411,7 +414,7 @@ describe("the words to bleep, on the transcript page", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", true);
   });
 
-  // The menu's export items, with the edit list's PUT held or refused by the test.
+  // The menu's export items, with the edit list's save held or refused by the test.
   async function exportAfterAMute(putting: Promise<Response>): Promise<string[]> {
     const normal = fetchMock.getMockImplementation();
     const exported: string[] = [];
@@ -421,7 +424,7 @@ describe("the words to bleep, on the transcript page", () => {
         exported.push(path);
         return new Response("1\n", { headers: { "content-type": "text/plain" } });
       }
-      if (path === "/api/transcripts/7/edits" && request.method === "PUT") return putting;
+      if (path === "/api/transcripts/7/edits" && saves(request)) return putting;
       return (normal as (request: Request) => Promise<Response>)(request);
     });
     URL.createObjectURL = vi.fn(() => "blob:x");

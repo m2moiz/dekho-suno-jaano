@@ -14,6 +14,7 @@ import { currentError, dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { type Content, Editor, type Entry, type Item, muteRange } from "../../src/lib/editOps";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
@@ -200,19 +201,10 @@ describe("TranscriptPage, editing", () => {
       if (path === "/api/transcripts/7/edits" && request.method === "GET") {
         return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
-      if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
-        const body = (await request.json()) as { content: Content };
-        saved.push(body.content);
-        return Response.json({
-          content: body.content,
-          names: {},
-          pad_s: 0.1,
-          edited_at: "2026-10-03T00:00:00+00:00",
-          spans: [],
-          unrenderable: null,
-          replaced: null,
-          transcript_sha: "sha-1",
-        });
+      if (path === "/api/transcripts/7/edits" && saves(request)) {
+        const content = await savedList(request, (saved.at(-1) as Content | undefined) ?? CONTENT);
+        saved.push(content);
+        return listReply(content, { edited_at: "2026-10-03T00:00:00+00:00" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [], words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: unmeasured" });
@@ -278,7 +270,7 @@ describe("TranscriptPage, editing", () => {
     expect(currentError()).toBeNull();
   });
 
-  /** The edits PUT held until `release` is called, and what happened in what order. */
+  /** The edit list's saves held until `release` is called, and what happened in what order. */
   function holdSaves(answer: "ok" | "fail" = "ok") {
     const log: string[] = [];
     let release = () => undefined as void;
@@ -288,7 +280,7 @@ describe("TranscriptPage, editing", () => {
     const before = fetchMock.getMockImplementation();
     fetchMock.mockImplementation(async (request: Request) => {
       const path = new URL(request.url).pathname;
-      if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
+      if (path === "/api/transcripts/7/edits" && saves(request)) {
         await held;
         log.push("saved");
         if (answer === "fail") return Response.json({ error: "Boom", message: "The disk is full.", request: path }, { status: 500 });

@@ -8,6 +8,7 @@ import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/app
 import type { Names } from "@/features/transcript/speakers";
 import { type Content, Editor } from "@/lib/editOps";
 import { devCheck } from "@/lib/linter";
+import { sameEntry, spliceOf } from "@/lib/splice";
 
 /** A stretch of the recording to silence, in seconds: [start, end). */
 export type Span = readonly [number, number];
@@ -63,6 +64,13 @@ export type Editable = {
   sha: string;
   /** Why a saved list was put aside and this one built fresh (#249), or null. */
   replaced: string | null;
+  /**
+   * The list as the server holds it, and its sha (#251): each save sends
+   * only what differs from `content`, made against `listSha`, and useSave
+   * moves both on with every answer. Kept here, not in the hook, so a hook
+   * mounted again (StrictMode) starts from the server's copy, not the page's.
+   */
+  saved: { content: Content; listSha: string };
 };
 
 /**
@@ -77,13 +85,15 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
   });
   if (data !== undefined) {
     // Checked after every edit in development builds (#86).
+    const editor = new Editor(data.content, { check: devCheck(data.content) });
     return {
-      editor: new Editor(data.content, { check: devCheck(data.content) }),
+      editor,
       padS: data.pad_s,
       renderable: new Latest<Renderable>({ spans: spansOf(data.spans), unrenderable: data.unrenderable }),
       names: new Latest<Names>(data.names),
       sha: data.transcript_sha,
       replaced: data.replaced,
+      saved: { content: editor.content, listSha: data.list_sha },
     };
   }
   const detail = fromBody(error, response, route);
@@ -93,15 +103,20 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
   return { reason: detail.message };
 }
 
-/** Save every speaker's name; the server's answer is what is kept. Throws ApiError in the server's words. */
-export async function saveNames(transcriptId: number, names: Names): Promise<Names> {
+/**
+ * Save every speaker's name; the server's answer is what is kept, with the
+ * list's new sha, since names are part of the list (#251). Throws ApiError in
+ * the server's words. Called through useSave's `rename`, in turn with the
+ * list's own saves.
+ */
+async function saveNames(transcriptId: number, names: Names): Promise<{ names: Names; listSha: string }> {
   const route = `/api/transcripts/${transcriptId}/names`;
   const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/names", {
     params: { path: { transcript_id: String(transcriptId) } },
     body: { names: { ...names } },
   });
   if (data === undefined) throw new ApiError(fromBody(error, response, route));
-  return data.names;
+  return { names: data.names, listSha: data.list_sha };
 }
 
 /** The editor's list as it is now, re-rendering on each change. */
@@ -122,12 +137,19 @@ export type Saving = {
    */
   settle: () => Promise<void>;
   /**
-   * Send what the server does not have yet at once, beside any save in flight,
-   * with `keepalive` when it fits, so it outlives the page: for a page being
-   * hidden or left (Task 14 re-review, R1-I1). Review calls it after putting
-   * the box's words in the list; the hook does it by itself for the reader.
+   * Send what the server does not have yet now, for a page being hidden or
+   * left (Task 14 re-review, R1-I1): every save small enough goes with
+   * `keepalive`, so it outlives the page. Behind a save in flight it waits
+   * for that save's answer, which names the list it is made against (#251).
+   * Review calls it; the hook does it by itself for the reader.
    */
   keep: () => void;
+  /**
+   * Save every speaker's name (#243), in turn with the list's saves: a name is
+   * part of the list, so a patch sent beside a rename would be made against a
+   * list the server no longer holds (#251). Resolves to the names kept.
+   */
+  rename: (names: Names) => Promise<Names>;
 };
 
 // The most a page may send with `keepalive` at once: the Fetch standard's
@@ -137,9 +159,14 @@ export type Saving = {
 // only hidden (an app switch, a tab later evicted), not when it is torn down.
 const KEEPALIVE_BYTES = 65_536;
 
-/** Whether `body`, sent as JSON, fits under the browser's keepalive limit. */
-export function keepaliveFits(body: unknown): boolean {
-  return new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BYTES;
+// The edit list and the review each have at most one save in flight, so each
+// may take half the limit above, and two at once never go over it (a request
+// over it fails outright). A correction's patch is far under it (#251).
+export const KEEPALIVE_SHARE = KEEPALIVE_BYTES / 2;
+
+/** Whether `body`, sent as JSON, fits under the browser's keepalive limit, or under `limit`. */
+export function keepaliveFits(body: unknown, limit = KEEPALIVE_BYTES): boolean {
+  return new TextEncoder().encode(JSON.stringify(body)).length <= limit;
 }
 
 /**
@@ -165,70 +192,124 @@ export class NotSaved extends Error {
   override name = "NotSaved";
 }
 
-/** The NotSaved that no retry can cure: the transcript was made again, and only a reload can (#249). */
+/**
+ * The NotSaved that no retry can cure, only a reload: the transcript was made
+ * again (#249), or the list was changed in another tab (#251).
+ */
 export class Outdated extends NotSaved {
   override name = "Outdated";
 }
 
-/**
- * Save the list after every change: one request at a time, the newest list
- * each time, so a burst of edits is never saved out of order. A drag (#85)
- * is saved once, when it ends.
- */
 /** The server's refusal of a save made against a transcript since made again (#249). */
 const TRANSCRIPT_CHANGED = "TranscriptChanged";
+/** The server's refusal of a patch made against a list changed since, in another tab (#251). */
+const LIST_CHANGED = "ListChanged";
 
-export function useSave(transcriptId: number, { editor, renderable, sha }: Editable): Saving {
+/**
+ * Save the list after every change, one request at a time, so a burst of
+ * edits is never saved out of order. Each save is a patch (#251): only the
+ * entries between what the server holds and the list now, made against the
+ * sha of the list the server holds, which each answer moves on. So no two
+ * patches are ever made against the same list. A drag (#85) is saved once,
+ * when it ends.
+ */
+export function useSave(transcriptId: number, { editor, renderable, sha, saved, names }: Editable): Saving {
   const [state, setState] = useState<SaveState>("saved");
   const pending = useRef(false);
   const settling = useRef<() => Promise<void>>(() => Promise.resolve());
   const keeping = useRef<() => void>(() => undefined);
+  const renaming = useRef<(names: Names) => Promise<Names>>(() => Promise.reject(new NotSaved("The page is not ready yet.")));
   useEffect(() => {
     const route = `/api/transcripts/${transcriptId}/edits`;
-    let sent: Content = editor.content;
     let flight: Promise<boolean> | null = null;
     let live = true;
-    // Set when the transcript was made again under the page: the server kept
-    // what was sent aside, and every later save would be refused the same
-    // way, so nothing more is sent until the page is reloaded.
-    let outdated = false;
-    const put = async (content: Content, keepalive: boolean) => {
+    // Set, to the sentence settle throws, once no save can succeed until the
+    // page is reloaded: the transcript was made again (#249), or the list was
+    // changed in another tab (#251). Every later save would be refused the
+    // same way, so nothing more is sent.
+    let outdated: string | null = null;
+    // Every request that changes the list on the server, one after another,
+    // each made once the one before has answered (#251).
+    let turn: Promise<unknown> = Promise.resolve();
+    const inTurn = <T>(job: () => Promise<T>): Promise<T> => {
+      const run = turn.then(job);
+      turn = run.catch(() => undefined);
+      return run;
+    };
+    // The list as it is now, whole: only to be kept aside by the server when
+    // the transcript was made again under the page (#249).
+    const putWhole = async (content: Content) => {
       const body = { content: [...content], transcript_sha: sha };
       const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/edits", {
         params: { path: { transcript_id: String(transcriptId) } },
         body,
-        ...(keepalive && keepaliveFits(body) ? { keepalive: true } : {}),
+        ...(keepaliveFits(body, KEEPALIVE_SHARE) ? { keepalive: true } : {}),
       });
       if (data === undefined) throw new ApiError(fromBody(error, response, route));
       return data;
     };
+    // What differs between the server's list and `content`, made against the
+    // server's list, with keepalive when it fits: so a commit a moment before
+    // the page dies still lands (#251).
+    const patch = async (content: Content) => {
+      const change = spliceOf(saved.content, content, sameEntry);
+      if (change === null) {
+        saved.content = content;
+        return;
+      }
+      const body = { transcript_sha: sha, list_sha: saved.listSha, start: change.start, delete: change.delete, insert: change.insert };
+      const { data, error, response } = await api.PATCH("/api/transcripts/{transcript_id}/edits", {
+        params: { path: { transcript_id: String(transcriptId) } },
+        body,
+        ...(keepaliveFits(body, KEEPALIVE_SHARE) ? { keepalive: true } : {}),
+      });
+      if (data === undefined) throw new ApiError(fromBody(error, response, route));
+      saved.content = content;
+      saved.listSha = data.list_sha;
+      if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
+    };
+    // The transcript was made again under the page: the patch kept nothing,
+    // so the whole list goes, for the server to keep aside under its own
+    // name (#249); its refusal says where, and is the one shown.
+    const keepAside = async (content: Content, refusal: unknown): Promise<unknown> => {
+      try {
+        await putWhole(content);
+        return refusal;
+      } catch (thrown) {
+        return thrown;
+      }
+    };
     // True when the server has the list as it is now.
     const send = async (): Promise<boolean> => {
-      while (live && !outdated && editor.content !== sent && !editor.inGesture) {
+      while (live && outdated === null && editor.content !== saved.content && !editor.inGesture) {
         const content = editor.content;
         setState("saving");
         try {
-          const data = await put(content, false);
-          sent = content;
-          if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
+          await inTurn(() => patch(content));
         } catch (thrown) {
-          pending.current = false;
+          let shown = thrown;
           if (thrown instanceof ApiError && thrown.detail.error === TRANSCRIPT_CHANGED) {
             // What was sent is kept aside by the server, so leaving loses none
             // of it. Anything typed while it was in flight was not: that still
             // counts as unsaved, and leaving or reloading asks first.
-            outdated = true;
-            sent = content;
-            pending.current = editor.content !== sent;
+            outdated = "The transcript was made again since this page loaded. Reload the page.";
+            shown = await keepAside(content, thrown);
+            saved.content = content;
+          } else if (thrown instanceof ApiError && thrown.detail.error === LIST_CHANGED) {
+            // Another tab saved the list since: this change is not saved
+            // anywhere, so leaving still asks. Review's box keeps its own
+            // copy in the browser (draft.ts) for after the reload.
+            outdated = "This transcript's edits were changed in another tab. Reload the page.";
           }
+          pending.current = editor.content !== saved.content;
           if (live) {
             setState("failed");
-            showError(fromThrown(thrown, route));
+            showError(fromThrown(shown, route));
           }
           return false;
         }
       }
-      pending.current = editor.content !== sent;
+      pending.current = editor.content !== saved.content;
       if (live && !pending.current) setState("saved");
       return !pending.current;
     };
@@ -239,31 +320,35 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
       return flight;
     };
     const changed = () => {
-      pending.current = editor.content !== sent;
+      pending.current = editor.content !== saved.content;
       if (flight === null && pending.current && !editor.inGesture) void start();
     };
     settling.current = async () => {
       if (editor.inGesture) throw new NotSaved("Let go of the word you are dragging, then export.");
-      const reload = "The transcript was made again since this page loaded. Reload the page.";
-      if (outdated) throw new Outdated(reload);
-      if (flight === null && editor.content === sent) return;
+      if (outdated !== null) throw new Outdated(outdated);
+      if (flight === null && editor.content === saved.content) return;
       if (!(await start())) {
         // The save just refused may be the one that found the transcript made again.
-        if (outdated) throw new Outdated(reload);
+        if (outdated !== null) throw new Outdated(outdated);
         throw new NotSaved("Your latest changes are not saved, so the export would be out of date. Nothing was exported.");
       }
     };
-    // The page hidden or left: what the server lacks goes now, with
-    // keepalive, without waiting for a save in flight, which a page torn down
-    // never finishes. The ordinary loop sends it again if the page lives on;
-    // a list sent twice is the same list. A failure here is not shown: the
-    // ordinary save says it, if the page is still there to say it.
+    // The page hidden or left: what the server lacks goes now, a save that
+    // failed tried again. Every save small enough already goes with
+    // keepalive, so the one in flight outlives the page; a change made behind
+    // it waits for its answer, which names the list the next is made against
+    // (#251). Sending it beside the one in flight, as before #251, would make
+    // two patches against one list. The window that leaves is one small
+    // request's round trip.
     keeping.current = () => {
-      if (outdated || editor.inGesture || editor.content === sent) return;
-      put(editor.content, true).catch((thrown: unknown) => {
-        console.warn("dsj ui: the save sent as the page went away failed", thrown);
-      });
+      if (outdated === null && !editor.inGesture && editor.content !== saved.content) void start();
     };
+    renaming.current = (next: Names) =>
+      inTurn(async () => {
+        const kept = await saveNames(transcriptId, next);
+        saved.listSha = kept.listSha;
+        return kept.names;
+      });
     // Leaving with a change unsaved asks first, as any editor does, where the
     // browser asks at all (a desktop's; never iOS Safari).
     const leaving = (event: BeforeUnloadEvent) => {
@@ -278,8 +363,16 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
       window.removeEventListener("beforeunload", leaving);
       stopHiding();
     };
-  }, [transcriptId, editor, renderable, sha]);
+  }, [transcriptId, editor, renderable, sha, saved]);
   const settle = useCallback(() => settling.current(), []);
   const keep = useCallback(() => keeping.current(), []);
-  return { state, settle, keep };
+  const rename = useCallback(
+    async (next: Names) => {
+      const kept = await renaming.current(next);
+      names.set(kept);
+      return kept;
+    },
+    [names],
+  );
+  return { state, settle, keep, rename };
 }

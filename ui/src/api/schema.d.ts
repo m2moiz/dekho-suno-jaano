@@ -327,7 +327,14 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Patch Edits
+         * @description Save one change to the edit list, made against the list `list_sha` names (#251).
+         *
+         *     The answer is the new list's sha and what a render would mute, never the
+         *     entries: on a 2.5 h transcript those were 3.5 MB each way per correction.
+         */
+        patch: operations["patch_edits_api_transcripts__transcript_id__edits_patch"];
         trace?: never;
     };
     "/api/transcripts/{transcript_id}/names": {
@@ -433,13 +440,19 @@ export interface paths {
         /**
          * Save Review
          * @description Save the page's review in place of the last one, or refuse it whole, naming the segment.
+         *
+         *     The answer is its sha, not the review sent back: the page already has it (#251).
          */
         put: operations["save_review_api_transcripts__transcript_id__review_put"];
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Patch Review
+         * @description Save one change to the review, made against the review `review_sha` names (#251).
+         */
+        patch: operations["patch_review_api_transcripts__transcript_id__review_patch"];
         trace?: never;
     };
     "/api/transcripts/{transcript_id}/reference": {
@@ -536,6 +549,45 @@ export interface components {
             replaced: string | null;
             /** Transcript Sha */
             transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
+        };
+        /**
+         * EditsPatch
+         * @description One change to the edit list (#251): `delete` entries at `start` replaced by `insert`.
+         *
+         *     Made against the list whose sha is `list_sha`, so two patches made against
+         *     the same list never both apply. A 2.5 h transcript's whole list is about
+         *     3.5 MB; one correction's patch is a few entries.
+         */
+        EditsPatch: {
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
+            /** Start */
+            start: number;
+            /** Delete */
+            delete: number;
+            /** Insert */
+            insert: components["schemas"]["EditEntry"][];
+        };
+        /**
+         * EditsSaved
+         * @description What a patch answers: the list's new sha and what a render would mute, never the entries.
+         */
+        EditsSaved: {
+            /** List Sha */
+            list_sha: string;
+            /** Edited At */
+            edited_at: string;
+            /** Spans */
+            spans: [
+                number,
+                number
+            ][] | null;
+            /** Unrenderable */
+            unrenderable: string | null;
         };
         /**
          * EditsUpdate
@@ -792,6 +844,8 @@ export interface components {
             document: components["schemas"]["ReviewDocument"] | null;
             /** Transcript Sha */
             transcript_sha: string;
+            /** Review Sha */
+            review_sha: string | null;
         };
         /**
          * ReviewCorrection
@@ -837,6 +891,39 @@ export interface components {
         ReviewFlag: "unclear" | "not_speech" | "overlap" | "cut_off";
         /** @enum {string} */
         ReviewPass: "every" | "likely";
+        /**
+         * ReviewPatch
+         * @description One change to the review (#251): segments spliced, corrections appended, pass and cursor set.
+         *
+         *     Made against the review whose sha is `review_sha`, as EditsPatch is.
+         */
+        ReviewPatch: {
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** Review Sha */
+            review_sha: string;
+            /** Start */
+            start: number;
+            /** Delete */
+            delete: number;
+            /** Insert */
+            insert: components["schemas"]["ReviewSegment"][];
+            /** Corrections */
+            corrections: components["schemas"]["ReviewCorrection"][];
+            review_pass: components["schemas"]["ReviewPass"];
+            /** Cursor S */
+            cursor_s: number;
+        };
+        /**
+         * ReviewSaved
+         * @description What a save of the review answers: its new sha and when, never the review itself.
+         */
+        ReviewSaved: {
+            /** Review Sha */
+            review_sha: string;
+            /** Updated At */
+            updated_at: string;
+        };
         /**
          * ReviewSegment
          * @description One sentence of a review, by its span of the recording, which every edit keeps.
@@ -1411,6 +1498,41 @@ export interface operations {
             };
         };
     };
+    patch_edits_api_transcripts__transcript_id__edits_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditsSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     save_names_api_transcripts__transcript_id__names_put: {
         parameters: {
             query?: never;
@@ -1599,7 +1721,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReviewDocument"];
+                    "application/json": components["schemas"]["ReviewSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_review_api_transcripts__transcript_id__review_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSaved"];
                 };
             };
             /** @description Validation Error */

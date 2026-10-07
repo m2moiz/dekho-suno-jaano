@@ -13,6 +13,7 @@ import { dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Entry, Item } from "../../src/lib/editOps";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights } from "./highlights";
 import { stubMatchMedia } from "./media";
 
@@ -72,9 +73,10 @@ beforeEach(() => {
     }
     if (path === "/api/transcripts/7") return Response.json(DOC);
     if (path === "/api/transcripts/7/edits") {
-      const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-      if (request.method === "PUT") saved.push(content);
-      return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
+      if (!saves(request)) return listReply(CONTENT);
+      const content = await savedList(request, saved.at(-1) ?? CONTENT);
+      saved.push(content);
+      return listReply(content);
     }
     if (path === "/api/transcripts/7/names" && request.method === "PUT") {
       const body = (await request.json()) as { names: Record<string, string> };

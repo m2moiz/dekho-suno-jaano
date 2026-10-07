@@ -96,7 +96,7 @@ test("Review opens from the reader only once a slow save of a correction has lan
   );
   // The reader's save held 1.5 s, as a busy server would.
   await page.route("**/api/transcripts/*/edits", async (route) => {
-    if (route.request().method() === "PUT") await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (["PUT", "PATCH"].includes(route.request().method())) await new Promise((resolve) => setTimeout(resolve, 1500));
     await route.continue();
   });
   const dialogs: string[] = [];

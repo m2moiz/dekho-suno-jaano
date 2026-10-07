@@ -4,8 +4,8 @@
 // (fixture.ts), no audio: the frames are measured as text and layout alone.
 // The last two tests measure what an edit costs on it: the frame a correction
 // lands in, with and without a second opinion to work out again (Task 13's
-// estimate, about 30 ms), and the bytes and time of the saves a commit sends
-// (#251).
+// estimate, about 30 ms), and the bytes and time of the saves a commit sends:
+// one change each since #251, where they were the whole list.
 import { expect, type Page, type Request, test } from "@playwright/test";
 
 import { readerUrl, type Seeded, scratchDir, seed } from "../e2e/seed.ts";
@@ -103,7 +103,7 @@ async function countSaves(page: Page): Promise<void> {
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : null;
       const url = request?.url ?? String(input);
-      if ((init?.method ?? request?.method) === "PUT" && url.endsWith("/edits")) started.push(performance.now());
+      if (["PUT", "PATCH"].includes(init?.method ?? request?.method ?? "") && url.endsWith("/edits")) started.push(performance.now());
       return fetch(input, init);
     };
   });
@@ -176,16 +176,18 @@ test("a correction on 1,500 sentences lands inside 50 ms at p95, second opinion 
   for (const result of Object.values(results)) {
     expect(result.keystroke.p95).toBeLessThanOrEqual(P95_CEILING_MS);
     expect(result.edit.p95).toBeLessThanOrEqual(EDIT_P95_CEILING_MS);
+    // A frame that started a save: 50 to 117 ms (medians) when a save was the
+    // whole 3.5 MB list, 16.7 to 18.3 ms (p95) since it is one change (#251).
+    expect(result.saving.p95).toBeLessThanOrEqual(EDIT_P95_CEILING_MS);
   }
 });
 
 test("what a commit in Review sends on 1,500 sentences, in bytes and time (#251)", async ({ page }) => {
   test.slow();
-  await openReview(page, seedLong());
   const sent: { route: string; bytes: number; ms: number }[] = [];
   const timed = async (request: Request) => {
-    if (request.method() !== "PUT") return;
-    const route = new URL(request.url()).pathname.split("/").at(-1) ?? "";
+    if (!["PUT", "PATCH"].includes(request.method())) return;
+    const route = `${request.method()} ${new URL(request.url()).pathname.split("/").at(-1) ?? ""}`;
     const bytes = request.postDataBuffer()?.length ?? 0;
     const response = await request.response();
     await response?.finished();
@@ -194,8 +196,14 @@ test("what a commit in Review sends on 1,500 sentences, in bytes and time (#251)
   };
   const pending: Promise<void>[] = [];
   page.on("request", (request) => pending.push(timed(request)));
+  await openReview(page, seedLong());
   const box = page.getByRole("textbox", { name: "What was said" });
   const saved = page.locator("header").getByText("Saved");
+  // A new review is saved whole once, when its pass is picked (#251): before
+  // the first commit, and not counted as one.
+  await expect(saved).toBeVisible({ timeout: 30_000 });
+  await Promise.all(pending);
+  console.log(`review saved on picking the pass: ${JSON.stringify(sent)}`);
   const commits: { kind: string; frame: number; sends: typeof sent }[] = [];
   // Five checks with a correction, then five with none, each let settle before the next.
   for (const kind of [...Array(5).fill("corrected"), ...Array(5).fill("checked only")] as string[]) {
@@ -220,9 +228,14 @@ test("what a commit in Review sends on 1,500 sentences, in bytes and time (#251)
     commits.push({ kind, frame, sends: sent.slice(from) });
   }
   console.log(`review commit saves: ${JSON.stringify(commits)}`);
-  // A correction sends the edit list; every commit sends the review.
+  // A correction patches the edit list; every commit patches the review; each
+  // is one change, under 16 KiB, never the whole list or review (#251).
   for (const commit of commits) {
-    expect(commit.sends.some((s) => s.route === "review")).toBe(true);
-    expect(commit.sends.some((s) => s.route === "edits")).toBe(commit.kind === "corrected");
+    expect(commit.sends.some((s) => s.route === "PATCH review")).toBe(true);
+    expect(commit.sends.some((s) => s.route === "PATCH edits")).toBe(commit.kind === "corrected");
+    for (const send of commit.sends) expect(send.bytes).toBeLessThan(16 * 1024);
+    // The commit's own frame: 49 to 62 ms with a correction while its save was
+    // the whole list, 15.1 to 18.2 ms since (#251).
+    expect(commit.frame).toBeLessThanOrEqual(EDIT_P95_CEILING_MS);
   }
 });

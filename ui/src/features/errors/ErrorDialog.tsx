@@ -74,11 +74,14 @@ export function ErrorDialog({
   );
 }
 
+const RELOAD_ONLY = new Set(["TranscriptChanged", "ListChanged", "ReviewChanged"]);
+
 /** Whatever showError() last raised, until it is closed. */
 export function ShownErrorDialog() {
   const error = useShownError();
   if (error === null) return null;
-  // The transcript was made again under the page (#249): the only way on is a reload.
-  const reload = error.error === "TranscriptChanged" ? () => window.location.reload() : undefined;
+  // The transcript was made again under the page (#249), or its edits or its
+  // review were changed in another tab (#251): the only way on is a reload.
+  const reload = RELOAD_ONLY.has(error.error) ? () => window.location.reload() : undefined;
   return <ErrorDialog error={error} onClose={dismissError} onReload={reload} />;
 }

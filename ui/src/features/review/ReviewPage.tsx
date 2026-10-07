@@ -16,7 +16,7 @@ import { loadReview } from "./reviewApi";
 import { loadReading, otherTranscript } from "./secondOpinion";
 import { useReviewSession } from "./useReviewSession";
 
-type Review = { document: ReviewDocument | null; sha: CurrentSha };
+type Review = { document: ReviewDocument | null; sha: CurrentSha; reviewSha: string | null };
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; opened: Opened; review: Review };
 
 type Props = {
@@ -127,6 +127,7 @@ function InSession({ opened, editable, transcriptId, review, other, back, naviga
     editable,
     edits,
     saved: review.document,
+    savedSha: review.reviewSha,
     sha: review.sha,
     other,
     controls,

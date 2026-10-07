@@ -222,6 +222,44 @@ test("words typed on the card come back when the page was killed before any save
   await expect.poll(() => again.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("dsj-review-draft-")))).toEqual([]);
 });
 
+test("a sentence committed one second before the page is killed is kept, on a slow upload (#251)", async ({ page, context, browserName }) => {
+  test.skip(browserName !== "chromium", "the tab is killed and the upload slowed through the DevTools protocol, which only chromium has");
+  test.slow();
+  await page.setViewportSize(PHONE);
+  // 300 sentences of ten words: its whole edit list is about 0.7 MB, which the
+  // slowed upload below needs about ten seconds for; one change is a few
+  // hundred bytes. No recording: Review checks the words, not the sound.
+  const dir = scratchDir();
+  const sentences = Array.from({ length: 300 }, (_, i) => Array.from({ length: 10 }, (_, k) => `s${i}w${k}`));
+  const seeded = seed(editableTranscript(`${dir}/none.wav`, sentences), dir);
+  const reader = readerUrl(seeded);
+  await page.goto(reader.replace("#", "&review=1#"));
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toHaveValue(sentences[0]?.join(" ") ?? "");
+  await expect(page.locator("header").getByText("Saved")).toBeVisible();
+  // Phone data, slow to send: 64 KiB a second up, 50 ms each way.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 50, downloadThroughput: -1, uploadThroughput: 65_536 });
+  await box.fill(`${sentences[0]?.slice(0, 9).join(" ")} Charles`);
+  await page.getByRole("button", { name: "Checked, next" }).click();
+  await expect(box).toHaveValue(sentences[1]?.join(" ") ?? "");
+  await page.waitForTimeout(1000);
+  // Killed, as a phone kills a tab: no pagehide, no visibilitychange. Only a
+  // request already sent with keepalive outlives it.
+  void cdp.send("Page.crash").catch(() => undefined);
+  await page.waitForEvent("crash");
+  await page.close();
+
+  const again = await context.newPage();
+  await again.setViewportSize(PHONE);
+  await again.goto(reader);
+  await expect(again.locator("article p").first()).toContainText("s0w8 Charles");
+  await again.goto(reader.replace("#", "&review=1#"));
+  await expect(again.getByText(/1 of 300 checked/)).toBeVisible();
+});
+
 test.describe("on a tablet, a touch screen 820 px wide", () => {
   test.use({ viewport: TABLET, hasTouch: true });
 

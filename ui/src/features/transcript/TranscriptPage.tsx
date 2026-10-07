@@ -11,7 +11,7 @@ import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
 import { type Correction, corrections, tokensOf } from "@/features/edit/corrections";
 import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } from "@/features/edit/EditBar";
-import { type Editable, loadEditable, Outdated, saveNames, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
+import { type Editable, loadEditable, Outdated, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { InlineCorrect } from "@/features/edit/InlineCorrect";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
 import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
@@ -244,7 +244,7 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
     return next;
   }, [content, opened.doc.speakers]);
   const article = useRef<HTMLElement>(null);
-  const { state: saving, settle } = useSave(transcriptId, editable);
+  const { state: saving, settle, rename: saveNames } = useSave(transcriptId, editable);
   const selected = useSelection(edit, article);
   const renderable = useLatest(editable.renderable);
   // The speakers' names (#243): saved on their own route, kept beside the editor.
@@ -254,12 +254,10 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
       const next: Record<string, string> = { ...names };
       if (name.trim() === "") delete next[label];
       else next[label] = name.trim();
-      saveNames(transcriptId, next).then(
-        (saved) => editable.names.set(saved),
-        (thrown: unknown) => showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/names`)),
-      );
+      // In turn with the list's own saves (#251); the names it keeps are set by the hook.
+      saveNames(next).catch((thrown: unknown) => showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/names`)));
     },
-    [names, transcriptId, editable.names],
+    [names, transcriptId, saveNames],
   );
   // Stable between renames, so the memoised TranscriptView redraws only when a name changes.
   const nameplate = useCallback(
@@ -308,10 +306,11 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
   useCorrectedPaint(edit.reading, fixed, article);
   const review = reviewHref(opened.recording.id, transcriptId);
   const marks = useReviewMarks(transcriptId, editable.sha);
-  // Review loads the edit list afresh and saves it whole, so it opens only
-  // once the server holds every edit made here: leaving with one in flight
-  // could open Review on the list without it, and Review's first save would
-  // then write it away (Task 13 re-review). If the save fails, the reader stays.
+  // Review loads the edit list afresh, so it opens only once the server holds
+  // every edit made here: leaving with one in flight could open Review on the
+  // list without it (Task 13 re-review), and Review's first patch would then
+  // be refused as made against another list (#251). If the save fails, the
+  // reader stays.
   const openReview = () => {
     settle().then(
       () => navigate(review),

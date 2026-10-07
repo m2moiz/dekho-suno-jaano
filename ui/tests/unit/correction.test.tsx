@@ -16,6 +16,7 @@ import { unsureWords } from "../../src/features/transcript/confidence";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { type Content, Editor, type Entry, type Item } from "../../src/lib/editOps";
 import { lint } from "../../src/lib/linter";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights } from "./highlights";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
@@ -131,9 +132,10 @@ describe("the Correct button", () => {
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        if (request.method === "PUT") saved.push(content);
-        return Response.json({ content, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
+        if (!saves(request)) return listReply(CONTENT);
+        const content = await savedList(request, saved.at(-1) ?? CONTENT);
+        saved.push(content);
+        return listReply(content);
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [], words_searched: 6, lists: ["en"], recall: "recall: x" });

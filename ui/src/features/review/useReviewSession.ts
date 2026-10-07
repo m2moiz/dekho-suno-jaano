@@ -106,6 +106,8 @@ type Args = {
   /** The edit list's own save (editing.ts useSave), so leaving and the answer key wait for it. */
   edits: Saving;
   saved: ReviewDocument | null;
+  /** The sha of `saved` as the server holds it, or null with none: its first patch is made against it (#251). */
+  savedSha: string | null;
   sha: CurrentSha;
   other: Reading | null;
   controls: RefObject<PlayerControls | null>;
@@ -153,7 +155,7 @@ function useSpans(segments: readonly Segment[]): readonly Span[] {
   }, [segments]);
 }
 
-export function useReviewSession({ transcriptId, doc, editable, edits, saved, sha, other, controls, onLeave }: Args): Session {
+export function useReviewSession({ transcriptId, doc, editable, edits, saved, savedSha, sha, other, controls, onLeave }: Args): Session {
   const { editor } = editable;
   const content = useContent(editor);
   const names = useLatest(editable.names);
@@ -229,7 +231,7 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     () => documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments, corrections: fixes }),
     [sha, pass, segments, index, startedAt, fixes],
   );
-  const { state: reviewSaving, flush, keep } = useReviewSave(transcriptId, document);
+  const { state: reviewSaving, flush, keep } = useReviewSave(transcriptId, document, { document: saved, reviewSha: savedSha }, !choosing);
   // The bar's one word covers both saves: Review's words go to the edit list,
   // its checks to the review, and either can fail alone (Task 13 review, I2).
   const saving: SaveState =
@@ -373,7 +375,8 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   // The page hidden or left. A phone gives no beforeunload (iOS Safari never
   // fires it) and may never run this page again: a swipe back, an app switch
   // that ends in the tab evicted, a reload. What is already in the list and
-  // the review goes at once with keepalive (Task 14 re-review, R1-I1). The
+  // the review goes at once, with keepalive when it fits (Task 14 re-review,
+  // R1-I1); since #251 each is one change, so it does. The
   // box is not committed: half a word typed before a tab switch is not a
   // correction (fix round 4); its words are in the browser's copy (draft.ts)
   // until the owner commits them.

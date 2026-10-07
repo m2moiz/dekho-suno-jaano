@@ -1,10 +1,11 @@
 // A copy of Review's box in the browser (Task 14 fix round 3). Words typed in
 // the box live in React state until a key or a button commits them, and a
-// phone can tear the page down first: iOS Safari fires no beforeunload, and a
-// keepalive save carries at most 64 KiB, about 290 words of an edit list
-// (editing.ts KEEPALIVE_BYTES). So while the box differs from its sentence,
-// its words are also in localStorage, and the next opening of Review on the
-// same transcript, unchanged, puts them back.
+// phone can tear the page down first: iOS Safari fires no beforeunload, and
+// hiding the page does not commit a half-typed box (fix round 4). A committed
+// sentence is the saves' to keep: since #251 each is one change, sent with
+// keepalive. So while the box differs from its sentence, its words are also
+// in localStorage, and the next opening of Review on the same transcript,
+// unchanged, puts them back.
 //
 // One key per transcript, holding only the box in hand: the transcript's sha,
 // the sentence's span, what the list said for it when typing began (`base`),

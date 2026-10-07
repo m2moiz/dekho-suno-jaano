@@ -8,7 +8,7 @@ const fetchMock = vi.hoisted(() => {
   return mock;
 });
 
-import { dismissError } from "../../src/features/errors/appError";
+import { currentError, dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { KeySheet } from "../../src/features/shell/KeySheet";
 import { audio, box, item, items, key, serveReview, server, start } from "./reviewServer";
@@ -328,5 +328,69 @@ describe("Review mode, fix round 1", () => {
     await screen.findByRole("heading", { name: "This pass is done" });
     key(document.body, { key: "Escape", code: "Escape" });
     await vi.waitFor(() => expect(went).toEqual(["/?recording=2&transcript=7"]));
+  });
+});
+
+describe("Review saves one change, not the whole review (#251)", () => {
+  it("saves a new review whole once, when the pass is picked, and nothing before", async () => {
+    render(<ReviewPage recording={2} transcript={7} />);
+    await screen.findByRole("button", { name: /^Every sentence/ });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(server.reviews).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: /^Every sentence/ }));
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    expect(server.reviews[0]?.segments.map((s) => s.state)).toEqual(["unchecked", "unchecked", "unchecked"]);
+    expect(server.reviewPatches).toEqual([]);
+  });
+
+  it("sends a check as one segment against the review's sha, and the next against the sha its answer gave", async () => {
+    const field = await start();
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(server.reviewPatches).toHaveLength(1), { timeout: 2000 });
+    expect(server.reviewPatches[0]).toMatchObject({
+      transcript_sha: "s1",
+      review_sha: "review-1",
+      start: 0,
+      delete: 1,
+      insert: [{ start: 0.2, end: 1.3, state: "checked" }],
+      corrections: [],
+      cursor_s: 2.0,
+    });
+    key(await box(), { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(server.reviewPatches).toHaveLength(2), { timeout: 2000 });
+    expect(server.reviewPatches[1]).toMatchObject({ review_sha: "review-2", start: 1, delete: 1 });
+    expect(server.reviews.at(-1)?.segments.map((s) => s.state)).toEqual(["checked", "checked", "unchecked"]);
+  });
+
+  it("patches a resumed review against the sha it was read with, and a correction is appended, not resent", async () => {
+    server.saved = {
+      version: 1, transcript_sha: "s1", review_pass: "every", cursor_s: 0.2, started_at: "x", updated_at: "x",
+      segments: [
+        { start: 0.2, end: 1.3, state: "unchecked", flags: [], speaker: null, edited: false },
+        { start: 2.0, end: 2.9, state: "unchecked", flags: [], speaker: null, edited: false },
+        { start: 3.5, end: 3.9, state: "unchecked", flags: [], speaker: null, edited: false },
+      ],
+      corrections: [{ at: "x", start: 3.5, end: 3.9, before: "foxtrot", after: "foxtrot" }],
+    };
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(server.reviewPatches).toHaveLength(1), { timeout: 2000 });
+    expect(server.reviewPatches[0]).toMatchObject({ review_sha: "review-0", corrections: [{ before: "charlie", after: "charles" }] });
+    expect(server.reviews.at(-1)?.corrections).toHaveLength(2);
+  });
+
+  it("a review changed in another tab: the patch is refused, nothing more is sent, and the page says to reload", async () => {
+    server.refuseReview = true;
+    const went: string[] = [];
+    const field = await start((href) => went.push(href));
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(currentError()?.error).toBe("ReviewChanged"), { timeout: 2000 });
+    key(await box(), { key: "Enter", code: "Enter" });
+    key(await box(), { key: "Escape", code: "Escape" });
+    await vi.waitFor(() => expect(screen.getByText(/^Still in Review/).textContent).toMatch(/Reload the page/));
+    expect(server.reviewPatches).toHaveLength(1);
+    expect(went).toEqual([]);
   });
 });

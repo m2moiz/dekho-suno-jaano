@@ -10,6 +10,7 @@ import type { Mock } from "vitest";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { takeToken } from "../../src/features/session/session";
 import type { Content, Entry, Item } from "../../src/lib/editOps";
+import { type Splice, spliced } from "../../src/lib/splice";
 import { installHighlights } from "./highlights";
 import { stubMatchMedia } from "./media";
 
@@ -67,14 +68,18 @@ const recording = (others: boolean) => ({
   ],
 });
 
-type Saved = { transcript_sha: string; segments: { state: string }[]; corrections: { before: string; after: string }[] };
+type Saved = { transcript_sha: string; review_pass: string; cursor_s: number; segments: { state: string }[]; corrections: { before: string; after: string }[] };
 
 /** What the mocked server was sent, and how a test sets it up; reset before each test. */
 export const server = {
-  /** Every edit list PUT, in order. */
+  /** The edit list after each save, in order: each patch made (#251), or the list sent whole. */
   edits: [] as Content[],
-  /** Every review document PUT, in order. */
+  /** The review document after each save, in order: each patch made (#251), or the document sent whole. */
   reviews: [] as Saved[],
+  /** Every patch of the review, as sent (#251). */
+  reviewPatches: [] as Record<string, unknown>[],
+  /** Whether the next patch of the review is refused as made against a review changed in another tab. */
+  refuseReview: false,
   /** The review document the server holds on opening. */
   saved: null as unknown,
   /** Whether a second transcript of the recording exists (the second opinion). */
@@ -85,9 +90,15 @@ export const server = {
   kept: [] as { path: string; body: unknown }[],
   /** The edit list the server holds, when a test needs another than CONTENT. */
   content: null as Content | null,
-  /** The page torn down: from now on no ordinary PUT reaches the server (the browser cancels it); a keepalive one still does. */
+  /** The page torn down: from now on no ordinary save reaches the server (the browser cancels it); a keepalive one still does. */
   down: false,
 };
+
+// The shas the mocked server names its edit list and review by: a count of saves, so a patch made against an older one is refused.
+let listSaves = 0;
+let reviewSaves = 0;
+const listSha = () => `list-${listSaves}`;
+const reviewSha = () => `review-${reviewSaves}`;
 
 /** CONTENT with one word retyped, as a correction made elsewhere (the reader, another device) leaves it. */
 export function contentWith(word: string, retyped: string): Content {
@@ -141,37 +152,71 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
   server.kept = [];
   server.content = null;
   server.down = false;
+  server.reviewPatches = [];
+  server.refuseReview = false;
+  listSaves = 0;
+  reviewSaves = 0;
   window.localStorage.clear();
   document.cookie = "dsj-speed=; max-age=0; path=/";
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
     const body: unknown = request.method === "GET" ? null : await request.json();
+    const saving = request.method === "PUT" || request.method === "PATCH";
     if (request.keepalive) server.kept.push({ path, body });
-    else if (server.down && request.method === "PUT") return new Promise<Response>(() => undefined);
+    else if (server.down && saving) return new Promise<Response>(() => undefined);
     if (path === "/api/recordings") return Response.json([recording(server.withOther)]);
     if (path === "/api/transcripts/7") return Response.json(DOC);
     if (path === "/api/transcripts/8") return Response.json(OTHER);
+    const refused = (error: string, message: string) => Response.json({ error, message, request: path }, { status: 409 });
     if (path === "/api/transcripts/7/edits") {
-      if (request.method === "PUT" && server.refuseEdits) {
-        return Response.json(
-          { error: "TranscriptChanged", message: "This transcript was made again while it was open. Reload the page.", request: path },
-          { status: 409 },
-        );
+      if (saving && server.refuseEdits) return refused("TranscriptChanged", "This transcript was made again while it was open. Reload the page.");
+      const held = server.content ?? CONTENT;
+      if (request.method === "PATCH") {
+        const change = body as Splice<Entry> & { list_sha: string };
+        if (change.list_sha !== listSha()) return refused("ListChanged", "This transcript's edits were changed in another tab. Reload the page.");
+        const content = spliced(held, change);
+        server.edits.push(content);
+        server.content = content;
+        listSaves += 1;
+        return Response.json({ list_sha: listSha(), edited_at: "x", spans: [], unrenderable: null });
       }
-      const content = request.method === "PUT" ? (body as { content: Content }).content : (server.content ?? CONTENT);
+      const content = request.method === "PUT" ? (body as { content: Content }).content : held;
       if (request.method === "PUT") {
         server.edits.push(content);
         server.content = content;
+        listSaves += 1;
       }
-      return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1" });
+      return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1", list_sha: listSha() });
     }
     if (path === "/api/transcripts/7/review") {
       if (request.method === "PUT") {
         server.reviews.push(body as Saved);
-        return Response.json(body);
+        server.saved = body;
+        reviewSaves += 1;
+        return Response.json({ review_sha: reviewSha(), updated_at: "x" });
       }
-      return Response.json({ document: server.saved, transcript_sha: "s1" });
+      if (request.method === "PATCH") {
+        const change = body as Splice<unknown> & { review_sha: string; transcript_sha: string; review_pass: string; cursor_s: number; corrections: Saved["corrections"] };
+        server.reviewPatches.push(body as Record<string, unknown>);
+        if (server.refuseReview || server.saved === null || change.review_sha !== reviewSha()) {
+          return refused("ReviewChanged", "This review was changed in another tab or window after this page loaded it. Reload the page.");
+        }
+        const was = server.saved as Saved;
+        const next = {
+          ...was,
+          transcript_sha: change.transcript_sha,
+          review_pass: change.review_pass,
+          cursor_s: change.cursor_s,
+          segments: spliced(was.segments, change as Splice<Saved["segments"][number]>),
+          corrections: [...was.corrections, ...change.corrections],
+        };
+        server.reviews.push(next);
+        server.saved = next;
+        reviewSaves += 1;
+        return Response.json({ review_sha: reviewSha(), updated_at: "x" });
+      }
+      return Response.json({ document: server.saved, transcript_sha: "s1", review_sha: server.saved === null ? null : reviewSha() });
     }
     if (path === "/api/transcripts/7/reference") return Response.json({ files: ["a.reference.json", "a.reference.txt"], segments: 3, unchecked: 0 });
     if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));

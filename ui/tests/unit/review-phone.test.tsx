@@ -14,7 +14,6 @@ const fetchMock = vi.hoisted(() => {
 import { dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { SWIPE_PX } from "../../src/features/review/swipe";
-import type { Content } from "../../src/lib/editOps";
 import { stubMatchMedia } from "./media";
 import { box, contentWith, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
 
@@ -200,28 +199,28 @@ describe("Review's keys on the card, when a keyboard is there (F14)", () => {
   });
 });
 
-describe("Words typed on the card when the page goes away (Task 14 re-review, R1-I1)", () => {
+describe("Words typed on the card when the page goes away (Task 14 re-review, R1-I1; #251)", () => {
   // iOS Safari never fires beforeunload. What is already in the list goes
-  // with keepalive the moment the page is hidden or left; what is only in the
+  // with keepalive: since #251 each save is one change, small enough that the
+  // commit's own save already goes that way, and the page hidden or left
+  // sends the review at once rather than after its wait. What is only in the
   // box stays in the box, and in the browser's copy (draft.ts), until the
   // owner commits it (fix round 4).
   for (const how of ["visibilitychange", "pagehide"] as const) {
-    it(`on ${how}, sends a committed change whose save has not landed with keepalive`, async () => {
+    it(`on ${how}, a committed change reaches the server though no ordinary request would`, async () => {
       const field = await start();
+      await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
       fireEvent.change(field, { target: { value: "alpha bravo charles" } });
-      // Committed, but its ordinary save never lands.
+      // From here the browser cancels every ordinary request: only keepalive ones land.
       server.down = true;
       fireEvent.click(checkedNext());
       expect((await box()).value).toBe("delta echo");
       act(() => hidePage(how));
-      await vi.waitFor(() => expect(server.kept.some((k) => k.path === "/api/transcripts/7/edits")).toBe(true));
-      const sent = server.kept.filter((k) => k.path === "/api/transcripts/7/edits").at(-1)?.body as { content: Content };
-      expect(items(sent.content).map((e) => e.text)).toContain(" charles");
-      await vi.waitFor(() => expect(server.kept.some((k) => k.path === "/api/transcripts/7/review")).toBe(true));
-      const review = server.kept.filter((k) => k.path === "/api/transcripts/7/review").at(-1)?.body as {
-        corrections: { before: string; after: string }[];
-      };
-      expect(review.corrections).toMatchObject([{ before: "charlie", after: "charles" }]);
+      await vi.waitFor(() => expect(items(server.edits.at(-1)).map((e) => e.text)).toContain(" charles"));
+      expect(server.kept.filter((k) => k.path === "/api/transcripts/7/edits")).toHaveLength(1);
+      // The review goes at once on hiding, not after its 400 ms wait.
+      await vi.waitFor(() => expect(server.reviews.at(-1)?.corrections).toMatchObject([{ before: "charlie", after: "charles" }]), { timeout: 300 });
+      expect(server.reviews.at(-1)?.segments[0]?.state).toBe("checked");
     });
   }
 
@@ -243,7 +242,10 @@ describe("Words typed on the card when the page goes away (Task 14 re-review, R1
 
   it("sends nothing when nothing is unsaved", async () => {
     await start();
+    // The new review, saved whole once its pass was picked (#251).
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 500));
+    server.kept = [];
     act(() => hidePage("visibilitychange"));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(server.kept).toEqual([]);
