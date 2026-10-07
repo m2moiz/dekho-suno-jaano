@@ -309,13 +309,21 @@ describe("a 2.5 h call (Review Focus 5)", () => {
         t += 0.2886;
       }
     }
-    const began = performance.now();
-    const segments = freshSegments(long);
-    const words = wordIndex(long);
-    const likely = likelyErrors(long, words, segments, 0.3, new Set());
-    const took = performance.now() - began;
-    expect(segments).toHaveLength(1500);
-    expect(likely).toHaveLength(1500);
-    expect(took).toBeLessThan(50);
+    // The best of five runs against the one 50 ms bound: a single run is
+    // wall-clock time in a worker that shares the machine with the suite's
+    // other files, and once measured 54.7 ms in 1 of 12 full runs (Task 14
+    // review). The fastest run is what the code costs; a real slowdown slows
+    // all five, so it still fails.
+    const times: number[] = [];
+    for (let run = 0; run < 5; run += 1) {
+      const began = performance.now();
+      const segments = freshSegments(long);
+      const words = wordIndex(long);
+      const likely = likelyErrors(long, words, segments, 0.3, new Set());
+      times.push(performance.now() - began);
+      expect(segments).toHaveLength(1500);
+      expect(likely).toHaveLength(1500);
+    }
+    expect(Math.min(...times)).toBeLessThan(50);
   });
 });

@@ -136,10 +136,31 @@ test.describe("on a phone, 390 px wide, with a keyboard", () => {
   });
 });
 
+test("in a narrow window, a mouse drag across the card selects words and checks nothing (Task 14 review, I1)", async ({ page }, info) => {
+  await page.setViewportSize(PHONE);
+  await openReview(page, `review-phone-mouse-${info.project.name}`, 8.9 + info.project.name.length / 1000);
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  const card = page.getByRole("article", { name: "Sentence being checked" });
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toHaveValue("alpha bravo charlie");
+  const line = await card.getByText("Not checked yet").boundingBox();
+  if (line === null) throw new Error("the card's margin line is not on the page");
+  // Right to left across the margin line, 200 px, as selecting its words would.
+  const y = line.y + line.height / 2;
+  await page.mouse.move(line.x + line.width, y);
+  await page.mouse.down();
+  await page.mouse.move(line.x + line.width - 100, y + 2);
+  await page.mouse.move(line.x + line.width - 200, y + 4);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  await expect(box).toHaveValue("alpha bravo charlie");
+  await expect(page.getByText("0 of 3 checked")).toBeVisible();
+});
+
 test.describe("on a tablet, a touch screen 820 px wide", () => {
   test.use({ viewport: TABLET, hasTouch: true });
 
-  test("the card is used, its targets are 44 px or more, and a swipe checks or goes back", async ({ page }, info) => {
+  test("the card is used, its targets are 44 px or more, and a swipe of a finger checks or goes back", async ({ page, browserName }, info) => {
     await openReview(page, `review-tablet-${info.project.name}`, 8.8 + info.project.name.length / 1000);
     expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
     await page.getByRole("button", { name: /^Every sentence/ }).tap();
@@ -149,23 +170,36 @@ test.describe("on a tablet, a touch screen 820 px wide", () => {
     // Nothing takes the focus, so the screen's keyboard stays down.
     await expect(box).not.toBeFocused();
     expect(await undersized(page)).toEqual([]);
+    await page.getByRole("button", { name: "Checked, next" }).tap();
+    await expect(box).toHaveValue("delta echo");
+    await page.getByRole("button", { name: "Back" }).tap();
+    await expect(box).toHaveValue("alpha bravo charlie");
 
-    // A drag from the card's margin line, not the text box.
-    const from = await card.getByText("Not checked yet").boundingBox();
+    // Real touch input: Playwright's touchscreen only taps, so the finger's
+    // drag goes through the DevTools protocol, which only chromium speaks.
+    // WebKit's run still measures the targets and taps above.
+    if (browserName !== "chromium") return;
+    // From the card's margin line, not the text box.
+    const from = await card.locator("p").first().boundingBox();
     if (from === null) throw new Error("the card's margin line is not on the page");
-    const swipe = async (dx: number) => {
-      await page.mouse.move(from.x + 200, from.y + from.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(from.x + 200 + dx / 2, from.y + from.height / 2 + 4);
-      await page.mouse.move(from.x + 200 + dx, from.y + from.height / 2 + 8);
-      await page.mouse.up();
+    const cdp = await page.context().newCDPSession(page);
+    const swipe = async (dx: number, dy = 8) => {
+      const x = from.x + 200;
+      const y = from.y + from.height / 2;
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx / 2, y: y + dy / 2 }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx, y: y + dy }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     };
     await swipe(-160);
     await expect(box).toHaveValue("delta echo");
     await expect(page.getByText("1 of 3 checked")).toBeVisible();
     await swipe(160);
     await expect(box).toHaveValue("alpha bravo charlie");
-    await page.getByRole("button", { name: "Checked, next" }).tap();
-    await expect(box).toHaveValue("delta echo");
+    // A steep drag is a scroll, not a swipe.
+    await swipe(-100, 90);
+    await page.waitForTimeout(300);
+    await expect(box).toHaveValue("alpha bravo charlie");
+    await cdp.detach();
   });
 });

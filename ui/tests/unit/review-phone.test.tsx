@@ -32,10 +32,10 @@ afterEach(() => {
 const card = () => screen.findByRole("article", { name: "Sentence being checked" });
 const checkedNext = () => screen.getByRole("button", { name: "Checked, next" });
 
-/** A drag across the card from (x, y) by (dx, dy), as a finger makes it. */
-function drag(target: Element, dx: number, dy = 0, x = 300, y = 200): void {
-  fireEvent.pointerDown(target, { clientX: x, clientY: y, pointerId: 1, pointerType: "touch" });
-  fireEvent.pointerUp(target, { clientX: x + dx, clientY: y + dy, pointerId: 1, pointerType: "touch" });
+/** A drag across the card from (x, y) by (dx, dy), as a finger makes it, or as `pointerType` does. */
+function drag(target: Element, dx: number, dy = 0, x = 300, y = 200, pointerType = "touch"): void {
+  fireEvent.pointerDown(target, { clientX: x, clientY: y, pointerId: 1, pointerType });
+  fireEvent.pointerUp(target, { clientX: x + dx, clientY: y + dy, pointerId: 1, pointerType });
 }
 
 describe("Review mode on a phone", () => {
@@ -96,6 +96,22 @@ describe("Review mode on a phone", () => {
     expect(screen.getByText("1 of 3 checked")).toBeTruthy();
     drag(article, SWIPE_PX + 20);
     expect((await box()).value).toBe("alpha bravo charlie");
+  });
+
+  it("a mouse drag across the card selects words and checks nothing (Task 14 review, I1)", async () => {
+    await start();
+    const article = await card();
+    // Right to left over the second opinion or the margin line, as a mouse selecting words would.
+    drag(article, -200, 0, 300, 200, "mouse");
+    expect((await box()).value).toBe("alpha bravo charlie");
+    expect(screen.getByText("0 of 3 checked")).toBeTruthy();
+    // A second finger down mid-swipe is a pinch, not a swipe.
+    fireEvent.pointerDown(article, { clientX: 300, clientY: 200, pointerId: 1, pointerType: "touch" });
+    fireEvent.pointerDown(article, { clientX: 320, clientY: 260, pointerId: 2, pointerType: "touch" });
+    fireEvent.pointerUp(article, { clientX: 100, clientY: 260, pointerId: 2, pointerType: "touch" });
+    fireEvent.pointerUp(article, { clientX: 100, clientY: 200, pointerId: 1, pointerType: "touch" });
+    expect((await box()).value).toBe("alpha bravo charlie");
+    expect(screen.getByText("0 of 3 checked")).toBeTruthy();
   });
 
   it("flags the sentence from the flag button's menu, and shows the flag on the card", async () => {

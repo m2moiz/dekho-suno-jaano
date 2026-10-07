@@ -22,3 +22,6 @@ export function useMediaQuery(query: string): boolean {
 
 /** A touch screen, or a window as narrow as a phone: where the touch layouts take over. */
 export const TOUCH = "(pointer: coarse), (max-width: 767px)";
+
+/** A mouse or a trackpad: where a page may take the focus into a text box without opening a screen keyboard. */
+export const FINE = "(pointer: fine)";

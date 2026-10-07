@@ -6,6 +6,12 @@
 // thumb's full reach. A drag steeper than 0.6 (about 31 degrees) is a scroll.
 // Both are choices, not measurements. A drag that starts in the text box or
 // on a button is theirs: selecting words, or pressing.
+//
+// Only a finger or a pen swipes. A mouse drag across the card is someone
+// selecting words of the second opinion, and in a narrow Mac window (the way
+// the card is reached while `dsj ui` listens on 127.0.0.1 only) it once
+// marked the sentence checked, which nothing undoes (Task 14 review, I1).
+// A second finger down mid-swipe makes it a pinch, and no swipe.
 
 import { type PointerEvent, useRef } from "react";
 
@@ -18,16 +24,21 @@ export function swipeOf(dx: number, dy: number): "left" | "right" | null {
 }
 
 export function useSwipe(onSwipe: (way: "left" | "right") => void) {
-  const from = useRef<{ x: number; y: number } | null>(null);
+  const from = useRef<{ id: number; x: number; y: number } | null>(null);
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       const target = event.target as Element;
-      from.current = target.closest("textarea, button, a, [role=menu]") ? null : { x: event.clientX, y: event.clientY };
+      const finger = event.pointerType === "touch" || event.pointerType === "pen";
+      // A second pointer while one is down drops the gesture.
+      from.current =
+        from.current !== null || !finger || target.closest("textarea, button, a, [role=menu]")
+          ? null
+          : { id: event.pointerId, x: event.clientX, y: event.clientY };
     },
     onPointerUp: (event: PointerEvent<HTMLElement>) => {
       const start = from.current;
       from.current = null;
-      if (start === null) return;
+      if (start === null || event.pointerId !== start.id) return;
       const way = swipeOf(event.clientX - start.x, event.clientY - start.y);
       if (way !== null) onSwipe(way);
     },

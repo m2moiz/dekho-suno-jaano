@@ -10,7 +10,7 @@ import { AppBar } from "@/features/shell/AppBar";
 import { FIELD_BUTTON, FIELD_EDGE } from "@/features/shell/field";
 import { KeysItem } from "@/features/shell/KeySheet";
 import { REVIEW_SHEET } from "@/features/shell/keys";
-import { useMediaQuery } from "@/lib/media";
+import { FINE, useMediaQuery } from "@/lib/media";
 import { langOf } from "@/lib/script";
 import { FinishPanel } from "./FinishPanel";
 import { FLAGS, FlagMenu, onBoxKey, PassChooser, SAVE_TEXT, SecondOpinion } from "./ReviewDesk";
@@ -20,10 +20,6 @@ import "./review.css";
 
 type Props = { session: Session; title: string; back: string; transcriptId: number };
 
-// A mouse is there: the box takes the focus after each move, as on the desk,
-// so the keys work in a narrow window (F14). On a touch screen it does not,
-// because focus in a text box opens the phone's keyboard over the card.
-const FINE = "(pointer: fine)";
 
 /**
  * Review mode on a phone or tablet (Hashiya spec, "Phone and tablet,
@@ -38,6 +34,9 @@ const FINE = "(pointer: fine)";
  */
 export function ReviewCard({ session, title, back, transcriptId }: Props) {
   const box = useRef<HTMLTextAreaElement>(null);
+  // A mouse is there: the box takes the focus after each move, as on the desk,
+  // so the keys work in a narrow window (F14). On a touch screen it does not,
+  // because focus in a text box opens the phone's keyboard over the card.
   const fine = useMediaQuery(FINE);
   const swipe = useSwipe((way) => session.act({ kind: way === "left" ? "check" : "previous" }));
   const current = session.current;
@@ -117,7 +116,7 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
           <article
             {...swipe}
             aria-label="Sentence being checked"
-            className="flex touch-pan-y flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-md shadow-black/5"
+            className="flex touch-pan-y touch-pinch-zoom flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-md shadow-black/5"
             style={{ "--speaker": current.colour } as CSSProperties}
           >
             <p className="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 text-sm tabular-nums text-muted-foreground">
