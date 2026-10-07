@@ -117,31 +117,69 @@ export function sameScript(a: string, b: string): boolean {
   return script !== "none" && script === firstStrong(b);
 }
 
+/** One span's comparison: which of `theirs` differ (null where the scripts differ or they have none), and whether the two disagree. */
+function compare(own: string, theirs: readonly string[]): { marks: boolean[] | null; disagrees: boolean } {
+  const ownWords = own.split(/\s+/).filter(Boolean);
+  const ownCount = ownWords.filter((w) => normalize(w) !== "").length;
+  // The other reading has nothing here but the draft has words: the engine
+  // invented them or the other one missed them. Either way the two disagree,
+  // and that needs no script to see.
+  if (theirs.length === 0) return { marks: null, disagrees: ownCount > 0 };
+  if (!sameScript(own, theirs.join(" "))) return { marks: null, disagrees: false };
+  const marks = differing(ownWords, theirs);
+  // Words in the common run are the unmarked ones of theirs; any draft word
+  // beyond them is the draft's own (a repetition, an invented word).
+  const common = theirs.filter((w, j) => !marks[j] && normalize(w) !== "").length;
+  return { marks, disagrees: marks.some(Boolean) || ownCount > common };
+}
+
+const NONE = (spans: readonly Span[]): Opinions => ({ words: spans.map(() => []), differs: spans.map(() => null), disagree: new Set() });
+
 /** The second opinion for every span, given this transcript's text of each. */
 export function secondOpinion(other: Reading | null, spans: readonly Span[], mine: readonly string[]): Opinions {
-  if (other === null) return { words: spans.map(() => []), differs: spans.map(() => null), disagree: new Set() };
+  if (other === null) return NONE(spans);
   const words = opinionWords(other, spans);
   const disagree = new Set<number>();
   const differs = words.map((theirs, k) => {
-    const own = mine[k] ?? "";
-    const ownWords = own.split(/\s+/).filter(Boolean);
-    const ownCount = ownWords.filter((w) => normalize(w) !== "").length;
-    // The other reading has nothing here but the draft has words: the engine
-    // invented them or the other one missed them. Either way the two disagree,
-    // and that needs no script to see.
-    if (theirs.length === 0) {
-      if (ownCount > 0) disagree.add(k);
-      return null;
-    }
-    if (!sameScript(own, theirs.join(" "))) return null;
-    const marks = differing(ownWords, theirs);
-    // Words in the common run are the unmarked ones of theirs; any draft word
-    // beyond them is the draft's own (a repetition, an invented word).
-    const common = theirs.filter((w, j) => !marks[j] && normalize(w) !== "").length;
-    if (marks.some(Boolean) || ownCount > common) disagree.add(k);
+    const { marks, disagrees } = compare(mine[k] ?? "", theirs);
+    if (disagrees) disagree.add(k);
     return marks;
   });
   return { words, differs, disagree };
+}
+
+/**
+ * `secondOpinion`, remembering its last answer, for Review's every edit. An
+ * edit changes one sentence's words, so only that span is compared again;
+ * the other reading's words are placed again only when the spans change (a
+ * split or a merge) or the other reading does. On the 1,500-sentence fixture
+ * comparing every span again made a correction's frame 57 ms at the median
+ * and 70 ms at p95, against 17 and 18 ms with no second opinion; remembered,
+ * 16.6 and 18.0 ms (Task 15, frames that started an edit-list save left out,
+ * `cd ui && npx playwright test tests/perf/long.spec.ts --project=perf`).
+ */
+export function rememberedOpinion(): (other: Reading | null, spans: readonly Span[], mine: readonly string[]) => Opinions {
+  let placed: { other: Reading; spans: readonly Span[]; words: string[][] } | null = null;
+  let compared: { theirs: readonly string[]; own: string; marks: boolean[] | null; disagrees: boolean }[] = [];
+  return (other, spans, mine) => {
+    if (other === null) return NONE(spans);
+    if (placed?.other !== other || placed.spans !== spans) {
+      placed = { other, spans, words: opinionWords(other, spans) };
+      compared = [];
+    }
+    const disagree = new Set<number>();
+    const differs = placed.words.map((theirs, k) => {
+      const own = mine[k] ?? "";
+      let last = compared[k];
+      if (last?.theirs !== theirs || last.own !== own) {
+        last = { theirs, own, ...compare(own, theirs) };
+        compared[k] = last;
+      }
+      if (last.disagrees) disagree.add(k);
+      return last.marks;
+    });
+    return { words: placed.words, differs, disagree };
+  };
 }
 
 /** The newest other transcript of the same recording, or null (the library lists them newest first). */

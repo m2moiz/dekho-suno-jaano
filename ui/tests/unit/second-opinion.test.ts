@@ -2,7 +2,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { RecordingRow, TranscriptRow } from "../../src/features/library/types";
-import { differing, normalize, opinionWords, otherTranscript, sameScript, secondOpinion } from "../../src/features/review/secondOpinion";
+import {
+  differing,
+  normalize,
+  opinionWords,
+  otherTranscript,
+  rememberedOpinion,
+  sameScript,
+  secondOpinion,
+} from "../../src/features/review/secondOpinion";
 import { read, type Sentence } from "../../src/features/transcript/document";
 import { sentence } from "./sentences";
 
@@ -117,6 +125,34 @@ describe("secondOpinion, disagree", () => {
   it("leaves out a span where the scripts differ, and one where the readings match", () => {
     const opinions = secondOpinion(OTHER, SPANS, ["ALPHA bravo, charlie", "دیلٹا ایکو"]);
     expect([...opinions.disagree]).toEqual([]);
+  });
+});
+
+describe("rememberedOpinion", () => {
+  // Three spans over OTHER's five words: the edit list's text of each changes one at a time.
+  const spans = [{ start: 0.2, end: 1.0 }, { start: 1.0, end: 1.7 }, { start: 1.7, end: 2.4 }];
+  const before = ["alpha bravo", "Charlie, delta", "echo"];
+
+  it("gives what secondOpinion gives, edit after edit, and after a split", () => {
+    const opinion = rememberedOpinion();
+    const edits = [before, ["alpha bravo", "Charles delta", "echo"], ["alpha bravo", "Charles delta", "echo foxtrot"], before];
+    for (const mine of edits) expect(opinion(OTHER, spans, mine)).toEqual(secondOpinion(OTHER, spans, mine));
+    const split = [{ start: 0.2, end: 0.6 }, { start: 0.6, end: 1.0 }, ...spans.slice(1)];
+    const mine = ["alpha", "bravo", "Charlie, delta", "echo"];
+    expect(opinion(OTHER, split, mine)).toEqual(secondOpinion(OTHER, split, mine));
+    expect(opinion(null, split, mine)).toEqual(secondOpinion(null, split, mine));
+  });
+
+  it("works out again only the span whose words changed: an edit costs one sentence, not 1,500 (Task 15)", () => {
+    const opinion = rememberedOpinion();
+    const first = opinion(OTHER, spans, before);
+    const next = opinion(OTHER, spans, ["alpha bravo", "Charles delta", "echo"]);
+    // The same arrays, not equal ones: nothing was compared again for spans 0 and 2.
+    expect(next.words).toBe(first.words);
+    expect(next.differs[0]).toBe(first.differs[0]);
+    expect(next.differs[2]).toBe(first.differs[2]);
+    expect(next.differs[1]).not.toBe(first.differs[1]);
+    expect(next.differs[1]).toEqual([true, false]);
   });
 });
 

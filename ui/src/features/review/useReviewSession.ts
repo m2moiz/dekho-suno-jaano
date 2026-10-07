@@ -52,7 +52,7 @@ import {
 } from "./model";
 import { clearDraft, readDraft, writeDraft } from "./draft";
 import { useReviewSave } from "./reviewApi";
-import { secondOpinion } from "./secondOpinion";
+import { rememberedOpinion } from "./secondOpinion";
 
 export type Caret = { start: number; end: number };
 
@@ -137,10 +137,11 @@ function lastPass(): ReviewPass {
 
 /**
  * The segments' spans, the same array for as long as no span changes, so the
- * second opinion (about 30 ms over 1,500 sentences, Task 12 review M11) is
- * worked out again only after a split, a merge or an edit, and never for a
- * check or a flag. Its `disagree` set is keyed by index, so it must follow
- * every split and merge (Task 11 review).
+ * second opinion places the other reading's words again only after a split or
+ * a merge, compares only the edited sentence after an edit
+ * (rememberedOpinion), and does nothing for a check or a flag. Its `disagree`
+ * set is keyed by index, so it must follow every split and merge (Task 11
+ * review).
  */
 function useSpans(segments: readonly Segment[]): readonly Span[] {
   const last = useRef<readonly Span[]>([]);
@@ -193,7 +194,9 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const labels = useMemo(() => speakerLabels(content, doc.speakers) ?? [], [content, doc.speakers]);
   const spans = useSpans(segments);
   const texts = useMemo(() => spans.map((s) => segmentText(content, words, s)), [spans, content, words]);
-  const opinions = useMemo(() => secondOpinion(other, spans, texts), [other, spans, texts]);
+  // One per review, made once: it remembers the last comparison of every span.
+  const [opinionOf] = useState(rememberedOpinion);
+  const opinions = useMemo(() => opinionOf(other, spans, texts), [opinionOf, other, spans, texts]);
   const likely = useMemo(
     () => likelyErrors(content, words, segments, cutoffFor(doc.model), opinions.disagree),
     [content, words, segments, doc.model, opinions.disagree],
