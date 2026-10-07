@@ -64,8 +64,10 @@ elif len(argv) == 4 and argv[:2] == ["serve", "--bg"] and argv[2].startswith("--
     state["serve"] = serve
     with open(path, "w") as f:
         json.dump(state, f)
-    # What tailscale prints while it waits, such as the URL to turn HTTPS on.
-    print(state["bg_says"], end="", flush=True)
+    # What tailscale prints while it waits, such as the URL to turn HTTPS on,
+    # on whichever stream the state names (the real one's is unobserved).
+    print(state["bg_says"], end="", flush=True,
+          file=sys.stderr if state.get("bg_says_on") == "stderr" else sys.stdout)
     # The entry is in place; a slow command keeps dsj waiting after it.
     time.sleep(state["bg_sleep"])
 elif argv[2:] == ["off"] and state["off_fails"]:
@@ -208,12 +210,18 @@ def test_magicdns_off_is_named_not_reported_as_tailscale_stopped(
     assert tailscale.calls == [STATUS]
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
 def test_a_serve_that_waits_for_https_to_be_enabled_says_what_tailscale_said(
     tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], stream: str,
 ) -> None:
-    """`serve --bg` prints an enable URL and waits; it must reach the owner (Minor 3)."""
+    """`serve --bg` prints an enable URL and waits; it must reach the owner (Minor 3).
+
+    Which stream the real CLI uses is read from its source, not observed, so
+    both are read (Task 16a review, I1).
+    """
     tailscale.write(
+        bg_says_on=stream,
         bg_sleep=5,
         bg_says="Serve is not enabled on your tailnet.\nTo enable, visit:\n\n"
         "         https://login.tailscale.com/f/serve?node=abc\n",

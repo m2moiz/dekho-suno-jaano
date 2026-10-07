@@ -340,12 +340,15 @@ with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_cou
 
 A review made in the app leaves two files beside the transcript JSON:
 `<name>.reference.json` (`format: "dsj-reference"`, `version: 1`, the transcript's file
-name, `engine`, `model`, `complete`, and `segments`, each with `start`, `end`,
+name, `engine`, `model`, `reviewed_against` (the transcript's sha), `made_at`,
+`complete`, and `segments`, each with `start`, `end`,
 `speaker`, `text`, `flags` and `checked`) and `<name>.reference.txt`, one
-`[m:ss] Speaker: words (flags)` line a sentence. They are a person's checked reading of
+`[m:ss] Speaker: words` line a sentence, its flags after it in words ("(not
+speech, cut off)") and ` [not checked]` on a sentence not checked. They are a person's checked reading of
 the recording: prefer them to the transcript where they exist, and read `complete`
 first, since a key saved part way through marks its unchecked sentences
-`checked: false`. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
+`checked: false`; saving a partial key moves a complete one already there to a
+numbered name. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
 review itself, and each transcript's edit list (`dsj hatao`'s file, with an optional
 `names` map from speaker label to the name a person gave it), live beside the library in
 `reviews/` and `edits/`.
@@ -387,8 +390,9 @@ changing nothing, when `tailscale` is not on PATH, when Tailscale is not running
 never starts it), when MagicDNS is off (the Mac has no tailnet name), when all four ports
 already serve something (it names each), or when a `dsj ui` without `--tailnet` is
 already running. A `tailscale` command that hangs is given up after 30 s, with what it
-printed: with HTTPS certificates off for the tailnet, `serve --bg` prints the URL that
-turns them on, and that line carries it. A start that finds a recorded entry says so on
+printed on either stream. With HTTPS certificates off for the tailnet, `serve --bg` is
+expected to print the URL that turns them on, which that line would then carry (read
+from tailscale's source; not yet seen against a real Tailscale). A start that finds a recorded entry says so on
 stderr before it asks tailscale. It never runs `tailscale funnel`, so
 nothing is on the public internet. An agent should not run it: the phone check belongs
 to the owner, and has not been observed yet (Tailscale was stopped while #250 was built;

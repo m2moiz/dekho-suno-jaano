@@ -707,7 +707,7 @@ five keys used most. Every key, as the key sheet lists them:
 | Ctrl+, and Ctrl+. | Slower and faster, through 0.75x, 1x, 1.25x and 1.5x |
 | Ctrl+1 to Ctrl+9 | This sentence was said by speaker n |
 | Ctrl+G | Take the second opinion's reading |
-| Ctrl+U | Flag: can't make it out (adds `[?]` at the cursor when text is selected or empty) |
+| Ctrl+U | Flag: can't make it out (puts `[?]` in place of the selected words, or in an empty box) |
 | Ctrl+F | Flag menu: not speech, overlapping talk, cut off |
 | Ctrl+S | Split the sentence at the cursor |
 | Ctrl+M | Merge with the previous sentence |
@@ -737,9 +737,13 @@ transcription models against. `<name>.reference.json` holds `format:
 "dsj-reference"`, `version: 1`, the transcript's file name, its `engine` and
 `model`, whether every sentence was checked (`complete`), and `segments`, each
 with `start`, `end`, `speaker`, `text`, `flags` and `checked`.
-`<name>.reference.txt` is one `[m:ss] Speaker: words (flags)` line a sentence.
-Saving before every sentence is checked asks first; the key then marks the
-sentences that were not checked, and `complete` is false.
+It also names the transcript's sha it was checked against (`reviewed_against`)
+and when it was made (`made_at`). `<name>.reference.txt` is one `[m:ss]
+Speaker: words` line a sentence, with its flags after it in words ("(not
+speech, cut off)"). Saving before every sentence is checked asks first; the key
+then marks the sentences that were not checked (` [not checked]` in the text),
+`complete` is false, and a complete key already there is moved to a numbered
+name rather than written over.
 
 The menu (**⋯**) holds **Bleep**, a drawer listing every word the word lists
 match (the same lists and matcher `dsj hatao` uses) with **Mute all**,
@@ -747,6 +751,14 @@ match (the same lists and matcher `dsj hatao` uses) with **Mute all**,
 recording as `<name>.bleeped.<ext>` with the render `dsj hatao` runs; and
 **Export**, the transcript as edited, corrections and speaker names included, as
 SRT, WebVTT or text.
+Pressing play mutes every muted word live, over exactly the stretches a render
+would silence, and a word typed into the drawer's box is added to your own
+`words.toml`, the file `dsj hatao` reads too. A render never writes over an
+earlier one (the next is `.bleeped-2`), leaves the same `.bleeps.json` log and
+`.source.txt` note `dsj hatao` does, and waits for the machine like a
+transcription: one run at a time, from the app or the terminal. An older
+transcript with no word end times, or a `parho` import, reads as before and
+says why it cannot be edited.
 
 The colours follow the Mac's light or dark Appearance, live, until you pick
 Light or Dark in the settings menu; the pick is kept in a cookie on

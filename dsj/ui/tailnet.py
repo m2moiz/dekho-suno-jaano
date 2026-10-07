@@ -72,6 +72,13 @@ class TailnetUnavailable(UIUnavailable):
     """`dsj ui --tailnet` cannot serve the tailnet here. Nothing was changed."""
 
 
+def _text(output: bytes | str | None) -> str:
+    """A stream a timed-out command left: bytes in practice, whatever `text` says."""
+    if output is None:
+        return ""
+    return output.decode(errors="replace") if isinstance(output, bytes) else output
+
+
 def _object(value: object) -> dict[str, object]:
     return cast("dict[str, object]", value) if isinstance(value, dict) else {}
 
@@ -105,10 +112,11 @@ class Tailnet:
             )
         except subprocess.TimeoutExpired as exc:
             # What it printed while it waited: `serve --bg` with HTTPS
-            # certificates off prints the URL that turns them on, and the
-            # owner needs it (Task 15b review, Minor 3). Always bytes here,
-            # whatever `text` says.
-            said = " ".join((exc.stdout or b"").decode(errors="replace").split())
+            # certificates off is expected to print the URL that turns them on
+            # (read from tailscale's source, not observed), and the owner needs
+            # it (Task 15b review, Minor 3). Both streams, since which one it
+            # uses is unobserved (Task 16a review, I1).
+            said = " ".join(f"{_text(exc.stdout)} {_text(exc.stderr)}".split())
             raise TailnetUnavailable(
                 f"`tailscale {' '.join(args)}` did not finish in {_COMMAND_S:g} s."
                 + (f" Tailscale said: {said}" if said else "")
