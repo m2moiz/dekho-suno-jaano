@@ -22,7 +22,7 @@ export type Opinions = {
   words: string[][];
   /** Which of those words differ from this transcript's, or null where the scripts differ. */
   differs: (boolean[] | null)[];
-  /** The spans where the two disagree on a word: likely errors. */
+  /** The spans where the two disagree on a word, either side's: likely errors. */
   disagree: Set<number>;
 };
 
@@ -35,10 +35,18 @@ export function opinionWords(other: Reading, spans: readonly Span[]): string[][]
     const middle = ((start[w] ?? 0) + (end[w] ?? 0)) / 2;
     while (k < spans.length && middle >= (spans[k]?.end ?? 0)) k += 1;
     if (k === spans.length) break;
-    if (middle < (spans[k]?.start ?? 0)) continue;
+    let place = k;
+    if (middle < (spans[k]?.start ?? 0)) {
+      // In a pause between two spans (an engine stretches a sentence's last word
+      // into the silence after it): the nearer span takes the word, so the grey
+      // line never loses one. Before the first span there is no nearer one.
+      const before = spans[k - 1];
+      if (before === undefined) continue;
+      if (middle - before.end <= (spans[k]?.start ?? 0) - middle) place = k - 1;
+    }
     const from = offset[w] ?? 0;
     const text = other.turns[turn[w] ?? 0]?.text.slice(from, from + (length[w] ?? 0)).trim();
-    if (text) out[k]?.push(text);
+    if (text) out[place]?.push(text);
   }
   return out;
 }
@@ -99,9 +107,21 @@ export function secondOpinion(other: Reading | null, spans: readonly Span[], min
   const disagree = new Set<number>();
   const differs = words.map((theirs, k) => {
     const own = mine[k] ?? "";
-    if (theirs.length === 0 || !sameScript(own, theirs.join(" "))) return null;
-    const marks = differing(own.split(/\s+/).filter(Boolean), theirs);
-    if (marks.some(Boolean)) disagree.add(k);
+    const ownWords = own.split(/\s+/).filter(Boolean);
+    const ownCount = ownWords.filter((w) => normalize(w) !== "").length;
+    // The other reading has nothing here but the draft has words: the engine
+    // invented them or the other one missed them. Either way the two disagree,
+    // and that needs no script to see.
+    if (theirs.length === 0) {
+      if (ownCount > 0) disagree.add(k);
+      return null;
+    }
+    if (!sameScript(own, theirs.join(" "))) return null;
+    const marks = differing(ownWords, theirs);
+    // Words in the common run are the unmarked ones of theirs; any draft word
+    // beyond them is the draft's own (a repetition, an invented word).
+    const common = theirs.filter((w, j) => !marks[j] && normalize(w) !== "").length;
+    if (marks.some(Boolean) || ownCount > common) disagree.add(k);
     return marks;
   });
   return { words, differs, disagree };

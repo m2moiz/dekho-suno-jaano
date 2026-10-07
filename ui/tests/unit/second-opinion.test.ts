@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RecordingRow, TranscriptRow } from "../../src/features/library/types";
 import { differing, normalize, opinionWords, otherTranscript, sameScript, secondOpinion } from "../../src/features/review/secondOpinion";
-import { read } from "../../src/features/transcript/document";
+import { read, type Sentence } from "../../src/features/transcript/document";
 import { sentence } from "./sentences";
 
 // The other engine cut its sentences elsewhere: one sentence across both spans.
@@ -16,6 +16,34 @@ describe("opinionWords", () => {
       ["alpha", "bravo", "Charlie,"],
       ["delta", "echo"],
     ]);
+  });
+});
+
+describe("opinionWords, placement", () => {
+  it("places a word by its middle, not by where it starts", () => {
+    // Words at 0, 1, 2, each 1 s: "q" starts at 1.0, before the boundary at 1.3, but its middle (1.5) is after it.
+    const other = read({ audio: "a", model: "m", sentences: [sentence(0, [" p", " q", " r"], 1)] });
+    expect(opinionWords(other, [{ start: 0, end: 1.3 }, { start: 1.3, end: 3 }])).toEqual([["p"], ["q", "r"]]);
+  });
+
+  it("gives a word whose middle is in a pause between two spans to the nearer span", () => {
+    // The other engine stretched its last word into the silence after the sentence.
+    const stretched = (end: number, second: number): Sentence => ({
+      start: 0,
+      end,
+      text: " one two",
+      tokens: [{ t: 0, w: " one" }, { t: second, w: " two" }],
+    });
+    const spans = [{ start: 0, end: 1.0 }, { start: 1.2, end: 2 }];
+    // "two" spans 0.5 to 1.6, middle 1.05: 0.05 s after the first span, 0.15 s before the second.
+    expect(opinionWords(read({ audio: "a", model: "m", sentences: [stretched(1.6, 0.5)] }), spans)).toEqual([["one", "two"], []]);
+    // "two" spans 0.9 to 1.4, middle 1.15: 0.15 s after the first span, 0.05 s before the second.
+    expect(opinionWords(read({ audio: "a", model: "m", sentences: [stretched(1.4, 0.9)] }), spans)).toEqual([["one"], ["two"]]);
+  });
+
+  it("drops a word before the first span and one after the last", () => {
+    const other = read({ audio: "a", model: "m", sentences: [sentence(0, [" p", " q", " r"], 1)] });
+    expect(opinionWords(other, [{ start: 1, end: 2 }])).toEqual([["q"]]);
   });
 });
 
@@ -48,6 +76,38 @@ describe("secondOpinion", () => {
     expect(opinions.differs).toEqual([[false, false, false], null]);
     expect([...opinions.disagree]).toEqual([]);
     expect(secondOpinion(null, [{ start: 0, end: 1 }], ["x"]).words).toEqual([[]]);
+  });
+});
+
+describe("secondOpinion, disagree", () => {
+  const SPANS = [{ start: 0.2, end: 1.3 }, { start: 1.3, end: 2.4 }];
+
+  it("holds the index of a span where the other reading has a word the draft lacks", () => {
+    const opinions = secondOpinion(OTHER, SPANS, ["alpha brave charlie", "delta echo"]);
+    expect(opinions.differs).toEqual([[false, true, false], [false, false]]);
+    expect([...opinions.disagree]).toEqual([0]);
+  });
+
+  it("holds the index of a span where the draft has a word the other reading lacks", () => {
+    // A repetition loop or an invented word: nothing of the other reading is marked, the span still disagrees.
+    const loop = secondOpinion(OTHER, SPANS, ["alpha bravo charlie", "delta echo echo"]);
+    expect(loop.differs).toEqual([[false, false, false], [false, false]]);
+    expect([...loop.disagree]).toEqual([1]);
+    const short = read({ audio: "a", model: "m", sentences: [sentence(0, [" a", " c"], 0.4)] });
+    const opinions = secondOpinion(short, [{ start: 0, end: 1 }], ["a b c"]);
+    expect(opinions.differs).toEqual([[false, false]]);
+    expect([...opinions.disagree]).toEqual([0]);
+  });
+
+  it("holds the index of a span the other reading has no words in, while the draft has", () => {
+    const opinions = secondOpinion(OTHER, [{ start: 0.2, end: 2.4 }, { start: 5, end: 6 }, { start: 7, end: 8 }], ["alpha bravo charlie delta echo", "hello world", ""]);
+    expect(opinions.differs[1]).toBeNull();
+    expect([...opinions.disagree]).toEqual([1]);
+  });
+
+  it("leaves out a span where the scripts differ, and one where the readings match", () => {
+    const opinions = secondOpinion(OTHER, SPANS, ["ALPHA bravo, charlie", "دیلٹا ایکو"]);
+    expect([...opinions.disagree]).toEqual([]);
   });
 });
 
