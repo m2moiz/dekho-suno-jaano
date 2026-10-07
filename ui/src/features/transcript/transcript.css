@@ -74,6 +74,24 @@
   opacity: 0.55;
 }
 
+/* Review's mark (Task 13 fills it): green only for checked (spec, "green is
+   checked"), the margin's own grey for flagged. */
+.transcript .review {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+}
+
+.transcript .review > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.transcript .review .checked {
+  color: var(--checked);
+}
+
 .transcript .correction {
   max-width: 100%;
   font: 400 0.875rem/1.4 var(--font-reading);

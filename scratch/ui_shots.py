@@ -135,6 +135,7 @@ QUERIES = {
     "reader-english": lambda ids: "?recording={}&transcript={}".format(*ids["english"]),
     "reader-tools": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "reader-correct": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
+    "reader-timing": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "keys": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "review": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["mixed"]),
 }
@@ -165,6 +166,10 @@ ACTIONS = {
     "reader-correct": PRESS + SELECT + "select('slides');"
     "setTimeout(() => press(Array.from(document.querySelectorAll('[role=toolbar][aria-label=Selection] button'))"
     ".find((b) => b.textContent.trim() === 'Correct')), 300);",
+    # Then Timing: the strip docked above the rail (Task 3 review).
+    "reader-timing": PRESS + SELECT + "select('slides');"
+    "setTimeout(() => press(Array.from(document.querySelectorAll('[role=toolbar][aria-label=Selection] button'))"
+    ".find((b) => b.textContent.trim() === 'Timing')), 300);",
     # The key sheet behind `?` (Task 3).
     "keys": "document.body.dispatchEvent(new KeyboardEvent('keydown',"
     " { key: '?', code: 'Slash', shiftKey: true, bubbles: true }));",

@@ -12,3 +12,6 @@ export const FIELD_BUTTON =
  * measures about 1.9:1.
  */
 export const FIELD_EDGE = "border-field-wave";
+
+/** An icon button on the field: 44 px square, the field's quiet colours (Undo, Redo, the unsure arrows). */
+export const FIELD_ICON_BUTTON = `size-11 ${FIELD_BUTTON}`;

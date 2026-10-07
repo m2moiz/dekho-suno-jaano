@@ -1,6 +1,8 @@
+import { XIcon } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import type { Sheet } from "./keys";
@@ -40,7 +42,12 @@ export function KeySheet() {
         if (!open) hideKeys();
       }}
     >
-      <DialogContent className="sm:max-w-lg" aria-label="Keys">
+      <DialogContent className="sm:max-w-lg" aria-label="Keys" showCloseButton={false}>
+        {/* The primitive's own close is 28 px; this one is 44 on a phone (F15). */}
+        <DialogClose render={<Button variant="ghost" size="icon" className="absolute top-2 right-2 size-11 sm:size-7" />}>
+          <XIcon aria-hidden />
+          <span className="sr-only">Close</span>
+        </DialogClose>
         <DialogHeader>
           <DialogTitle>{sheet.title}</DialogTitle>
           <DialogDescription className="sr-only">Every key this page answers.</DialogDescription>

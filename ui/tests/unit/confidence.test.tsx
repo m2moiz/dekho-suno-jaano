@@ -124,6 +124,38 @@ describe("UnsureNav", () => {
     field.remove();
   });
 
+  it("goes on from where it was after an edit renumbers the words: skip one, fix the next, ] goes to the one after", () => {
+    const shaky = (third: number) => [sentence(0, [[" one", 0.95], [" two", 0.2], [" three", third], [" four", 0.1]])];
+    const first = read(doc(WHISPER, shaky(0.25)));
+    const article = createRef<HTMLElement>();
+    const view = (reading: typeof first) => (
+      <>
+        <UnsureNav reading={reading} model={WHISPER} article={article} />
+        <TranscriptView reading={reading} articleRef={article} />
+      </>
+    );
+    const { rerender } = render(view(first));
+    const next = () => act(() => fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" }));
+    next();
+    expect(window.getSelection()?.toString()).toBe("two");
+    next();
+    expect(window.getSelection()?.toString()).toBe("three");
+    // "three" corrected: sure now, and a new reading of the words.
+    rerender(view(read(doc(WHISPER, shaky(1)))));
+    next();
+    expect(window.getSelection()?.toString()).toBe("four");
+  });
+
+  it("answers ] and [ with a button focused, the arrows' own included", () => {
+    mount(WHISPER, SHAKY);
+    const next = screen.getByRole("button", { name: "Next unsure word" });
+    next.focus();
+    act(() => fireEvent.keyDown(next, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.keyDown(next, { key: "[", code: "BracketLeft" }));
+    expect(window.getSelection()?.toString()).toBe("three");
+  });
+
   it("is not offered for a transcript with no confidence, or from an engine it has no cut-off for", () => {
     mount(WHISPER, [sentence(0, [[" no"], [" scores"]])]);
     expect(screen.queryByRole("button")).toBeNull();

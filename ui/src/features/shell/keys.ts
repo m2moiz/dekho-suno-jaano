@@ -22,3 +22,10 @@ export const READER_SHEET: Sheet = {
     `Edits are saved as you make them. Undo goes back up to ${HISTORY_LIMIT.toLocaleString("en")} steps while this page is open; closing or reloading it keeps the edits and forgets their undo.`,
   ],
 };
+
+/** A transcript that cannot be edited (#66): the same reading keys, none for editing. */
+export const READ_ONLY_SHEET: Sheet = {
+  title: "Keys in the reader",
+  keys: READER_SHEET.keys.filter((key) => !key.keys.includes("⌘")),
+  notes: ["Click a word to hear it from there. This transcript cannot be edited, so it has no undo."],
+};

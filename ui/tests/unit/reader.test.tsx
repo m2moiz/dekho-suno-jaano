@@ -105,6 +105,10 @@ describe("the reader", () => {
     expect(article.querySelectorAll("h2")).toHaveLength(0);
     // The words are still one text node a paragraph (#58).
     expect(article.querySelectorAll("p *")).toHaveLength(0);
+    // The tick is the turn's length to scale: 1.1 s (0.2 to 1.3) against 0.4 s (2.0 to 2.4).
+    const tick = (li: HTMLElement) => Number.parseFloat(li.style.getPropertyValue("--tick"));
+    expect(tick(turns[0] as HTMLElement) / tick(turns[1] as HTMLElement)).toBeCloseTo(1.1 / 0.4, 5);
+    expect(tick(turns[0] as HTMLElement)).toBeCloseTo((1.1 / 60) * 100, 5);
   });
 
   it("shows the tools for a selection only while there is one", async () => {
@@ -131,6 +135,152 @@ describe("the reader", () => {
     await vi.waitFor(() => expect(saved).toHaveLength(1));
     const margin = document.querySelector("article li [data-margin]") as HTMLElement;
     expect(margin.querySelector("del")?.textContent).toBe("charlie");
+  });
+
+  it("strikes a deleted word through in the margin: a stretch emptied leaves the original, marked as deleted", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => select("charlie"));
+    fireEvent.click(within(await screen.findByRole("toolbar", { name: "Selection" })).getByRole("button", { name: "Correct" }));
+    const field = (await screen.findByRole("textbox", { name: "What was said" })) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.submit(field.form as HTMLFormElement);
+    await vi.waitFor(() => expect(document.querySelector("article p")?.textContent).toBe(" alpha bravo"));
+    const margin = document.querySelector("article li [data-margin]") as HTMLElement;
+    expect(margin.querySelector(".correction")?.textContent).toBe("Deleted: charlie");
+  });
+
+  it("corrects a selection made of whole paragraphs, as a triple-click makes, whose ends are elements", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    const p = document.querySelector("article p") as HTMLElement;
+    act(() => {
+      const range = document.createRange();
+      range.setStart(p, 0);
+      range.setEnd(p.closest("li")?.nextElementSibling as Element, 0);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    fireEvent.click(within(await screen.findByRole("toolbar", { name: "Selection" })).getByRole("button", { name: "Correct" }));
+    expect(((await screen.findByRole("textbox", { name: "What was said" })) as HTMLInputElement).value).toBe("alpha bravo charlie");
+  });
+
+  it("moves focus to the tools for a selection made by key, Esc puts it back in the text, and so do Save and Cancel", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    const paragraph = document.querySelector('article p[data-turn="0"]') as HTMLElement;
+    const byKey = async () => {
+      // `]` selects the next unsure word ("charlie", 0.3 under parakeet's 0.9).
+      act(() => {
+        fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" });
+        document.dispatchEvent(new Event("selectionchange"));
+      });
+      const tools = await screen.findByRole("toolbar", { name: "Selection" });
+      const correct = within(tools).getByRole("button", { name: "Correct" });
+      await vi.waitFor(() => expect(document.activeElement).toBe(correct));
+      return correct;
+    };
+    const correct = await byKey();
+    expect(window.getSelection()?.toString()).toBe("charlie");
+    act(() => {
+      fireEvent.keyDown(correct, { key: "Escape" });
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(document.activeElement).toBe(paragraph);
+    expect(window.getSelection()?.toString()).toBe("");
+    await vi.waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull());
+
+    // Cancel: focus back on the words, and they are selected again.
+    fireEvent.click(await byKey());
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await vi.waitFor(() => expect(document.activeElement).toBe(paragraph));
+    expect(window.getSelection()?.toString()).toBe("charlie");
+
+    // Save: focus on the corrected words, selected as they now read.
+    act(() => {
+      window.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    fireEvent.click(await byKey());
+    const field = (await screen.findByRole("textbox", { name: "What was said" })) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "Charles Darwin" } });
+    fireEvent.submit(field.form as HTMLFormElement);
+    await vi.waitFor(() => expect(window.getSelection()?.toString()).toBe("Charles Darwin"));
+    expect(document.activeElement).toBe(document.querySelector('article p[data-turn="0"]'));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("moves focus to the tools once Shift comes up after Shift and an arrow grew the selection, not while it grows", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+      select("bravo");
+    });
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    expect(document.activeElement).toBe(document.body);
+    act(() => fireEvent.keyUp(document.body, { key: "Shift", code: "ShiftLeft" }));
+    expect(document.activeElement).toBe(within(tools).getByRole("button", { name: "Correct" }));
+    expect(window.getSelection()?.toString()).toBe("bravo");
+  });
+
+  it("leaves focus alone for a selection made with the pointer", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => {
+      fireEvent.pointerDown(document.body);
+      select("bravo");
+    });
+    await screen.findByRole("toolbar", { name: "Selection" });
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("answers ], [, ? and Esc with a button focused, and leaves Space and Enter to the button", async () => {
+    const { isOurs } = await import("../../src/features/transcript/readerKeys");
+    const button = document.createElement("button");
+    document.body.append(button);
+    const ours = (init: KeyboardEventInit) => {
+      let answer = false;
+      const listen = (event: KeyboardEvent) => {
+        answer = isOurs(event);
+      };
+      window.addEventListener("keydown", listen);
+      button.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true }));
+      window.removeEventListener("keydown", listen);
+      return answer;
+    };
+    expect(ours({ key: "]", code: "BracketRight" })).toBe(true);
+    expect(ours({ key: "[", code: "BracketLeft" })).toBe(true);
+    expect(ours({ key: "?", code: "Slash", shiftKey: true })).toBe(true);
+    expect(ours({ key: "Escape", code: "Escape" })).toBe(true);
+    expect(ours({ key: " ", code: "Space" })).toBe(false);
+    expect(ours({ key: "Enter", code: "Enter" })).toBe(false);
+    button.remove();
+  });
+
+  it("draws Review's mark in the margin only when it is given one, per turn and per sentence", async () => {
+    const { read } = await import("../../src/features/transcript/document");
+    const { TranscriptView } = await import("../../src/features/transcript/TranscriptView");
+    const reading = read(DOC);
+    const { container, rerender } = render(<TranscriptView reading={reading} />);
+    expect(container.querySelectorAll(".review")).toHaveLength(0);
+    rerender(
+      <TranscriptView
+        reading={reading}
+        review={{
+          turns: new Map([[1, "checked"]]),
+          sentences: [
+            { start: 0.2, end: 1.3, state: "flagged" },
+            { start: 2.0, end: 2.4, state: "checked" },
+          ],
+        }}
+      />,
+    );
+    const marks = Array.from(container.querySelectorAll("[data-margin]"), (m) => m.querySelector(".review")?.textContent?.trim());
+    // Turn 0: one sentence, flagged; turn 1 is checked as a whole.
+    expect(marks).toEqual(["1", "Checked"]);
+    expect(container.querySelector("[data-margin] .review [aria-label]")?.getAttribute("aria-label")).toBe("1 flagged");
   });
 
   it("offers the recording's other transcripts in a version picker only when it has more than one", async () => {

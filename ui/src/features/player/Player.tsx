@@ -3,6 +3,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { MuteGate } from "@/features/bleep/liveMute";
 import type { Span } from "@/features/edit/editing";
+import { selectWords, turnTexts } from "@/features/edit/selection";
 
 import { Button } from "@/components/ui/button";
 import { fromThrown, showError } from "@/features/errors/appError";
@@ -185,12 +186,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     const element = media.current;
     const root = article?.current ?? null;
     if (element === null) return;
-    const texts: Text[] = [];
-    if (root !== null) {
-      for (const p of root.querySelectorAll<HTMLElement>("p[data-turn]")) {
-        if (p.firstChild instanceof Text) texts[Number(p.dataset["turn"])] = p.firstChild;
-      }
-    }
+    const texts = root === null ? [] : turnTexts(root);
     const mute = new MuteGate(element);
     mute.setSpans(spans.current);
     gate.current = mute;
@@ -258,7 +254,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       // On a touch screen a tap selects the word, so the selection toolbar
       // can offer Correct and Hear (Hashiya spec, Reader); a Mac click seeks.
       if (selectOnTap && window.matchMedia("(pointer: coarse)").matches) {
-        selectWordAt(reading, texts, word);
+        selectWords(reading, texts, word);
         return;
       }
       const at = reading.words.start[word];
@@ -404,20 +400,4 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       </div>
     </div>
   );
-}
-
-/** Select word `word` in its paragraph's text, without the space in front of it. */
-function selectWordAt(reading: Reading, texts: Text[], word: number): void {
-  const { turn, offset, length } = reading.words;
-  const text = texts[turn[word] ?? -1];
-  if (text === undefined) return;
-  const from = offset[word] ?? 0;
-  const to = from + (length[word] ?? 0);
-  const lead = /^\s*/.exec(text.data.slice(from, to))?.[0].length ?? 0;
-  const range = document.createRange();
-  range.setStart(text, from + lead);
-  range.setEnd(text, to);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
 }

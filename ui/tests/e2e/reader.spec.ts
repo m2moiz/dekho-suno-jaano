@@ -151,7 +151,11 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
         const runs = Array.from(range.getClientRects());
         const right = Math.max(...runs.map((r) => r.right));
         const left = Math.min(...runs.map((r) => r.left));
+        const margin = p.parentElement?.querySelector("[data-margin]")?.getBoundingClientRect();
         return {
+          // The margin's right edge against the text's leftmost ink.
+          marginRight: margin?.right ?? Number.NaN,
+          textLeft: left,
           lang: p.getAttribute("lang"),
           direction: style.direction,
           family: style.fontFamily,
@@ -175,6 +179,8 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
     // Set from the right edge, as Urdu is.
     expect(turn?.rightGap).toBeLessThan(2);
   }
+  // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
+  for (const turn of shape.turns) expect(turn.marginRight).toBeLessThan(turn.textLeft);
   expect((urdu?.size ?? 0) / (english?.size ?? 1)).toBeCloseTo(1.3, 1);
   expect(english?.lang).toBeNull();
   expect(english?.direction).toBe("ltr");

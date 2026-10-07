@@ -66,3 +66,28 @@ test("dragging a word's end is one undo step, takes time from the next word, and
   await openTiming(page, "delta");
   expect(await valueOf(page, "Start of delta")).toBe(dragged);
 });
+
+test("Timing on a word far down a long transcript opens in sight, above the player, with focus in it", async ({ page }, info) => {
+  const dir = scratchDir();
+  // Forty turns of eight words: the last is several screens below the first.
+  const turns = Array.from({ length: 40 }, (_, t) => Array.from({ length: 8 }, (_, w) => `t${t}w${w}`));
+  const seconds = Math.ceil(40 * (8 * 0.5 + 0.4)) + 2 + info.project.name.length / 10;
+  const seeded = seed(editableTranscript(tone(dir, seconds, `bounds-long-${info.project.name}.wav`), turns), dir);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(readerUrl(seeded));
+  const word = "t38w3";
+  await page.getByText(word).scrollIntoViewIfNeeded();
+  const strip = await openTiming(page, word);
+  await expect(strip).toBeVisible();
+  const box = await strip.boundingBox();
+  const rail = await page.getByRole("region", { name: "Player" }).boundingBox();
+  if (box === null || rail === null) throw new Error("no strip or no player on screen");
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  // Wholly in the window, and clear of the rail it sits on.
+  expect(box.y + box.height).toBeLessThanOrEqual(rail.y + 1);
+  await expect(strip.getByRole("slider", { name: `Start of ${word}` })).toBeFocused();
+  // Esc closes it and puts focus back on the word's paragraph, with the word selected.
+  await page.keyboard.press("Escape");
+  await expect(strip).toHaveCount(0);
+  expect(await page.evaluate(() => [document.activeElement?.tagName, window.getSelection()?.toString()])).toEqual(["P", word]);
+});

@@ -43,3 +43,18 @@ test("Cmd+Z undoes a mute and nothing else; the mute is saved and its undo is no
   await page.keyboard.press("Shift+Slash");
   await expect(page.getByRole("dialog")).toContainText("forgets their undo");
 });
+
+test("on a phone the key sheet's close button is 44 px", async ({ page }, info) => {
+  const dir = scratchDir();
+  const seeded = seed(editableTranscript(tone(dir, 9.3 + info.project.name.length / 100, `sheet-${info.project.name}.wav`), [["alpha", "bravo"]]), dir);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p").first()).toHaveText(" alpha bravo");
+  await page.keyboard.press("Shift+Slash");
+  const close = page.getByRole("dialog").getByRole("button", { name: "Close" });
+  // Its laid-out size: the sheet zooms in from 95% as it opens, which a bounding box would catch mid-way.
+  const size = await close.evaluate((el) => [(el as HTMLElement).offsetWidth, (el as HTMLElement).offsetHeight]);
+  expect(Math.min(...size)).toBeGreaterThanOrEqual(44);
+  await close.click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});

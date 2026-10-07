@@ -118,6 +118,19 @@ describe("wordsIn", () => {
     expect(wordsIn(edit.reading, root, select(first, 1, first, 7))).toEqual({ first: 0, last: 0 });
   });
 
+  it("reads a selection whose ends sit on elements, as a triple-click's do, by the text it takes in", () => {
+    const { root, texts } = article();
+    const [first, second] = texts as [Text, Text];
+    const range = document.createRange();
+    // From before the first paragraph to the start of the second: all of the first.
+    range.setStart(root, 0);
+    range.setEnd(second.parentElement as HTMLElement, 0);
+    expect(wordsIn(edit.reading, root, range)).toEqual({ first: 0, last: 1 });
+    range.setStart(first, 3);
+    range.setEnd(root, root.childNodes.length);
+    expect(wordsIn(edit.reading, root, range)).toEqual({ first: 0, last: 2 });
+  });
+
   it("is null for a collapsed selection or one outside the transcript", () => {
     const { root, texts } = article();
     const first = texts[0] as Text;

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TOUCH, useMediaQuery } from "@/lib/media";
 import { langOf } from "@/lib/script";
 import type { Box } from "./SelectionToolbar";
 
@@ -33,6 +34,9 @@ type Props = {
  */
 export function InlineCorrect({ heard, box, paragraph, onSave, onCancel, onHear }: Props) {
   const [text, setText] = useState(heard);
+  // 44 px targets where the Selection toolbar has them: a touch screen or a phone-wide window.
+  const touch = useMediaQuery(TOUCH);
+  const size = touch ? "h-11 px-3" : "h-9";
   const face = getComputedStyle(paragraph);
   // Room for the buttons and the one-line hint beside them, or the window less its edges.
   const width = Math.min(Math.max(box.width + 64, MIN_WIDTH_PX), window.innerWidth - 16);
@@ -69,16 +73,16 @@ export function InlineCorrect({ heard, box, paragraph, onSave, onCancel, onHear 
         className="h-auto rounded-md bg-background px-2 py-1 text-foreground dark:bg-background"
         style={{ fontFamily: face.fontFamily, fontSize: face.fontSize, lineHeight: face.lineHeight }}
       />
-      {/* 44 px targets on a phone (Hashiya spec, "Laptop and phone"), 36 on a laptop. */}
       <div className="flex items-center gap-1">
-        <Button type="button" variant="ghost" size="sm" className="h-11 sm:h-9" onClick={onHear}>
+        <Button type="button" variant="ghost" size="sm" className={size} onClick={onHear}>
           Hear
         </Button>
-        <span className="ml-1 hidden text-xs whitespace-nowrap text-muted-foreground sm:inline">Enter saves · Esc cancels</span>
-        <Button type="button" variant="ghost" size="sm" className="ml-auto h-11 sm:h-9" onClick={onCancel}>
+        {!touch && <span className="ml-1 text-xs whitespace-nowrap text-muted-foreground">Enter saves · Esc cancels</span>}
+        <Button type="button" variant="ghost" size="sm" className={`ml-auto ${size}`} onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" size="sm" className="h-11 sm:h-9" disabled={unchanged}>
+        {/* A strong secondary, not gold: the rail's Play is the screen's one gold action (F23). */}
+        <Button type="submit" variant="secondary" size="sm" className={`${size} font-semibold`} disabled={unchanged}>
           Save
         </Button>
       </div>

@@ -8,19 +8,21 @@ import { EditBar, useCorrectedPaint, useMutedPaint, useSelection, useUndoKeys } 
 import { type Editable, loadEditable, type Span, useContent, useLatest, useSave } from "@/features/edit/editing";
 import { InlineCorrect } from "@/features/edit/InlineCorrect";
 import { type EditReading, keepReading, readContent } from "@/features/edit/readContent";
+import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
 import { type Picked, SelectionToolbar } from "@/features/edit/SelectionToolbar";
 import { TimingStrip } from "@/features/edit/TimingStrip";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import { fileName } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
+import { PLAYER_HEIGHT } from "@/features/player/playhead";
 import { AppBar } from "@/features/shell/AppBar";
 import { KeysItem } from "@/features/shell/KeySheet";
-import { READER_SHEET } from "@/features/shell/keys";
+import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
 import { parseTranscript, read, type Reading, type TranscriptDoc } from "./document";
 import { useReaderKeys } from "./readerKeys";
 import type { Names } from "./speakers";
-import { TranscriptView } from "./TranscriptView";
+import { type ReviewMarks, TranscriptView } from "./TranscriptView";
 import { UnsureNav } from "./UnsureNav";
 import { VersionPicker } from "./VersionPicker";
 
@@ -103,9 +105,9 @@ function ReadOnlyPage({ opened, reason, transcriptId }: { opened: Opened; reason
   const reading = useMemo(() => read(opened.doc), [opened.doc]);
   const article = useRef<HTMLElement>(null);
   const controls = useRef<PlayerControls | null>(null);
-  useReaderKeys(controls, READER_SHEET);
+  useReaderKeys(controls, READ_ONLY_SHEET);
   return (
-    <Page opened={opened} transcriptId={transcriptId} reading={reading} article={article} controls={controls}>
+    <Page opened={opened} transcriptId={transcriptId} reading={reading} article={article} controls={controls} sheet={READ_ONLY_SHEET}>
       <p className="mb-6 text-sm text-muted-foreground" role="note">
         This transcript cannot be edited: {reason}
       </p>
@@ -131,6 +133,27 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const [timing, setTiming] = useState<number | null>(null);
   // The words being retyped in place (#83), while the field is open.
   const [correcting, setCorrecting] = useState<Picked | null>(null);
+  // Where focus goes back to once Correct or Timing closes: these words, by
+  // time, as they read after the edit (Task 3 review: never to the body).
+  const [back, setBack] = useState<{ turn: number; from: number; to: number } | null>(null);
+  useEffect(() => {
+    const root = article.current;
+    if (back === null || root === null) return;
+    setBack(null);
+    const { start, turn } = edit.reading.words;
+    let first = -1;
+    let last = -1;
+    for (let w = edit.reading.turns[back.turn]?.first ?? 0; w < start.length && turn[w] === back.turn; w += 1) {
+      const at = start[w] ?? 0;
+      if (at < back.from - 0.0005 || at >= back.to - 0.0005) continue;
+      if (first < 0) first = w;
+      last = w;
+    }
+    const texts = turnTexts(root);
+    // A stretch emptied of words leaves only its paragraph to go back to.
+    if (first >= 0) selectWords(edit.reading, texts, first, last);
+    focusText(texts[back.turn]?.parentElement);
+  }, [back, edit]);
   const tokens = useMemo(() => tokensOf(opened.doc), [opened.doc]);
   const fixed = useMemo(() => corrections(edit.reading, tokens), [edit.reading, tokens]);
   useUndoKeys(editor);
@@ -153,7 +176,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
         editor={editor}
         content={content}
         edit={edit}
-        selected={correcting === null ? selected : null}
+        selected={correcting === null && timing === null ? selected : null}
         controls={controls}
         onCorrect={setCorrecting}
         onTiming={setTiming}
@@ -164,24 +187,38 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
           box={correcting.box}
           paragraph={correcting.paragraph}
           onHear={() => controls.current?.hear(Math.max(0, correcting.from - 0.3), correcting.to + 0.3)}
-          onCancel={() => setCorrecting(null)}
+          onCancel={() => {
+            setCorrecting(null);
+            setBack({ turn: Number(correcting.paragraph.dataset["turn"]), from: correcting.from, to: correcting.to });
+          }}
           onSave={(text) => {
             editor.applyEdit(correction(content, correcting.start, correcting.stop, text));
             setCorrecting(null);
-            window.getSelection()?.removeAllRanges();
+            setBack({ turn: Number(correcting.paragraph.dataset["turn"]), from: correcting.from, to: correcting.to });
           }}
         />
       )}
       {timing !== null && timing < edit.first.length && (
-        <TimingStrip
-          editor={editor}
-          content={content}
-          edit={edit}
-          word={timing}
-          recordingId={opened.recording.id}
-          controls={controls}
-          onClose={() => setTiming(null)}
-        />
+        // Docked above the rail, where it is in sight whichever word it is for
+        // (Task 3 review: in the page's flow it opened off screen).
+        <div
+          className="fixed inset-x-2 z-30 mx-auto max-w-3xl"
+          style={{ bottom: `calc(var(${PLAYER_HEIGHT}, 0px) + 0.5rem)` }}
+        >
+          <TimingStrip
+            editor={editor}
+            content={content}
+            edit={edit}
+            word={timing}
+            recordingId={opened.recording.id}
+            controls={controls}
+            onClose={() => {
+              const { turn, start, end } = edit.reading.words;
+              setBack({ turn: turn[timing] ?? 0, from: start[timing] ?? 0, to: end[timing] ?? 0 });
+              setTiming(null);
+            }}
+          />
+        </div>
       )}
       <BleepPanel
         transcriptId={transcriptId}
@@ -209,14 +246,18 @@ type PageProps = {
   corrections?: readonly Correction[];
   names?: Names;
   nameplate?: (speaker: number, label: string, name: string) => ReactNode;
+  /** Review's marks for the margin (Task 13). */
+  review?: ReviewMarks;
   selectOnTap?: boolean;
+  /** The key sheet this page's `?` and settings menu show. */
+  sheet?: Sheet;
 };
 
-function Page({ opened, transcriptId, reading, article, children, tools, muteSpans, controls, corrections: fixed, names, nameplate, selectOnTap = false }: PageProps) {
+function Page({ opened, transcriptId, reading, article, children, tools, muteSpans, controls, corrections: fixed, names, nameplate, review, selectOnTap = false, sheet = READER_SHEET }: PageProps) {
   const { recording, doc } = opened;
   return (
     <>
-      <AppBar back settings={<KeysItem sheet={READER_SHEET} />}>
+      <AppBar back settings={<KeysItem sheet={sheet} />}>
         <h1 className="min-w-0 flex-1 truncate font-reading text-lg font-semibold">{fileName(recording.path)}</h1>
         <VersionPicker recording={recording} transcript={transcriptId} />
         <UnsureNav reading={reading} model={doc.model} article={article} />
@@ -230,6 +271,7 @@ function Page({ opened, transcriptId, reading, article, children, tools, muteSpa
           {...(fixed === undefined ? {} : { corrections: fixed })}
           {...(names === undefined ? {} : { names })}
           {...(nameplate === undefined ? {} : { nameplate })}
+          {...(review === undefined ? {} : { review })}
         />
       </main>
       {recording.missing ? (

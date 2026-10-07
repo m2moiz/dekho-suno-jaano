@@ -90,5 +90,55 @@ for (const { width, height, least } of [
     }
     await page.keyboard.press("Escape");
     await expect(form).toHaveCount(0);
+
+    // Timing's dock, the same rule.
+    await selectWord(page, "hotel");
+    await tools.getByRole("button", { name: "Timing" }).click();
+    const strip = page.getByRole("region", { name: "Word timing" });
+    for (const name of ["Hear", "Done"]) {
+      const box = await strip.getByRole("button", { name }).boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(least === 44 ? 44 : 28);
+      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(width);
+    }
   });
 }
+
+test("from the keyboard alone: ] selects the unsure word with focus on Correct, Esc goes back to the text, Enter saves back to it", async ({ page }, info) => {
+  const dir = scratchDir();
+  const seeded = seed(
+    editableTranscript(
+      tone(dir, 7 + info.project.name.length / 100, `keys-${info.project.name}.wav`),
+      [
+        ["alpha", "bravo", "charlie", "delta"],
+        ["echo", "foxtrot", "golf", "hotel"],
+      ],
+      ["charlie"],
+    ),
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article p").first()).toHaveText(" alpha bravo charlie delta");
+  const tools = page.getByRole("toolbar", { name: "Selection" });
+  const selection = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+  const focused = () => page.evaluate(() => document.activeElement?.tagName ?? "");
+
+  await page.keyboard.press("]");
+  await expect(tools.getByRole("button", { name: "Correct" })).toBeFocused();
+  expect(await selection()).toBe("charlie");
+
+  await page.keyboard.press("Escape");
+  await expect(tools).toHaveCount(0);
+  expect(await focused()).toBe("P");
+  expect(await selection()).toBe("");
+
+  await page.keyboard.press("]");
+  await expect(tools.getByRole("button", { name: "Correct" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const field = page.getByRole("textbox", { name: "What was said" });
+  await expect(field).toBeFocused();
+  await field.fill("Charles Darwin");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("article p").first()).toHaveText(" alpha bravo Charles Darwin delta");
+  await expect.poll(selection).toBe("Charles Darwin");
+  expect(await focused()).toBe("P");
+});

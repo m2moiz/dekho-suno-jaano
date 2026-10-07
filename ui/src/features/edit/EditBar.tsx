@@ -2,26 +2,17 @@ import { Redo2, Undo2 } from "lucide-react";
 import { type RefObject, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FIELD_BUTTON } from "@/features/shell/field";
+import { FIELD_ICON_BUTTON } from "@/features/shell/field";
 import { unsureHighlight as wordsHighlight } from "@/features/transcript/confidence";
 import type { Reading } from "@/features/transcript/document";
 import type { Content, Editor } from "@/lib/editOps";
 import type { Correction } from "./corrections";
 import type { SaveState } from "./editing";
 import type { EditReading } from "./readContent";
-import { type Selected, selectedWords } from "./selection";
+import { type Selected, selectedWords, turnTexts } from "./selection";
 
 export const MUTED = "dsj-muted";
 export const CORRECTED = "dsj-corrected";
-
-/** The paragraphs' text nodes, by turn: the article's `p[data-turn]` children. */
-export function turnTexts(root: Element): Text[] {
-  const texts: Text[] = [];
-  for (const p of root.querySelectorAll<HTMLElement>("p[data-turn]")) {
-    if (p.firstChild instanceof Text) texts[Number(p.dataset["turn"])] = p.firstChild;
-  }
-  return texts;
-}
 
 /** The words with a muted entry in them. */
 export function mutedWords(edit: EditReading, content: Content): number[] {
@@ -128,7 +119,7 @@ export function EditBar({ editor, saving }: { editor: Editor; saving: SaveState 
   const undo = editor.undoLabel();
   const redo = editor.redoLabel();
   const said = saving !== "saved" || undo !== null || redo !== null;
-  const quiet = `size-11 ${FIELD_BUTTON}`;
+  const quiet = FIELD_ICON_BUTTON;
   return (
     <div role="toolbar" aria-label="Edit" className="flex items-center">
       <Button

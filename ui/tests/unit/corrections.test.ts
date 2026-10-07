@@ -88,6 +88,23 @@ describe("corrections", () => {
     expect(corrections(readContent(content, undefined).reading, tokensOf(doc))).toEqual([]);
   });
 
+  it("records a stretch emptied of words as a deletion, struck beside the word before it", () => {
+    const op = correction(CONTENT, 6, 7, "");
+    const after = [...CONTENT.slice(0, 6), ...op.entries, ...CONTENT.slice(7)];
+    expect(corrections(readContent(after, undefined).reading, tokens)).toEqual([
+      { turn: 0, first: 2, last: 1, original: "charlie", now: "" },
+    ]);
+  });
+
+  it("records a doubled word retyped once as the deletion of the second", () => {
+    // " bravo charlie" (entries 4 to 7) retyped as "bravo": charlie is gone, bravo kept.
+    const op = correction(CONTENT, 4, 7, "bravo");
+    const after = [...CONTENT.slice(0, 4), ...op.entries, ...CONTENT.slice(7)];
+    expect(corrections(readContent(after, undefined).reading, tokens)).toEqual([
+      { turn: 0, first: 2, last: 1, original: "charlie", now: "" },
+    ]);
+  });
+
   it("reads the transcript's own words over a stretch of time", () => {
     expect(originalText(tokens, 0.6, 1.3)).toBe("bravo charlie");
     expect(originalText(tokens, 5, 6)).toBe("");

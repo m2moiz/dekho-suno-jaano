@@ -9,7 +9,7 @@ import { type Content, type Editor, muteRange } from "@/lib/editOps";
 import { TOUCH, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import type { EditReading } from "./readContent";
-import type { Selected } from "./selection";
+import { focusKeepingSelection, focusText, type Selected } from "./selection";
 
 /** A box on screen, in viewport pixels. */
 export type Box = { top: number; left: number; bottom: number; right: number; width: number; height: number };
@@ -56,6 +56,83 @@ function besideSelection(box: Box): CSSProperties {
   const wanted = above < bar + 4 ? box.bottom + 8 : above;
   const top = Math.max(bar + 4, Math.min(wanted, window.innerHeight - rail - HEIGHT_PX - 8));
   return { top };
+}
+
+/**
+ * Move focus to the toolbar's first action when the selection on show was
+ * made from the keyboard (`]`, `[`, or Shift and an arrow, once Shift is let
+ * go), so its tools are one Tab-free step away (WCAG 2.1.1). A selection made
+ * with the pointer, or put back by the page after Correct, leaves focus alone.
+ */
+function useKeyboardReach(bar: RefObject<HTMLDivElement | null>, shown: boolean, selected: Selected | null): void {
+  // A selecting key pressed in the reader since the last selection appeared.
+  const pending = useRef(false);
+  // Shift and an arrow growing a selection: focus waits for Shift to come up.
+  const growing = useRef(false);
+  const shownNow = useRef(shown);
+  shownNow.current = shown;
+  useEffect(() => {
+    const first = () => {
+      const button = bar.current?.querySelector<HTMLElement>("button:not(:disabled)");
+      if (button != null) focusKeepingSelection(button);
+    };
+    const down = (event: KeyboardEvent) => {
+      const target = event.target as Element | null;
+      // Typing, or Correct's form (its Cancel and Save put the words back themselves).
+      if (target?.closest?.("input, textarea, select, [contenteditable], form")) {
+        pending.current = false;
+        return;
+      }
+      if (bar.current?.contains(target)) return;
+      // Only the keys that select: `]` and `[`, and Shift with a key that moves.
+      // Esc, Space and the rest select nothing, and a selection the page puts
+      // back after one (Timing's Esc, Correct's Save) keeps focus where it is.
+      if (event.shiftKey && /^(Arrow|Home|End|Page)/.test(event.key)) growing.current = true;
+      else if (event.code === "BracketRight" || event.code === "BracketLeft") pending.current = true;
+    };
+    const up = (event: KeyboardEvent) => {
+      if (event.key !== "Shift" || !growing.current) return;
+      growing.current = false;
+      if (shownNow.current) first();
+    };
+    const pointer = () => {
+      pending.current = false;
+      growing.current = false;
+    };
+    // A key that selects while the toolbar is already up (`]` from one word to
+    // the next) changes no state that would show it again.
+    const changed = () => {
+      if (!pending.current || growing.current || !shownNow.current) return;
+      pending.current = false;
+      first();
+    };
+    document.addEventListener("selectionchange", changed);
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", up, true);
+    window.addEventListener("pointerdown", pointer, true);
+    return () => {
+      window.removeEventListener("keydown", down, true);
+      window.removeEventListener("keyup", up, true);
+      window.removeEventListener("pointerdown", pointer, true);
+      document.removeEventListener("selectionchange", changed);
+    };
+  }, [bar]);
+  useEffect(() => {
+    if (!shown || !pending.current || growing.current) return;
+    pending.current = false;
+    const button = bar.current?.querySelector<HTMLElement>("button:not(:disabled)");
+    if (button != null) focusKeepingSelection(button);
+  }, [bar, shown, selected]);
+}
+
+/** The paragraph a range is in: its start's, or, from an element (a triple-click), its first word's. */
+function paragraphOf(range: Range, turn: number): HTMLElement | null {
+  const node = range.startContainer;
+  const element = node instanceof Element ? node : node.parentElement;
+  return (
+    element?.closest<HTMLElement>("p[data-turn]") ??
+    (element?.closest("article") ?? document).querySelector<HTMLElement>(`p[data-turn="${turn}"]`)
+  );
 }
 
 type Props = {
@@ -111,6 +188,7 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
       window.removeEventListener("resize", place);
     };
   }, [selected]);
+  useKeyboardReach(bar, selected !== null && box !== null, selected);
   if (selected === null || box === null) return null;
 
   const range = { start: edit.first[selected.first] ?? 0, stop: edit.stop[selected.last] ?? 0 };
@@ -131,7 +209,7 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
     const selection = window.getSelection();
     if (selection === null || selection.rangeCount === 0) return null;
     const live = selection.getRangeAt(0);
-    const paragraph = live.startContainer.parentElement?.closest<HTMLElement>("p[data-turn]");
+    const paragraph = paragraphOf(live, turn[selected.first] ?? 0);
     return paragraph ? { ...range, from, to, box: boxOf(live), paragraph } : null;
   };
 
@@ -145,6 +223,14 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
         touch ? "inset-x-2" : "",
       )}
       style={touch ? { bottom: `calc(var(${PLAYER_HEIGHT}, 0px) + 0.5rem)` } : besideSelection(box)}
+      onKeyDown={(event) => {
+        // Esc lets go of the selection and puts focus back in the text it was in.
+        if (event.key !== "Escape") return;
+        const selection = window.getSelection();
+        const paragraph = selection !== null && selection.rangeCount > 0 ? paragraphOf(selection.getRangeAt(0), turn[selected.first] ?? 0) : null;
+        selection?.removeAllRanges();
+        focusText(paragraph);
+      }}
     >
       <Button
         variant="ghost"

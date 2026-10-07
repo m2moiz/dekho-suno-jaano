@@ -1,3 +1,4 @@
+import { Check, Flag } from "lucide-react";
 import { type CSSProperties, memo, type ReactNode, type Ref } from "react";
 
 import type { Correction } from "@/features/edit/corrections";
@@ -10,6 +11,52 @@ import "./transcript.css";
 // A minute of speech fills the margin's tick; a longer turn stops there.
 const TICK_FULL_S = 60;
 const NONE: readonly Correction[] = [];
+// Half a millisecond: dsj/hatao.py rounds times to the millisecond.
+const EPS = 0.0005;
+
+/** Where Review has got to with a turn or a sentence (Hashiya spec, "The margin": the review mark). */
+export type ReviewState = "checked" | "flagged";
+
+/**
+ * Review's marks for the margin: per turn, by its index, and per sentence, by
+ * its stretch of the recording in seconds. Anything not named is unmarked.
+ * Review mode fills it (Task 13); the reader draws nothing without it.
+ */
+export type ReviewMarks = {
+  turns?: ReadonlyMap<number, ReviewState>;
+  sentences?: readonly { start: number; end: number; state: ReviewState }[];
+};
+
+/** The review mark for one turn: its own, and a count of its sentences', or nothing. */
+function ReviewMark({ own, sentences }: { own: ReviewState | undefined; sentences: readonly ReviewState[] }) {
+  const checked = sentences.filter((s) => s === "checked").length;
+  const flagged = sentences.length - checked;
+  if (own === undefined && sentences.length === 0) return null;
+  return (
+    <span className="review" data-review={own ?? "sentences"}>
+      {own === "checked" && (
+        <span className="checked">
+          <Check aria-hidden className="size-3.5" /> Checked
+        </span>
+      )}
+      {own === "flagged" && (
+        <span>
+          <Flag aria-hidden className="size-3.5" /> Flagged
+        </span>
+      )}
+      {own === undefined && checked > 0 && (
+        <span className="checked" aria-label={`${checked} of ${sentences.length} sentences checked`}>
+          <Check aria-hidden className="size-3.5" /> {checked}
+        </span>
+      )}
+      {own === undefined && flagged > 0 && (
+        <span aria-label={`${flagged} flagged`}>
+          <Flag aria-hidden className="size-3.5" /> {flagged}
+        </span>
+      )}
+    </span>
+  );
+}
 
 type Props = {
   reading: Reading;
@@ -19,6 +66,8 @@ type Props = {
   names?: Names;
   /** Draws a speaker's nameplate; the reader passes a renamable one (Task 5). */
   nameplate?: (speaker: number, label: string, name: string) => ReactNode;
+  /** Review's marks, shown in the margin; none in the reader. */
+  review?: ReviewMarks;
 };
 
 /**
@@ -39,6 +88,7 @@ export const TranscriptView = memo(function TranscriptView({
   corrections = NONE,
   names = NO_NAMES,
   nameplate,
+  review,
 }: Props) {
   const byTurn = new Map<number, Correction[]>();
   for (const c of corrections) byTurn.set(c.turn, [...(byTurn.get(c.turn) ?? []), c]);
@@ -49,7 +99,11 @@ export const TranscriptView = memo(function TranscriptView({
         {reading.turns.map((turn, i) => {
           const name = displayName(reading.speakers, names, turn.speaker);
           const label = turn.speaker === null ? undefined : reading.speakers[turn.speaker];
-          const seconds = Math.max(0, (end[turn.first + turn.count - 1] ?? turn.start) - turn.start);
+          const until = end[turn.first + turn.count - 1] ?? turn.start;
+          const seconds = Math.max(0, until - turn.start);
+          const marks = (review?.sentences ?? [])
+            .filter((m) => m.start >= turn.start - EPS && m.start < until - EPS)
+            .map((m) => m.state);
           const style = {
             "--speaker": speakerColour(turn.speaker),
             "--tick": `${Math.min(100, (seconds / TICK_FULL_S) * 100)}%`,
@@ -63,9 +117,10 @@ export const TranscriptView = memo(function TranscriptView({
                   (nameplate ? nameplate(turn.speaker, label, name) : <span className="nameplate">{name}</span>)}
                 <time dateTime={`PT${turn.start.toFixed(2)}S`}>{durationLabel(turn.start)}</time>
                 <span className="tick" aria-hidden />
+                {review !== undefined && <ReviewMark own={review.turns?.get(i)} sentences={marks} />}
                 {byTurn.get(i)?.map((c) => (
-                  <span key={c.first} className="correction" dir="auto">
-                    <span className="sr-only">Was: </span>
+                  <span key={`${c.first}:${c.last}`} className="correction" dir="auto">
+                    <span className="sr-only">{c.now === "" ? "Deleted: " : "Was: "}</span>
                     <del>{c.original === "" ? "nothing" : c.original}</del>
                   </span>
                 ))}

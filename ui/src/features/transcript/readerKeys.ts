@@ -10,12 +10,19 @@ import type { PlayerControls } from "@/features/player/Player";
 import { showKeys } from "@/features/shell/KeySheet";
 import type { Sheet } from "@/features/shell/keys";
 
-// Where a key is someone else's: typing, a button's own Space, a slider's arrows, an open menu or dialog.
-export const NOT_OURS = "input, textarea, select, button, a, [contenteditable], [role=slider], [role=menu], [role=dialog], [role=listbox]";
+// Where every key is someone else's: typing, and an open menu, list or dialog.
+export const NOT_OURS = "input, textarea, select, [contenteditable], [role=menu], [role=dialog], [role=listbox]";
+// What owns Space and Enter, and only those: pressing a button or a link, and
+// a slider (the waveform, a timing edge). `]`, `[`, `?` and Esc still work
+// with one of them focused.
+export const PRESSABLE = "button, a, [role=button], [role=slider]";
 
 export function isOurs(event: KeyboardEvent): boolean {
   if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return false;
-  return !(event.target as Element | null)?.closest?.(NOT_OURS);
+  const target = event.target as Element | null;
+  if (target?.closest?.(NOT_OURS)) return false;
+  const press = event.code === "Space" || event.key === " " || event.key === "Enter";
+  return !(press && target?.closest?.(PRESSABLE));
 }
 
 export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet: Sheet): void {
