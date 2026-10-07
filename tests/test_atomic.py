@@ -184,3 +184,26 @@ def test_a_pair_is_written_whole(tmp_path: Path) -> None:
     pair = [(tmp_path / "key.json", "{}"), (tmp_path / "key.txt", "text\n")]
     atomic_write_texts(pair)
     assert [p.read_text(encoding="utf-8") for p, _ in pair] == ["{}", "text\n"]
+
+
+def test_two_threads_writing_one_file_never_take_each_others_temp(tmp_path: Path) -> None:
+    """One server, two requests at once: the pid alone named the temp, and one renamed it away."""
+    single = tmp_path / "key.json"
+    pair = [tmp_path / "key.json", tmp_path / "key.txt"]
+    failures: list[BaseException] = []
+
+    def writer(mark: str) -> None:
+        try:
+            for _ in range(200):
+                atomic_write_text(single, mark)
+                atomic_write_texts([(p, mark) for p in pair])
+        except BaseException as exc:  # collected, then asserted empty
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(m,)) for m in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json", "key.txt"]

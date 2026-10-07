@@ -53,9 +53,11 @@ __all__ = [
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -135,23 +137,72 @@ def _row(transcript_id: int) -> _Row:
     return _Row(found.json_path, recording.path, recording.duration_s, found.language)
 
 
-def _read(transcript_id: int) -> tuple[dict[str, Any], str]:
-    """The transcript's payload and its sha, from one read, so the two cannot disagree.
+# A file's size and modification time: what says it is the file that was read.
+type _Stamp = tuple[int, int]
 
-    Read before WRITING is taken, never under it: the transcript may sit in an
-    online-only Google Drive folder, and its download must not hold up every
-    other request. A run that moves the file (keep_earlier_roman_run) moves its
-    bytes unchanged, so the sha still holds at its new name.
-    """
+
+def _stamp(path: Path) -> _Stamp:
+    found = path.stat()
+    return found.st_size, found.st_mtime_ns
+
+
+def _gone(transcript_id: int, json_path: Path) -> NoSuchTranscript:
+    return NoSuchTranscript(
+        f"Transcript {transcript_id} was last seen at {json_path}, and that file is "
+        f"gone. The library is only an index; the JSON file is the transcript."
+    )
+
+
+def _read_stamped(transcript_id: int) -> tuple[dict[str, Any], str, _Stamp]:
+    """The transcript's payload, its sha and its stamp, from one open, so none can disagree."""
     row = _row(transcript_id)
     try:
-        raw = row.json_path.read_bytes()
+        with row.json_path.open("rb") as f:
+            found = os.fstat(f.fileno())
+            raw = f.read()
     except FileNotFoundError:
-        raise NoSuchTranscript(
-            f"Transcript {transcript_id} was last seen at {row.json_path}, and that file is "
-            f"gone. The library is only an index; the JSON file is the transcript."
-        ) from None
-    return cast("dict[str, Any]", json.loads(raw)), hashlib.sha256(raw).hexdigest()
+        raise _gone(transcript_id, row.json_path) from None
+    stamp = (found.st_size, found.st_mtime_ns)
+    return cast("dict[str, Any]", json.loads(raw)), hashlib.sha256(raw).hexdigest(), stamp
+
+
+def _read(transcript_id: int) -> tuple[dict[str, Any], str]:
+    """The transcript's payload and its sha, from one read, so the two cannot disagree."""
+    payload, digest, _ = _read_stamped(transcript_id)
+    return payload, digest
+
+
+# How many times a transcript rewritten while it was being read is read again
+# before the last read is used as it is. A run writes its transcript once, at
+# the end, so a second read is already rare.
+_REREADS = 3
+
+
+@contextmanager
+def _held(transcript_id: int) -> Generator[tuple[_Row, dict[str, Any], str]]:
+    """WRITING, with the transcript's row, payload and sha as they are while it is held.
+
+    The transcript is read before WRITING is taken, never under it: it may sit
+    in an online-only Google Drive folder, and its download must not hold up
+    every other request. Under the lock only the row (the library's, local) and
+    the file's size and modification time are looked at again: a run that
+    moved the file (keep_earlier_roman_run) moved its bytes unchanged, so the
+    row says where, and a stamp that differs means the transcript was written
+    again while it was read, so it is read again.
+    """
+    for attempt in range(1, _REREADS + 1):
+        payload, digest, stamp = _read_stamped(transcript_id)
+        with WRITING:
+            row = _row(transcript_id)
+            try:
+                now = _stamp(row.json_path)
+            except FileNotFoundError:
+                raise _gone(transcript_id, row.json_path) from None
+            if now == stamp or attempt == _REREADS:
+                if now != stamp:
+                    _log.warning("%s kept changing while it was read", row.json_path)
+                yield row, payload, digest
+                return
 
 
 def _payload(transcript_id: int) -> dict[str, Any]:
@@ -341,11 +392,7 @@ def open_edits(transcript_id: int, *, report: bool = False) -> Opened:
             so no list can be built without guessing where words stop.
         dsj.hatao.InvalidDocument: the saved list is broken, named.
     """
-    payload, digest = _read(transcript_id)
-    with WRITING:
-        # The row again, under the lock: a run may have moved the transcript
-        # since, and its list is where the row says now.
-        row = _row(transcript_id)
+    with _held(transcript_id) as (row, payload, digest):
         path = _settle(row, payload, digest)
         notice = notice_path(path)
         replaced = notice.read_text(encoding="utf-8") if notice.is_file() else None
@@ -405,9 +452,7 @@ def save_edits(
         dsj.hatao.InvalidDocument: the entries are broken, named; nothing is written.
         TranscriptChanged: the transcript was made again since the page loaded the list.
     """
-    payload, digest = _read(transcript_id)
-    with WRITING:
-        row = _row(transcript_id)
+    with _held(transcript_id) as (row, payload, digest):
         path = _settle(row, payload, digest)
         names: Mapping[str, str] = hatao.load(path).names if path.is_file() else {}
         if transcript_sha != digest:
@@ -437,9 +482,7 @@ def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
         dsj.hatao.InvalidDocument: a label is blank; nothing is written.
     """
     kept = {label: name.strip() for label, name in names.items() if name.strip()}
-    payload, digest = _read(transcript_id)
-    with WRITING:
-        row = _row(transcript_id)
+    with _held(transcript_id) as (row, payload, digest):
         doc, _ = _current(row, payload, _settle(row, payload, digest))
         return _save(transcript_id, doc.content, kept, payload, digest)
 

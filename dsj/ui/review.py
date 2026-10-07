@@ -37,6 +37,7 @@ __all__ = [
 import json
 import logging
 import math
+import threading
 from bisect import bisect_right
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -63,6 +64,20 @@ _FLAG_WORDS = {
     "overlap": "overlapping talk",
     "cut_off": "cut off",
 }
+
+
+# One lock per transcript, held while its answer key is written: two writes at
+# once (a double click; the routes run on a thread pool) would interleave their
+# renames into a JSON from one and a text from the other, or both move the
+# same earlier key aside. Per transcript, so a slow write to one Google Drive
+# folder does not hold up another transcript's.
+_KEY_LOCKS: dict[int, threading.Lock] = {}
+_KEY_LOCKS_GUARD = threading.Lock()
+
+
+def _key_lock(transcript_id: int) -> threading.Lock:
+    with _KEY_LOCKS_GUARD:
+        return _KEY_LOCKS.setdefault(transcript_id, threading.Lock())
 
 
 class InvalidReview(ValueError):
@@ -310,7 +325,6 @@ def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWr
         # Made again in the moment between the two reads.
         raise TranscriptChanged(_MADE_AGAIN)
     labels = edits.labels_of(opened)
-    row = _transcript(transcript_id)
     segments = [
         {
             "start": s.start,
@@ -325,6 +339,20 @@ def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWr
             document.segments, _texts(opened.doc.content, document.segments), strict=True
         )
     ]
+    with _key_lock(transcript_id):
+        return _write_key(transcript_id, document, segments, unchecked)
+
+
+def _write_key(
+    transcript_id: int, document: ReviewDocument, segments: list[dict[str, Any]], unchecked: int
+) -> ReferenceWritten:
+    """Write the answer key beside the transcript, where the library says it is now.
+
+    Held under the transcript's key lock. The row is read again here, so a key
+    lands beside the transcript even when a run moved it while the key was
+    being made.
+    """
+    row = _transcript(transcript_id)
     key = {
         "format": "dsj-reference",
         "version": 1,
@@ -342,4 +370,6 @@ def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWr
         _keep_earlier(as_json, as_text)
     text = json.dumps(key, ensure_ascii=False, indent=1)
     atomic_write_texts([(as_json, text), (as_text, _plain(segments))], fsync=True)
-    return ReferenceWritten(files=[as_json.name, as_text.name], segments=total, unchecked=unchecked)
+    return ReferenceWritten(
+        files=[as_json.name, as_text.name], segments=len(segments), unchecked=unchecked
+    )

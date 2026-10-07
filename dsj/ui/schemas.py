@@ -71,6 +71,12 @@ type JobState = Literal[
 type RenderState = Literal["starting", "rendering", "done", "failed"]
 
 
+# The sha256 of a transcript JSON's bytes, as dsj/ui/edits.py transcript_sha
+# writes it (#249): 64 lowercase hex digits, and nothing else, since a page's
+# copy of it names the file its refused edits are kept in.
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 # What the library row calls a transcript's language (Hashiya spec, Library):
 # worked out from its run and its script by dsj/ui/routes/recording.py.
 type LanguageTag = Literal["urdu", "mixed", "english"]
@@ -236,7 +242,7 @@ class Edits(BaseModel):
     # The sha256 of the transcript JSON this list goes with: the page sends it
     # back with each save, so a list loaded before the transcript was made
     # again is never saved over the new one (#249).
-    transcript_sha: str
+    transcript_sha: Sha256
 
 
 class ListContent(BaseModel):
@@ -249,7 +255,7 @@ class EditsUpdate(ListContent):
     """The page's whole edit list, to save in place of the one before."""
 
     # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
-    transcript_sha: str
+    transcript_sha: Sha256
 
 
 class NamesUpdate(BaseModel):
@@ -355,7 +361,7 @@ class ReviewDocument(BaseModel):
     version: Literal[1]
     # The sha256 of the transcript JSON the review was made against: when the
     # transcript is made again, the page re-checks the sentences by span.
-    transcript_sha: str
+    transcript_sha: Sha256
     review_pass: ReviewPass
     # Where the person was, in seconds, so leaving and coming back resumes there.
     cursor_s: float
@@ -369,7 +375,7 @@ class Review(BaseModel):
     """A transcript's review, or None, and the sha of the transcript as it is now."""
 
     document: ReviewDocument | None
-    transcript_sha: str
+    transcript_sha: Sha256
 
 
 class ReferenceRequest(BaseModel):

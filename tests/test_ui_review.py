@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from dataclasses import replace
@@ -19,9 +20,10 @@ import pytest
 from conftest import page, tokens, update
 
 from dsj import hatao
-from dsj.ui import edits
+from dsj.ui import edits, review
 from dsj.ui.edits import edits_path, source_path
 from dsj.ui.review import review_path
+from dsj.ui.schemas import ReviewDocument
 
 
 def sha(seeded: dict[str, Any]) -> str:
@@ -343,9 +345,9 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
 ) -> None:
     """A Drive download must not hold every request up; two saves still never interleave."""
     reads_free: list[bool] = []
-    read = edits._read  # pyright: ignore[reportPrivateUsage]
+    read = edits._read_stamped  # pyright: ignore[reportPrivateUsage]
 
-    def watched(transcript_id: int) -> tuple[dict[str, Any], str]:
+    def watched(transcript_id: int) -> tuple[dict[str, Any], str, tuple[int, int]]:
         # Another thread can take the lock while the transcript is being read.
         got: list[bool] = []
 
@@ -370,7 +372,7 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
         save(doc, path)
         active[0] -= 1
 
-    monkeypatch.setattr(edits, "_read", watched)
+    monkeypatch.setattr(edits, "_read_stamped", watched)
     monkeypatch.setattr(hatao, "save", slow)
     opened = edits.open_edits(seeded["id"])
     content = tuple(
@@ -392,3 +394,88 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
     doc = hatao.load(edits_path(seeded["json"]))
     assert doc.names == {"SPEAKER_00": "Ali"}
     assert " their" in [e.text for e in doc.content if isinstance(e, hatao.Item)]
+
+
+def test_two_answer_keys_written_at_once_never_fail_or_mismatch(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A double click, on the server's thread pool: every pair on disk is one write's pair.
+
+    Each rename sleeps a millisecond, which lets the other thread run there:
+    without it the GIL hands the threads turns so rarely inside the write that
+    a race shows about one run in five (observed, with the key lock removed).
+    """
+    rename = os.replace
+
+    def slow(src: Any, dst: Any) -> None:
+        time.sleep(0.001)
+        rename(src, dst)
+
+    monkeypatch.setattr(os, "replace", slow)
+    complete = ReviewDocument.model_validate(document(sha(seeded), "checked", "checked"))
+    partial = ReviewDocument.model_validate(document(sha(seeded), "checked", "unchecked"))
+    failures: list[BaseException] = []
+
+    def writer(doc: ReviewDocument) -> None:
+        try:
+            for _ in range(40):
+                review.save_review(seeded["id"], doc)
+                review.reference(seeded["id"], allow_partial=True)
+        except BaseException as exc:  # collected, then asserted empty
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(d,)) for d in (complete, partial)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
+    folder = seeded["json"].parent
+    keys = sorted(folder.glob("talk.reference*.json"))
+    assert keys
+    for key in keys:
+        whole = json.loads(key.read_text())["complete"]
+        text = key.with_suffix(".txt").read_text()
+        assert whole is ("[not checked]" not in text), key.name
+    assert not list(folder.glob(".*.tmp"))
+
+
+def test_a_sha_that_is_not_one_is_refused_as_a_bad_request(seeded: dict[str, Any]) -> None:
+    """It names a file the refused edits are kept in: a "/" in it must never reach the disk."""
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    content = client.get(f"{route}/edits").json()["content"]
+    for bad in ("../../x", sha(seeded).upper(), sha(seeded)[:63], ""):
+        edited = client.put(f"{route}/edits", json={"content": content, "transcript_sha": bad})
+        assert edited.status_code == 422, (bad, edited.text)
+        broken = {**document(sha(seeded)), "transcript_sha": bad}
+        reviewed = client.put(f"{route}/review", json=broken)
+        assert reviewed.status_code == 422, (bad, reviewed.text)
+    listed = edits_path(seeded["json"])
+    assert not listed.parent.exists() or not any(listed.parent.iterdir())
+
+
+def test_a_transcript_written_again_while_it_was_read_is_read_again(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read happens before the lock: a re-make landing in between must not be missed."""
+    read = edits._read_stamped  # pyright: ignore[reportPrivateUsage]
+    calls: list[int] = []
+
+    def remade_after_the_first(transcript_id: int) -> tuple[dict[str, Any], str, tuple[int, int]]:
+        got = read(transcript_id)
+        calls.append(transcript_id)
+        if len(calls) == 1:
+            transcribe_again(seeded)
+            # A different size as well as a later time, so the stamp differs on any file system.
+            payload = json.loads(seeded["json"].read_text())
+            seeded["json"].write_text(json.dumps({**payload, "remade": True}))
+        return got
+
+    correct_there(seeded)
+    monkeypatch.setattr(edits, "_read_stamped", remade_after_the_first)
+    opened = edits.open_edits(seeded["id"])
+    assert len(calls) == 2
+    assert opened.transcript_sha == sha(seeded)
+    assert " world" in [e.text for e in opened.doc.content if isinstance(e, hatao.Item)]
+    assert opened.replaced is not None

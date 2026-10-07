@@ -1,6 +1,6 @@
 // What the export waits for: the server exports its own copy of the edit list,
 // so the page must not ask for a file while that copy is behind the page's (#244).
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -47,6 +47,8 @@ const ok = () => Response.json(SAVED);
 const muteOne = (editor: Editor, entry: number) => editor.applyEdit({ kind: "mute", entries: [entry], muted: [true] });
 
 afterEach(() => {
+  // Unmounts each test's hook, so its "leave?" listener does not outlive it.
+  cleanup();
   fetchMock.mockReset();
   dismissError();
 });
@@ -140,5 +142,39 @@ describe("useSave settle", () => {
     muteOne(e.editor, 2);
     await expect(result.current.settle()).rejects.toThrow(/Reload the page/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("after the refusal, asks before leaving only for what was typed while it flew", async () => {
+    const e = editable();
+    renderHook(() => useSave(7, e));
+    const server = slowServer();
+    const refusal = { error: "TranscriptChanged", message: "Reload the page.", request: "/api/transcripts/7/edits" };
+    const leaving = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(server.sent).toHaveLength(1));
+    // Typed while the save that will be refused is in flight: the server never sees it.
+    muteOne(e.editor, 2);
+    server.answers[0]?.(Response.json(refusal, { status: 409 }));
+    await vi.waitFor(() => expect(currentError()?.error).toBe("TranscriptChanged"));
+    expect(leaving()).toBe(true);
+    expect(server.sent).toHaveLength(1);
+  });
+
+  it("after the refusal, with nothing typed since, leaves without asking", async () => {
+    const e = editable();
+    renderHook(() => useSave(7, e));
+    const server = slowServer();
+    const refusal = { error: "TranscriptChanged", message: "Reload the page.", request: "/api/transcripts/7/edits" };
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(server.sent).toHaveLength(1));
+    server.answers[0]?.(Response.json(refusal, { status: 409 }));
+    await vi.waitFor(() => expect(currentError()?.error).toBe("TranscriptChanged"));
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });

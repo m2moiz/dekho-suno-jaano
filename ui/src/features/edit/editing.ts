@@ -162,9 +162,12 @@ export function useSave(transcriptId: number, { editor, renderable, sha }: Edita
         } catch (thrown) {
           pending.current = false;
           if (thrown instanceof ApiError && thrown.detail.error === TRANSCRIPT_CHANGED) {
-            // Kept aside by the server, so leaving loses nothing: no "leave?" prompt.
+            // What was sent is kept aside by the server, so leaving loses none
+            // of it. Anything typed while it was in flight was not: that still
+            // counts as unsaved, and leaving or reloading asks first.
             outdated = true;
-            sent = editor.content;
+            sent = content;
+            pending.current = editor.content !== sent;
           }
           if (live) {
             setState("failed");
