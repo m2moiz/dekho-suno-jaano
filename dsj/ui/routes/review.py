@@ -11,7 +11,14 @@ from fastapi import APIRouter
 
 from dsj.ui import review
 from dsj.ui.routes.marks import transcript_number
-from dsj.ui.schemas import ReferenceRequest, ReferenceWritten, Review, ReviewDocument
+from dsj.ui.schemas import (
+    ReferenceRequest,
+    ReferenceWritten,
+    Review,
+    ReviewDocument,
+    ReviewPatch,
+    ReviewSaved,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -20,13 +27,35 @@ router = APIRouter(prefix="/api")
 def read_review(transcript_id: str) -> Review:
     """The transcript's review, or none, and the sha of the transcript as it is now."""
     document, digest = review.read_review(transcript_number(transcript_id))
-    return Review(document=document, transcript_sha=digest)
+    sha = None if document is None else review.review_sha(document)
+    return Review(document=document, transcript_sha=digest, review_sha=sha)
 
 
 @router.put("/transcripts/{transcript_id}/review")
-def save_review(transcript_id: str, document: ReviewDocument) -> ReviewDocument:
-    """Save the page's review in place of the last one, or refuse it whole, naming the segment."""
-    return review.save_review(transcript_number(transcript_id), document)
+def save_review(transcript_id: str, document: ReviewDocument) -> ReviewSaved:
+    """Save the page's review in place of the last one, or refuse it whole, naming the segment.
+
+    The answer is its sha, not the review sent back: the page already has it (#251).
+    """
+    saved = review.save_review(transcript_number(transcript_id), document)
+    return ReviewSaved(review_sha=review.review_sha(saved), updated_at=saved.updated_at)
+
+
+@router.patch("/transcripts/{transcript_id}/review")
+def patch_review(transcript_id: str, change: ReviewPatch) -> ReviewSaved:
+    """Save one change to the review, made against the review `review_sha` names (#251)."""
+    saved = review.patch_review(
+        transcript_number(transcript_id),
+        sha=change.transcript_sha,
+        against=change.review_sha,
+        start=change.start,
+        delete=change.delete,
+        insert=change.insert,
+        corrections=change.corrections,
+        review_pass=change.review_pass,
+        cursor_s=change.cursor_s,
+    )
+    return ReviewSaved(review_sha=review.review_sha(saved), updated_at=saved.updated_at)
 
 
 @router.post("/transcripts/{transcript_id}/reference")

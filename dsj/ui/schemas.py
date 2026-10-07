@@ -21,6 +21,8 @@ from __future__ import annotations
 __all__ = [
     "EditEntry",
     "Edits",
+    "EditsPatch",
+    "EditsSaved",
     "EditsUpdate",
     "Engine",
     "EngineName",
@@ -43,6 +45,8 @@ __all__ = [
     "ReviewDocument",
     "ReviewFlag",
     "ReviewPass",
+    "ReviewPatch",
+    "ReviewSaved",
     "ReviewSegment",
     "SegmentState",
     "TitleUpdate",
@@ -243,6 +247,9 @@ class Edits(BaseModel):
     # back with each save, so a list loaded before the transcript was made
     # again is never saved over the new one (#249).
     transcript_sha: Sha256
+    # The sha256 of this list itself, its entries and names (dsj/ui/edits.py
+    # list_sha): what the page's next patch is made against (#251).
+    list_sha: Sha256
 
 
 class ListContent(BaseModel):
@@ -256,6 +263,33 @@ class EditsUpdate(ListContent):
 
     # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
     transcript_sha: Sha256
+
+
+class EditsPatch(BaseModel):
+    """One change to the edit list (#251): `delete` entries at `start` replaced by `insert`.
+
+    Made against the list whose sha is `list_sha`, so two patches made against
+    the same list never both apply. A 2.5 h transcript's whole list is about
+    3.5 MB; one correction's patch is a few entries.
+    """
+
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: Sha256
+    # The sha of the list the change was made to (Edits.list_sha, or the last EditsSaved's).
+    list_sha: Sha256
+    start: int
+    delete: int
+    insert: list[EditEntry]
+
+
+class EditsSaved(BaseModel):
+    """What a patch answers: the list's new sha and what a render would mute, never the entries."""
+
+    list_sha: Sha256
+    edited_at: str
+    # As Edits.spans and Edits.unrenderable.
+    spans: list[tuple[float, float]] | None
+    unrenderable: str | None
 
 
 class NamesUpdate(BaseModel):
@@ -376,6 +410,34 @@ class Review(BaseModel):
 
     document: ReviewDocument | None
     transcript_sha: Sha256
+    # The sha of the review as saved (dsj/ui/review.py review_sha), or None
+    # with no review: what the page's first patch is made against (#251).
+    review_sha: Sha256 | None
+
+
+class ReviewPatch(BaseModel):
+    """One change to the review (#251): segments spliced, corrections appended, pass and cursor set.
+
+    Made against the review whose sha is `review_sha`, as EditsPatch is.
+    """
+
+    # The sha of the transcript as the page loaded it: the review is saved under it.
+    transcript_sha: Sha256
+    review_sha: Sha256
+    start: int
+    delete: int
+    insert: list[ReviewSegment]
+    # Corrections made since the last save, added after the ones the review holds.
+    corrections: list[ReviewCorrection]
+    review_pass: ReviewPass
+    cursor_s: float
+
+
+class ReviewSaved(BaseModel):
+    """What a save of the review answers: its new sha and when, never the review itself."""
+
+    review_sha: Sha256
+    updated_at: str
 
 
 class ReferenceRequest(BaseModel):

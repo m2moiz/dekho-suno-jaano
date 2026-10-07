@@ -21,6 +21,8 @@ from dsj.ui import edits, words
 from dsj.ui.schemas import (
     EditEntry,
     Edits,
+    EditsPatch,
+    EditsSaved,
     EditsUpdate,
     ItemEntry,
     ListContent,
@@ -42,6 +44,19 @@ def transcript_number(transcript_id: str) -> int:
     return int(transcript_id)
 
 
+def _renderable(doc: hatao.Document, duration_s: float | None) -> tuple[
+    list[tuple[float, float]] | None, str | None
+]:
+    """The stretches a render of `doc` silences, or None and why it cannot be rendered."""
+    try:
+        # A length the library never learned leaves the last span unclipped,
+        # which plays the same: nothing is after the recording's end to mute.
+        spans = hatao.spans_to_mute(doc, duration_s=math.inf if duration_s is None else duration_s)
+    except hatao.RenderRefused as exc:
+        return None, str(exc)
+    return spans, None
+
+
 def _wire(opened: edits.Opened) -> Edits:
     content: list[EditEntry] = []
     for entry, confidence in zip(opened.doc.content, opened.confidence, strict=True):
@@ -61,17 +76,7 @@ def _wire(opened: edits.Opened) -> Edits:
                     confidence=confidence,
                 )
             )
-    spans: list[tuple[float, float]] | None = None
-    unrenderable: str | None = None
-    try:
-        # A length the library never learned leaves the last span unclipped,
-        # which plays the same: nothing is after the recording's end to mute.
-        spans = hatao.spans_to_mute(
-            opened.doc,
-            duration_s=math.inf if opened.duration_s is None else opened.duration_s,
-        )
-    except hatao.RenderRefused as exc:
-        unrenderable = str(exc)
+    spans, unrenderable = _renderable(opened.doc, opened.duration_s)
     return Edits(
         content=content,
         names=dict(opened.doc.names),
@@ -81,6 +86,7 @@ def _wire(opened: edits.Opened) -> Edits:
         unrenderable=unrenderable,
         replaced=opened.replaced,
         transcript_sha=opened.transcript_sha,
+        list_sha=edits.list_sha(opened.doc),
     )
 
 
@@ -115,6 +121,30 @@ def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
     found = transcript_number(transcript_id)
     return _wire(edits.save_edits(found, entries(update), update.transcript_sha))
+
+
+@router.patch("/transcripts/{transcript_id}/edits")
+def patch_edits(transcript_id: str, change: EditsPatch) -> EditsSaved:
+    """Save one change to the edit list, made against the list `list_sha` names (#251).
+
+    The answer is the new list's sha and what a render would mute, never the
+    entries: on a 2.5 h transcript those were 3.5 MB each way per correction.
+    """
+    saved = edits.patch_edits(
+        transcript_number(transcript_id),
+        change.transcript_sha,
+        change.list_sha,
+        change.start,
+        change.delete,
+        tuple(_entry(entry) for entry in change.insert),
+    )
+    spans, unrenderable = _renderable(saved.doc, saved.duration_s)
+    return EditsSaved(
+        list_sha=edits.list_sha(saved.doc),
+        edited_at=saved.edited_at,
+        spans=spans,
+        unrenderable=unrenderable,
+    )
 
 
 @router.put("/transcripts/{transcript_id}/names")

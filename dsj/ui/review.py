@@ -26,14 +26,18 @@ from __future__ import annotations
 
 __all__ = [
     "InvalidReview",
+    "ReviewChanged",
     "ReviewIncomplete",
+    "patch_review",
     "progress",
     "read_review",
     "reference",
     "review_path",
+    "review_sha",
     "save_review",
 ]
 
+import hashlib
 import json
 import logging
 import math
@@ -49,7 +53,13 @@ from dsj.atomic import atomic_write_text, atomic_write_texts
 from dsj.suno import clock
 from dsj.ui import edits
 from dsj.ui.edits import NoSuchTranscript, TranscriptChanged, edits_path, transcript_sha
-from dsj.ui.schemas import ReferenceWritten, ReviewDocument, ReviewSegment
+from dsj.ui.schemas import (
+    ReferenceWritten,
+    ReviewCorrection,
+    ReviewDocument,
+    ReviewPass,
+    ReviewSegment,
+)
 from dsj.ui.store import Library, Transcript, library_path
 
 _log = logging.getLogger(__name__)
@@ -86,6 +96,19 @@ class InvalidReview(ValueError):
 
 class ReviewIncomplete(ValueError):
     """An answer key asked for while sentences are unchecked, without allow_partial."""
+
+
+class ReviewChanged(RuntimeError):
+    """A patch was made against a review the server no longer holds: it changed elsewhere (#251)."""
+
+
+def review_sha(document: ReviewDocument) -> str:
+    """The sha256 of a review as the server holds it: of its JSON, as it is written (#251).
+
+    The file is `model_dump_json()`'s text, and a review read back dumps to
+    the same text, so a patch can name the review it was made against.
+    """
+    return hashlib.sha256(document.model_dump_json().encode()).hexdigest()
 
 
 def review_path(json_path: Path) -> Path:
@@ -185,6 +208,79 @@ def save_review(transcript_id: int, document: ReviewDocument) -> ReviewDocument:
     with edits.WRITING:
         path = review_path(_transcript(transcript_id).json_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, document.model_dump_json(), fsync=True)
+    return document
+
+
+def patch_review(
+    transcript_id: int,
+    *,
+    sha: str,
+    against: str,
+    start: int,
+    delete: int,
+    insert: Sequence[ReviewSegment],
+    corrections: Sequence[ReviewCorrection],
+    review_pass: ReviewPass,
+    cursor_s: float,
+) -> ReviewDocument:
+    """Put `insert` in place of `delete` segments at `start` of the review whose sha is `against`.
+
+    One change, not the whole review (#251): the segments spliced, the
+    corrections appended, the pass and the cursor set, `updated_at` now, and
+    `transcript_sha` the page's `sha`, which must be the transcript's as it is.
+    Checked as `save_review` checks a review and written as it writes one,
+    under the same lock, so two patches made against the same review cannot
+    both apply: the second finds it changed and is refused. The transcript is
+    hashed before the lock is taken, as `read_review` hashes it.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        TranscriptChanged: the transcript was made again since the page loaded the review.
+        ReviewChanged: there is no saved review, or it is not the one the patch was made against.
+        InvalidReview: `start` and `delete` reach outside the segments, the
+            saved review cannot be read, or the result is broken, named;
+            nothing is written.
+    """
+    if transcript_sha(_transcript(transcript_id).json_path) != sha:
+        raise TranscriptChanged(
+            "This transcript was made again while its review was open, so this change is to "
+            "sentences it may no longer have. Reload the page to review the new transcript."
+        )
+    with edits.WRITING:
+        path = review_path(_transcript(transcript_id).json_path)
+        raw = path.read_text(encoding="utf-8") if path.is_file() else None
+        if raw is None:
+            raise ReviewChanged(
+                "There is no saved review for this change to go into, so it was not saved. "
+                "Reload the page to load the review again."
+            )
+        try:
+            held = ReviewDocument.model_validate_json(raw)
+        except ValueError as exc:
+            raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
+        if review_sha(held) != against:
+            raise ReviewChanged(
+                "This review was changed in another tab or window after this page loaded it, "
+                "so this change was not saved. Reload the page to load it again."
+            )
+        size = len(held.segments)
+        if not (0 <= start <= size and 0 <= delete <= size - start):
+            raise InvalidReview(
+                f"the change replaces segments from start {start}, delete {delete}, of {size}; "
+                f"it must lie inside the review"
+            )
+        document = ReviewDocument(
+            version=1,
+            transcript_sha=sha,
+            review_pass=review_pass,
+            cursor_s=cursor_s,
+            started_at=held.started_at,
+            updated_at=datetime.now(UTC).isoformat(timespec="milliseconds"),
+            segments=[*held.segments[:start], *insert, *held.segments[start + delete :]],
+            corrections=[*held.corrections, *corrections],
+        )
+        _check(document)
         atomic_write_text(path, document.model_dump_json(), fsync=True)
     return document
 

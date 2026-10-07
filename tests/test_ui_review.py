@@ -74,7 +74,7 @@ def test_a_transcript_with_no_review_says_so_and_names_its_own_sha(
 ) -> None:
     reply = page().get(f"/api/transcripts/{seeded['id']}/review")
     assert reply.status_code == 200, reply.text
-    assert reply.json() == {"document": None, "transcript_sha": sha(seeded)}
+    assert reply.json() == {"document": None, "transcript_sha": sha(seeded), "review_sha": None}
 
 
 def test_a_saved_review_comes_back_and_lives_beside_the_library(

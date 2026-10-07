@@ -33,8 +33,10 @@ from __future__ import annotations
 __all__ = [
     "SOURCE",
     "WRITING",
+    "ListChanged",
     "NoSuchTranscript",
     "Opened",
+    "Saved",
     "TranscriptChanged",
     "as_payload",
     "display_name",
@@ -42,8 +44,10 @@ __all__ = [
     "engine_of",
     "kept_with",
     "labels_of",
+    "list_sha",
     "notice_path",
     "open_edits",
+    "patch_edits",
     "save_edits",
     "save_names",
     "source_path",
@@ -91,6 +95,10 @@ class NoSuchTranscript(LookupError):
 
 class TranscriptChanged(RuntimeError):
     """The transcript was made again since the page, or the review, was made from it (#249)."""
+
+
+class ListChanged(RuntimeError):
+    """A patch was made against an edit list the server no longer holds (#251)."""
 
 
 @dataclass(frozen=True)
@@ -410,18 +418,42 @@ def open_edits(transcript_id: int, *, report: bool = False) -> Opened:
     )
 
 
-def _save(
+def list_sha(doc: hatao.Document) -> str:
+    """The sha256 of an edit list as the server holds it: its entries and its speaker names (#251).
+
+    The one serialisation the sha is taken over, so a list read again, or
+    saved and loaded back, has the same sha: each entry as a row of its
+    fields, in the file's order, and the names sorted by label, as compact
+    JSON. The sources are left out: they are the server's to fill in (a
+    recording moved, #110, is the same list), never the page's to change.
+    A patch names the list it was made against by this sha, so a list changed
+    by another tab, or by a rename, is never patched as if it were not.
+    """
+    rows: list[list[Any]] = []
+    for entry in doc.content:
+        if isinstance(entry, hatao.Paragraph):
+            rows.append(["paragraph", entry.speaker, entry.language])
+        else:
+            rows.append(
+                ["item", entry.source, entry.source_start, entry.length, entry.text, entry.muted]
+            )
+    names = sorted(doc.names.items())
+    canonical = json.dumps([rows, names], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _write(
     transcript_id: int,
+    row: _Row,
     content: tuple[hatao.Entry, ...],
     names: Mapping[str, str],
-    payload: dict[str, Any],
     digest: str,
-) -> Opened:
-    """Write `content` and `names` as the transcript's edit list, whole or not at all.
+) -> tuple[hatao.Document, str]:
+    """Write `content` and `names` as the transcript's edit list, whole or not at all; and when.
 
-    Held under WRITING, with the transcript as read before it was taken.
+    Held under WRITING, with the row as read under it and the transcript as
+    read before it was taken (`_held`).
     """
-    row = _row(transcript_id)
     doc = hatao.validate(hatao.Document({SOURCE: str(row.media.resolve())}, content, dict(names)))
     path = edits_path(row.json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,9 +463,83 @@ def _save(
     # So the library list can say this transcript was corrected by hand (#83).
     with Library.open() as library:
         library.mark_edited(transcript_id, edited_at)
+    return doc, edited_at
+
+
+def _save(
+    transcript_id: int,
+    row: _Row,
+    content: tuple[hatao.Entry, ...],
+    names: Mapping[str, str],
+    payload: dict[str, Any],
+    digest: str,
+) -> Opened:
+    """Write the list as `_write` does, and answer it as the page opens it."""
+    doc, edited_at = _write(transcript_id, row, content, names, digest)
     return Opened(
         doc, edited_at, _confidences(payload, doc), row.duration_s, digest, _legend(payload)
     )
+
+
+@dataclass(frozen=True)
+class Saved:
+    """What a patch leaves on the server, and no more: never the entries (#251)."""
+
+    doc: hatao.Document
+    edited_at: str
+    # The recording's length as the library knows it, for the spans a render would mute.
+    duration_s: float | None
+
+
+def patch_edits(
+    transcript_id: int,
+    transcript_sha: str,
+    against: str,
+    start: int,
+    delete: int,
+    insert: Sequence[hatao.Entry],
+) -> Saved:
+    """Put `insert` in place of `delete` entries at `start` of the list whose sha is `against`.
+
+    One change, not the whole list (#251). The spliced list is checked and
+    written exactly as `save_edits` writes one (validated whole, the entry
+    named when it is broken; atomic, fsynced, under WRITING), so a patch is
+    never a weaker save. Two patches made against the same list cannot both
+    apply: the second finds the list changed and is refused.
+
+    A patch against a transcript made again is refused as `save_edits`
+    refuses one, but keeps nothing aside: the page holds the whole list, and
+    sends it whole to be kept (editing.ts, useSave).
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        TranscriptChanged: the transcript was made again since the page loaded the list.
+        ListChanged: the list is not the one the patch was made against.
+        dsj.hatao.InvalidDocument: `start` and `delete` reach outside the list,
+            or the spliced list is broken, named; nothing is written.
+    """
+    with _held(transcript_id) as (row, payload, digest):
+        path = _settle(row, payload, digest)
+        if transcript_sha != digest:
+            raise TranscriptChanged(
+                "This transcript was made again while it was open, so this change is to words "
+                "it no longer has. Reload the page to see the new transcript."
+            )
+        doc, _ = _current(row, payload, path)
+        if list_sha(doc) != against:
+            raise ListChanged(
+                "This transcript's edits were changed in another tab or window after this page "
+                "loaded them, so this change was not saved. Reload the page to load them again."
+            )
+        size = len(doc.content)
+        if not (0 <= start <= size and 0 <= delete <= size - start):
+            raise hatao.InvalidDocument(
+                f"the change replaces entries from start {start}, delete {delete}, of a list "
+                f"of {size}; it must lie inside the list"
+            )
+        content = (*doc.content[:start], *insert, *doc.content[start + delete :])
+        saved, edited_at = _write(transcript_id, row, content, doc.names, digest)
+    return Saved(saved, edited_at, row.duration_s)
 
 
 def save_edits(
@@ -468,7 +574,7 @@ def save_edits(
                 f"words it no longer has. They are kept beside the library as {aside.name}. "
                 "Reload the page to see the new transcript."
             )
-        return _save(transcript_id, content, names, payload, digest)
+        return _save(transcript_id, row, content, names, payload, digest)
 
 
 def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
@@ -484,7 +590,7 @@ def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
     kept = {label: name.strip() for label, name in names.items() if name.strip()}
     with _held(transcript_id) as (row, payload, digest):
         doc, _ = _current(row, payload, _settle(row, payload, digest))
-        return _save(transcript_id, doc.content, kept, payload, digest)
+        return _save(transcript_id, row, doc.content, kept, payload, digest)
 
 
 def engine_of(transcript_id: int) -> str:

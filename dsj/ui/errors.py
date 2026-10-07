@@ -28,10 +28,10 @@ from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordLi
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
-from dsj.ui.edits import NoSuchTranscript, TranscriptChanged
+from dsj.ui.edits import ListChanged, NoSuchTranscript, TranscriptChanged
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
-from dsj.ui.review import InvalidReview, ReviewIncomplete
+from dsj.ui.review import InvalidReview, ReviewChanged, ReviewIncomplete
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
 
@@ -74,6 +74,10 @@ STATUS: dict[type[Exception], int] = {
     ReviewIncomplete: 409,
     # The transcript was made again since the page loaded its list or checked its review (#249).
     TranscriptChanged: 409,
+    # A patch made against an edit list or a review that has changed since, in
+    # another tab or by a rename: the page reloads it, never patches over it (#251).
+    ListChanged: 409,
+    ReviewChanged: 409,
     # ffmpeg failed on the file in a way nobody named. Genuinely unexpected.
     MediaError: 500,
 }
