@@ -16,7 +16,7 @@ import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { SWIPE_PX } from "../../src/features/review/swipe";
 import type { Content } from "../../src/lib/editOps";
 import { stubMatchMedia } from "./media";
-import { box, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
+import { box, contentWith, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
 
 // A phone: a coarse pointer, so (pointer: fine) does not match.
 const PHONE = (query: string) => query.includes("coarse");
@@ -201,12 +201,18 @@ describe("Review's keys on the card, when a keyboard is there (F14)", () => {
 });
 
 describe("Words typed on the card when the page goes away (Task 14 re-review, R1-I1)", () => {
-  // iOS Safari never fires beforeunload, so the box's words are put in the
-  // list and sent with keepalive the moment the page is hidden or left.
+  // iOS Safari never fires beforeunload. What is already in the list goes
+  // with keepalive the moment the page is hidden or left; what is only in the
+  // box stays in the box, and in the browser's copy (draft.ts), until the
+  // owner commits it (fix round 4).
   for (const how of ["visibilitychange", "pagehide"] as const) {
-    it(`on ${how}, puts the box's words in the list and sends both saves with keepalive`, async () => {
+    it(`on ${how}, sends a committed change whose save has not landed with keepalive`, async () => {
       const field = await start();
       fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+      // Committed, but its ordinary save never lands.
+      server.down = true;
+      fireEvent.click(checkedNext());
+      expect((await box()).value).toBe("delta echo");
       act(() => hidePage(how));
       await vi.waitFor(() => expect(server.kept.some((k) => k.path === "/api/transcripts/7/edits")).toBe(true));
       const sent = server.kept.filter((k) => k.path === "/api/transcripts/7/edits").at(-1)?.body as { content: Content };
@@ -218,6 +224,22 @@ describe("Words typed on the card when the page goes away (Task 14 re-review, R1
       expect(review.corrections).toMatchObject([{ before: "charlie", after: "charles" }]);
     });
   }
+
+  it("does not commit a half-typed box when the page is hidden and shown again (fix round 4)", async () => {
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charl" } });
+    act(() => hidePage("visibilitychange"));
+    act(() => {
+      showPage();
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect((await box()).value).toBe("alpha bravo charl");
+    expect(server.edits).toEqual([]);
+    expect(server.kept.filter((k) => k.path === "/api/transcripts/7/edits")).toEqual([]);
+    expect(server.reviews.flatMap((r) => r.corrections)).toEqual([]);
+    expect(window.localStorage.getItem("dsj-review-draft-7")).toContain("alpha bravo charl");
+  });
 
   it("sends nothing when nothing is unsaved", async () => {
     await start();
@@ -259,10 +281,48 @@ describe("A copy of the box in the browser (Task 14 fix round 3)", () => {
   });
 
   it("drops a draft made against another transcript sha, and says nothing", async () => {
-    window.localStorage.setItem(DRAFT, JSON.stringify({ sha: "s0", start: 0.2, end: 1.3, text: "alpha bravo charles" }));
+    window.localStorage.setItem(DRAFT, JSON.stringify({ sha: "s0", start: 0.2, end: 1.3, base: "alpha bravo charlie", text: "alpha bravo charles" }));
     const field = await start();
     expect(field.value).toBe("alpha bravo charlie");
     expect(screen.queryByText("Restored words typed before the page closed")).toBeNull();
     expect(window.localStorage.getItem(DRAFT)).toBeNull();
+  });
+});
+
+describe("A draft is put back only into the sentence it was typed in, unchanged since (Task 14 re-review 2, R2-I1)", () => {
+  const DRAFT = "dsj-review-draft-7";
+  const draft = (start: number, end: number, base: string, text: string) =>
+    window.localStorage.setItem(DRAFT, JSON.stringify({ sha: "s1", start, end, base, text }));
+
+  it("leaves a newer correction alone, and quotes the old words instead", async () => {
+    server.content = contentWith("charlie", "Charles");
+    draft(0.2, 1.3, "alpha bravo charlie", "alpha bravo charlee");
+    const field = await start();
+    expect(field.value).toBe("alpha bravo Charles");
+    expect(screen.getByText("Not restored, the sentence changed since: alpha bravo charlee")).toBeTruthy();
+    expect(window.localStorage.getItem(DRAFT)).toBeNull();
+    fireEvent.click(checkedNext());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.edits).toEqual([]);
+  });
+
+  it("does not put the first half of an unsaved split into the whole sentence", async () => {
+    draft(0.2, 0.9, "alpha bravo", "alpha brave");
+    const field = await start();
+    expect(field.value).toBe("alpha bravo charlie");
+    expect(screen.getByText("Not restored, the sentence changed since: alpha brave")).toBeTruthy();
+    fireEvent.click(checkedNext());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.edits).toEqual([]);
+  });
+
+  it("does not put an unsaved merge of two sentences into the first of them", async () => {
+    draft(0.2, 2.9, "alpha bravo charlie delta echo", "alpha bravo charlie delta echoes");
+    const field = await start();
+    expect(field.value).toBe("alpha bravo charlie");
+    expect(screen.getByText("Not restored, the sentence changed since: alpha bravo charlie delta echoes")).toBeTruthy();
+    fireEvent.click(checkedNext());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.edits).toEqual([]);
   });
 });

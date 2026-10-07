@@ -89,6 +89,11 @@ export const server = {
   down: false,
 };
 
+/** CONTENT with one word retyped, as a correction made elsewhere (the reader, another device) leaves it. */
+export function contentWith(word: string, retyped: string): Content {
+  return CONTENT.map((entry) => (entry.kind === "item" && entry.text === ` ${word}` ? { ...entry, text: ` ${retyped}` } : entry));
+}
+
 /** CONTENT followed by a third speaker's `words` filler words, a list far over the 64 KiB a keepalive request may carry. */
 export function longContent(words: number): Content {
   const long: Entry[] = [...CONTENT, para("SPEAKER_02")];

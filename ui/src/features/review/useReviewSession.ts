@@ -117,6 +117,11 @@ type Args = {
 const CONTEXT = 2;
 // Said once when the box is filled again from the browser's copy (draft.ts).
 const RESTORED = "Restored words typed before the page closed";
+// Said with the words when the copy's sentence has changed since, so they can be typed again.
+const NOT_RESTORED = "Not restored, the sentence changed since: ";
+// Two spans closer than 1 ms at both ends are the same sentence: a choice, far
+// under any word, there only for the arithmetic a split or merge does.
+const SAME_SPAN_S = 0.001;
 // The pass picked last, kept between reviews so the chooser offers it first (F13).
 const PASS_COOKIE = "dsj-review-pass";
 
@@ -153,29 +158,33 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const names = useLatest(editable.names);
   const words = useMemo(() => wordIndex(content), [content]);
   const [opening] = useState(() => resume(saved, editor.content, sha));
-  // Words typed before the page closed, kept in the browser (draft.ts): put
-  // back in their sentence's box when the transcript is the same one and the
-  // list does not already say them. Pure, so StrictMode's second call agrees;
-  // a draft not used is cleared by the effect below, as the box is saved.
-  const [restored] = useState(() => {
+  // Words typed before the page closed, kept in the browser (draft.ts). Put
+  // back only into the same span, of the same transcript, whose words are
+  // still what they were when typing began; a draft the list already says is
+  // done with; any other is dropped, its words quoted in the notice so they
+  // can be typed again (R2-I1). Pure, so StrictMode's second call agrees; a
+  // draft not put back is cleared by the effect below, as the box is saved.
+  const [reopened] = useState((): { restored: { index: number; shown: string; text: string } } | { dropped: string } | null => {
     const draft = readDraft(transcriptId);
     if (draft === null || draft.sha !== sha) return null;
-    const at = opening.segments.findIndex((s) => s.start <= draft.start && draft.start < s.end);
+    const at = opening.segments.findIndex((s) => Math.abs(s.start - draft.start) < SAME_SPAN_S && Math.abs(s.end - draft.end) < SAME_SPAN_S);
     const segment = opening.segments[at];
-    if (segment === undefined) return null;
-    const listed = segmentText(editor.content, wordIndex(editor.content), segment);
-    return listed === draft.text ? null : { index: at, shown: listed, text: draft.text };
+    const listed = segment === undefined ? null : segmentText(editor.content, wordIndex(editor.content), segment);
+    if (listed === draft.text) return null;
+    if (listed === draft.base) return { restored: { index: at, shown: listed, text: draft.text } };
+    return { dropped: draft.text };
   });
+  const restored = reopened !== null && "restored" in reopened ? reopened.restored : null;
   const [segments, setSegments] = useState<Segment[]>(opening.segments);
   const [index, setIndex] = useState(restored?.index ?? opening.cursor);
   const [pass, setPassState] = useState<ReviewPass>(saved?.review_pass ?? lastPass());
   const [choosing, setChoosing] = useState(true);
   const [fixes, setFixes] = useState<ReviewCorrection[]>(saved?.corrections ?? []);
-  // The same list, as of this instant: a page going away saves a correction
-  // made in that same moment, before any render has put it in `fixes`.
-  const fixesNow = useRef<ReviewCorrection[]>(fixes);
   const [startedAt] = useState(() => saved?.started_at ?? new Date().toISOString());
-  const [notice, setNotice] = useState<string | null>(restored !== null ? RESTORED : opening.lost > 0 ? lostNotice(opening.lost) : null);
+  const [notice, setNotice] = useState<string | null>(() => {
+    if (reopened !== null) return "restored" in reopened ? RESTORED : `${NOT_RESTORED}${reopened.dropped}`;
+    return opening.lost > 0 ? lostNotice(opening.lost) : null;
+  });
   const [flagging, setFlagging] = useState(false);
   const [finished, setFinished] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -200,14 +209,14 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
   const setText = (next: string) => {
     setTyped({ shown, index, text: next });
     // At once, not in an effect: the page may be torn down before the next render.
-    if (segment !== undefined && next !== shown) writeDraft(transcriptId, sha, segment, next);
+    if (segment !== undefined && next !== shown) writeDraft(transcriptId, sha, segment, shown, next);
   };
   // The browser's copy follows the box: kept while it differs from its
   // sentence, cleared once its words are in the list and the list is saved.
   // A draft from another sha, or one the list already says, goes here too.
   useEffect(() => {
     if (text !== shown) {
-      if (segment !== undefined) writeDraft(transcriptId, sha, segment, text);
+      if (segment !== undefined) writeDraft(transcriptId, sha, segment, shown, text);
     } else if (edits.state === "saved") {
       clearDraft(transcriptId);
     }
@@ -268,8 +277,7 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
     if (fix === null) return list;
     editor.applyEdit(fix.op);
     // Every change of words, before and after: sub-project C's learning data (spec, "Seam for C"; F28).
-    fixesNow.current = [...fixesNow.current, { at: new Date().toISOString(), ...fix.correction }];
-    setFixes(fixesNow.current);
+    setFixes((all) => [...all, { at: new Date().toISOString(), ...fix.correction }]);
     return list.map((s, i) => (i === index ? { ...s, edited: true } : s));
   };
 
@@ -361,21 +369,15 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sh
 
   // The page hidden or left. A phone gives no beforeunload (iOS Safari never
   // fires it) and may never run this page again: a swipe back, an app switch
-  // that ends in the tab evicted, a reload. So the box's words go into the
-  // list, and both saves go at once with keepalive (Task 14 re-review,
-  // R1-I1). On a desktop this happens on every switch away too, which costs a
-  // save of what was typed, as Enter would make it, without checking it.
+  // that ends in the tab evicted, a reload. What is already in the list and
+  // the review goes at once with keepalive (Task 14 re-review, R1-I1). The
+  // box is not committed: half a word typed before a tab switch is not a
+  // correction (fix round 4); its words are in the browser's copy (draft.ts)
+  // until the owner commits them.
   const hideNow = useRef<() => void>(() => undefined);
   hideNow.current = () => {
-    if (choosing) return;
-    const list = commit(segments);
     edits.keep();
-    if (list === segments) {
-      keep();
-      return;
-    }
-    setSegments(list);
-    keep(documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments: list, corrections: fixesNow.current }));
+    keep();
   };
   useEffect(() => onPageHide(() => hideNow.current()), []);
 

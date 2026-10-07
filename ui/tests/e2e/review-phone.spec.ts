@@ -157,23 +157,28 @@ test("in a narrow window, a mouse drag across the card selects words and checks 
   await expect(page.getByText("0 of 3 checked")).toBeVisible();
 });
 
-test("words typed on the card survive the page being hidden and then left, as a phone leaves it (Task 14 re-review, R1-I1)", async ({ page }, info) => {
+test("words typed on the card and then hidden stay out of the list, and come back on reopening (Task 14 fix round 4)", async ({ page }, info) => {
   await page.setViewportSize(PHONE);
   const reader = await openReview(page, `review-phone-hide-${info.project.name}`, 9.1 + info.project.name.length / 1000);
-  const readerHref = page.url().replace("&review=1", "");
+  const review = page.url();
   await page.getByRole("button", { name: /^Every sentence/ }).click();
   const box = page.getByRole("textbox", { name: "What was said" });
-  await box.fill("alpha bravo charles");
+  await box.fill("alpha bravo charl");
   // An app switch on a phone: hidden, and never shown again. No key, no button, no beforeunload.
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  // The tab evicted and opened again later: a fresh load of the reader.
   await page.waitForTimeout(500);
-  await page.goto(readerHref);
+  // Half a word is not a correction: the reader still says what it said.
+  await page.goto(review.replace("&review=1", ""));
   expect(new URL(page.url()).search).toBe(reader);
-  await expect(page.locator("article p").first()).toHaveText(/charles/);
+  await expect(page.locator("article p").first()).toHaveText(/charlie/);
+  // The tab opened again later: Review puts the words back in their box.
+  await page.goto(review);
+  await page.getByRole("button", { name: /^Every sentence/ }).click();
+  await expect(box).toHaveValue("alpha bravo charl");
+  await expect(page.getByText("Restored words typed before the page closed")).toBeVisible();
 });
 
 test("words typed on the card come back when the page was killed before any save could land (Task 14 fix round 3)", async ({ page, context, browserName }, info) => {

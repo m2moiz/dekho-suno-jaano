@@ -58,7 +58,7 @@ export async function saveAnswerKey(transcriptId: number, allowPartial: boolean)
 export function useReviewSave(
   transcriptId: number,
   document: ReviewDocument,
-): { state: SaveState; flush: () => Promise<void>; keep: (next?: ReviewDocument) => void } {
+): { state: SaveState; flush: () => Promise<void>; keep: () => void } {
   const [state, setState] = useState<SaveState>("saved");
   const latest = useRef(document);
   latest.current = document;
@@ -98,20 +98,15 @@ export function useReviewSave(
   /**
    * The page hidden or left (Task 14 re-review, R1-I1): send the newest
    * document at once with keepalive, not after the wait or behind a save in
-   * flight. `next` is the document as it is about to be, for a change made
-   * in the same moment that no render has drawn yet. The ordinary save sends
-   * it again if the page lives on; a failure here is left to that save to say.
+   * flight. The ordinary save sends it again if the page lives on; a failure
+   * here is left to that save to say.
    */
-  const keep = useCallback(
-    (next?: ReviewDocument) => {
-      const doc = next ?? latest.current;
-      if (doc === sent.current) return;
-      putReview(transcriptId, doc, true).catch((thrown: unknown) => {
-        console.warn("dsj ui: the review save sent as the page went away failed", thrown);
-      });
-    },
-    [transcriptId],
-  );
+  const keep = useCallback(() => {
+    if (latest.current === sent.current) return;
+    putReview(transcriptId, latest.current, true).catch((thrown: unknown) => {
+      console.warn("dsj ui: the review save sent as the page went away failed", thrown);
+    });
+  }, [transcriptId]);
 
   useEffect(() => {
     // Leaving with a change unsaved asks first, as the reader does, where the
