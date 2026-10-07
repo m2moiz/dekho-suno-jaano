@@ -27,6 +27,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // owner's, and a test run must neither read nor lock them.
   const scratch = mkdtempSync(path.join(tmpdir(), "dsj-e2e-"));
   const library = path.join(scratch, "library.db");
+  // Where seed.ts makes each test's folder, so the teardown below removes them
+  // with the rest: 1,258 of them were left in the temp folder (#242).
+  process.env["DSJ_E2E_SCRATCH"] = scratch;
   // Read by the specs that put a transcript in it (seed.ts), as DSJ_UI_URL is.
   process.env["DSJ_LIBRARY"] = library;
   // The user's own bleep list (#64), which the app writes to when a word is

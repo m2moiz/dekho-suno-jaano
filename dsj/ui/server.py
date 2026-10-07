@@ -53,7 +53,8 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -293,7 +294,17 @@ def create_app(
     )
     # No /docs or /redoc: they load their scripts from a CDN, and nothing about
     # this app may reach off the machine. /openapi.json stays, for #155.
-    app = FastAPI(title="dsj", docs_url=None, redoc_url=None)
+    # The lifespan is where the server's own state is let go of, as uvicorn
+    # stops (Ctrl-C, SIGTERM, the watchdog's idle stop): the jobs' status folder
+    # in the temp folder (#242).
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+        try:
+            yield
+        finally:
+            app.state.jobs.close()
+
+    app = FastAPI(title="dsj", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.heartbeat = Heartbeat()
     app.state.jobs = Jobs(app.state.heartbeat.hold)
     app.include_router(recording.router)
@@ -465,6 +476,16 @@ def dev_app() -> FastAPI:
         print(f"dsj ui dev: open http://{HOST}:5173/#t={token}", file=sys.stderr, flush=True)
 
     # On startup, not here: `just api` builds this app only to read its OpenAPI
-    # description, and a URL for a server nobody started would mislead.
-    app.router.on_startup.append(say_where)
+    # description, and a URL for a server nobody started would mislead. Wrapped
+    # round the app's own lifespan, because a router that has one ignores its
+    # on_startup handlers.
+    serving = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def announced(a: FastAPI) -> AsyncGenerator[None]:
+        say_where()
+        async with serving(a):
+            yield
+
+    app.router.lifespan_context = announced
     return app

@@ -40,6 +40,7 @@ import logging
 import os
 import queue
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -269,7 +270,25 @@ class Jobs:
         self._worker: threading.Thread | None = None
         self._start_lock = threading.Lock()
         # Status files only this server reads; nothing in them outlives a run.
-        self._status_dir = Path(tempfile.mkdtemp(prefix="dsj-ui-jobs-"))
+        # Made by the first job, not here: an app built and never served (`just
+        # api`, a test) has nothing to close it, and 20,434 such folders filled
+        # the Mac's temp folder (#242). `close()` removes it.
+        self._status_dir: Path | None = None
+
+    def close(self) -> None:
+        """Remove the status folder. Called when the server shuts down, and only then.
+
+        A job still running at that point loses its status file with the rest;
+        it is on a daemon thread that the exit takes with it. While the server
+        is up a running job's file is never touched, which is why this is not
+        called when a job ends.
+        """
+        with self._start_lock:
+            folder, self._status_dir = self._status_dir, None
+        if folder is not None:
+            # ignore_errors: a worker may be writing into it as it goes, and a
+            # folder that cannot be removed must not stop the server's exit.
+            shutil.rmtree(folder, ignore_errors=True)
 
     def all(self) -> list[Job]:
         """Every job, the first started first."""
@@ -306,6 +325,8 @@ class Jobs:
         out.parent.mkdir(parents=True, exist_ok=True)
         with self._start_lock:
             job_id = len(self._jobs) + 1
+            if self._status_dir is None:
+                self._status_dir = Path(tempfile.mkdtemp(prefix="dsj-ui-jobs-"))
             status_path = self._status_dir / f"{job_id}.status.json"
             # Taken here, so a refusal is this request's answer; released by the
             # worker when the run is over.

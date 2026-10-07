@@ -13,6 +13,7 @@ import contextlib
 import math
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,24 @@ def private_library(
     and write the owner's index.
     """
     monkeypatch.setenv("DSJ_LIBRARY", str(tmp_path_factory.mktemp("library") / "library.db"))
+
+
+@pytest.fixture(autouse=True)
+def private_temp_folder(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test its own temp folder, which pytest prunes (#242).
+
+    A test builds the app with no lifespan, so nothing shuts its `Jobs` down,
+    and what it makes in the system's temp folder stays there for good: 20,434
+    `dsj-ui-jobs-*` folders were counted on 7 Oct 2026. Made under this one,
+    they go with pytest's own retention of its last three runs. `TMPDIR` too,
+    so a subprocess a test starts uses it, and `tempfile.tempdir`, which Python
+    reads once and then caches.
+    """
+    private = str(tmp_path_factory.mktemp("tmp"))
+    monkeypatch.setenv("TMPDIR", private)
+    monkeypatch.setattr(tempfile, "tempdir", private)
 
 
 @pytest.fixture(autouse=True)

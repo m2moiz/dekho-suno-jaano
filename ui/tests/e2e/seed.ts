@@ -1,10 +1,9 @@
 // Puts a transcript into the library the run's `dsj ui` serves, the way the
 // app's own adoption does it (dsj/ui/store.py, Library.adopt), and says how to
 // open it. global-setup.ts points DSJ_LIBRARY at a temporary file, so nothing
-// here touches the owner's library.
+// here touches the owner's library, and removes the folders made here at the end.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 const REPO = path.resolve(import.meta.dirname, "../../..");
@@ -41,9 +40,12 @@ function env(name: string): string {
   return value;
 }
 
-/** A fresh directory for one test's files, under the system's temp folder. */
+/**
+ * A fresh directory for one test's files, inside the run's scratch folder,
+ * which global-setup.ts removes at the end (#242).
+ */
 export function scratchDir(): string {
-  return mkdtempSync(path.join(tmpdir(), "dsj-e2e-seed-"));
+  return mkdtempSync(path.join(env("DSJ_E2E_SCRATCH"), "seed-"));
 }
 
 function put(library: string, transcript: object, dir: string, script: string, ...args: string[]): Seeded {

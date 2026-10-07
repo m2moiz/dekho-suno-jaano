@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import typing
@@ -297,6 +298,41 @@ def test_labelling_that_cannot_run_is_a_note_on_a_finished_run(
     assert any("no diarizer here" in note for note in job["notes"]), job["notes"]
     (row,) = client.get("/api/recordings").json()
     assert row["transcripts"][0]["diarized"] is False
+
+
+# -- the status folder goes with the server (#242) ------------------------------
+
+
+def status_folders() -> list[Path]:
+    """The `dsj ui` status folders in the temp folder, which conftest gives each test its own."""
+    return sorted(Path(tempfile.gettempdir()).glob("dsj-ui-jobs-*"))
+
+
+def test_an_app_that_ran_a_job_leaves_no_status_folder_once_it_has_shut_down(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int]
+) -> None:
+    stub = engine(held=True)
+    assert status_folders() == []
+    with page() as client:
+        client.post(f"/api/recordings/{recording[1]}/transcribe", json={"diarize": False})
+        # Held at its first chunk, so it has not reported a state yet.
+        last_job(client, lambda j: j["state"] == "starting")
+        # A job that is still running keeps its status folder: only shutdown removes it.
+        assert len(status_folders()) == 1
+        stub.release_all()
+        last_job(client, finished)
+        assert len(status_folders()) == 1
+    assert status_folders() == []
+
+
+def test_an_app_that_never_ran_a_job_makes_no_status_folder_at_all() -> None:
+    # `just api` and every test that builds the app without a lifespan: nothing
+    # closes those, so nothing may be made until a job needs it.
+    page()
+    # A `with` block runs the app's lifespan, as uvicorn does.
+    with page():
+        pass
+    assert status_folders() == []
 
 
 # -- whisper's options ----------------------------------------------------------
