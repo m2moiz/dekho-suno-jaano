@@ -193,3 +193,38 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
   await page.mouse.click(shape.meeting.left + shape.meeting.width / 2, shape.meeting.top + shape.meeting.height / 2);
   expect(await seekTo).toBeCloseTo(5.6, 2);
 });
+
+// Arabic-script punctuation decides a paragraph's direction by its bidi class,
+// and ui/src/lib/script.ts must agree with the browser: the Urdu full stop
+// (class AL) is strong right to left, the Arabic comma (class CS) is not.
+test("a turn opening with the Urdu full stop is Urdu, one opening with the Arabic comma is not", async ({ page }) => {
+  const dir = scratchDir();
+  const seeded = seed(
+    {
+      audio: tone(dir, 9, "marks.wav"),
+      model: "mlx-community/whisper-large-v3-turbo",
+      speakers: ["SPEAKER_00", "SPEAKER_01"],
+      diarization: "senko 0.1.0",
+      text: "",
+      unclear: [],
+      sentences: [
+        sentence(0, 0, [" \u06D4", " hello", " there"]),
+        sentence(4, 1, [" \u060C", " hello", " there"]),
+      ],
+    },
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  const paragraphs = page.getByRole("article", { name: "Transcript" }).locator("p");
+  await expect(paragraphs).toHaveCount(2);
+  const turns = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("article p"), (p) => ({
+      lang: p.getAttribute("lang"),
+      direction: getComputedStyle(p).direction,
+    })),
+  );
+  expect(turns).toEqual([
+    { lang: "ur", direction: "rtl" },
+    { lang: null, direction: "ltr" },
+  ]);
+});

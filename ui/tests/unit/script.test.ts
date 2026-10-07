@@ -14,7 +14,12 @@ describe("firstStrong", () => {
     ["a number first, then English", " 3, 4 then ok", "latin"],
     ["a number first, then Urdu", " 3 بجے", "arabic"],
     ["Devanagari", "नमस्ते", "other"],
-    ["digits and Urdu punctuation only", " 123 ۔،", "none"],
+    ["digits and the Arabic comma only (class CS, not strong)", " 123 \u060C", "none"],
+    // Arabic-script punctuation of bidi class AL is strong right to left, as `dir="auto"` treats it.
+    ["the Urdu full stop U+06D4 opens a paragraph in Urdu", " 123 \u06D4 hello", "arabic"],
+    ["the Arabic question mark U+061F", "\u061F hello", "arabic"],
+    ["the Arabic semicolon U+061B", "\u061B hello", "arabic"],
+    ["the Arabic comma then English", "\u060C hello", "latin"],
     ["nothing", "", "none"],
   ] as const)("%s opens in %s", (_, text, script) => {
     expect(firstStrong(text)).toBe(script);

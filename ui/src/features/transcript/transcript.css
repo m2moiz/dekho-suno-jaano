@@ -54,7 +54,8 @@
  * Hashiya gold, light enough in light mode and dark enough in dark mode that
  * the body text on it keeps 4.5:1 (confidence.test.tsx measures it). Literal
  * values, not var(--playhead): custom properties inside ::highlight() are
- * not resolved in every engine this app supports. */
+ * not resolved in every engine this app supports. palette.test.ts holds these
+ * two literals equal to --playhead. */
 ::highlight(dsj-playhead) {
   background-color: light-dark(#ebd9a6, #5c4a1c);
   color: var(--foreground);
