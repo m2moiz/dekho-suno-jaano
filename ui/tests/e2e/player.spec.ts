@@ -269,3 +269,23 @@ test("clicking the waveform moves the same playhead a word does, and the page ne
   expect(fetched).toContain(`${route}/waveform`);
   expect(fetched.filter((p) => p.startsWith(`${route}/media`))).toEqual([]);
 });
+
+// The rail's controls are 44 px tall on a phone and never under 36 on a laptop.
+// The Select primitive's own `data-[size=sm]:h-7` once beat the rail's h-11, and
+// only a measured box shows that (jsdom lays nothing out).
+for (const [label, viewport, least] of [
+  ["a phone", { width: 390, height: 844 }, 44],
+  ["a laptop", { width: 1440, height: 900 }, 36],
+] as const) {
+  test(`on ${label} the speed select and the play button are at least ${least} px tall`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const dir = scratchDir();
+    const seeded = seed(transcript(silence(dir, 8, "rail.wav"), [sentence(0, 0, [" One", " two."])]), dir);
+    await page.goto(readerUrl(seeded));
+    for (const control of [page.getByRole("combobox", { name: "Playback speed" }), page.getByRole("button", { name: "Play" })]) {
+      const box = await control.boundingBox();
+      if (box === null) throw new Error("a rail control is not on the page");
+      expect(box.height).toBeGreaterThanOrEqual(least);
+    }
+  });
+}

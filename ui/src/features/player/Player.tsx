@@ -121,18 +121,38 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     if (media.current !== null) applySpeed(media.current, speed);
   }, [speed, soundOnly]);
 
-  /** Hear `seconds`: the one seek a word, the waveform and anything later share. */
-  const seek = (seconds: number) => {
+  /** Move the one playhead to `seconds` and keep the view with it; any move ends an audition. */
+  const scrub = (seconds: number) => {
     const element = media.current;
     if (element === null) return;
-    // Any seek ends an audition; `hear` sets its stop again after its own.
+    // `hear` sets its stop again after its own seek.
     stopAt.current = null;
     element.currentTime = seconds;
     playhead.current?.follow();
-    play(element);
+  };
+  /** Hear `seconds`: the one seek a word, a click on the waveform and anything later share. */
+  const seek = (seconds: number) => {
+    scrub(seconds);
+    if (media.current !== null) play(media.current);
   };
   const seekRef = useRef(seek);
   seekRef.current = seek;
+  const scrubRef = useRef(scrub);
+  scrubRef.current = scrub;
+  /** Play, or pause; resuming starts `backS` seconds earlier. The rail's button and Review's Tab both. */
+  const toggle = (backS = 0) => {
+    const element = media.current;
+    if (element === null) return;
+    if (!element.paused) {
+      element.pause();
+      return;
+    }
+    stopAt.current = null;
+    if (backS > 0) element.currentTime = Math.max(0, element.currentTime - backS);
+    play(element);
+  };
+  const toggleRef = useRef(toggle);
+  toggleRef.current = toggle;
   // The live mute (#84), one per media element, with the spans it follows.
   const gate = useRef<MuteGate | null>(null);
   const spans = useRef<readonly Span[]>(muteSpans ?? []);
@@ -149,17 +169,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
         seekRef.current(from);
         stopAt.current = to;
       },
-      toggle: (backS = 0) => {
-        const element = media.current;
-        if (element === null) return;
-        if (!element.paused) {
-          element.pause();
-          return;
-        }
-        stopAt.current = null;
-        if (backS > 0) element.currentTime = Math.max(0, element.currentTime - backS);
-        play(element);
-      },
+      toggle: (backS = 0) => toggleRef.current(backS),
       pause: () => media.current?.pause(),
       isPlaying: () => media.current !== null && !media.current.paused,
       setSpeed: changeSpeed,
@@ -325,12 +335,8 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     media.current = element;
   };
   const src = mediaSrc(recording.id, soundOnly);
-  const toggle = () => {
-    const element = media.current;
-    if (element === null) return;
-    if (element.paused) play(element);
-    else element.pause();
-  };
+  // The recording's length as the library knows it, until the media says it.
+  const clockLabel = durationLabel(recording.duration_s) ?? "0:00";
 
   return (
     <div ref={bar} role="region" aria-label="Player" className="sticky bottom-0 z-20 pb-[env(safe-area-inset-bottom)]">
@@ -356,15 +362,21 @@ export function Player({ recording, reading, article, muteSpans = null, controls
           <Button
             size="icon"
             aria-label={playing ? "Pause" : "Play"}
-            onClick={toggle}
+            onClick={() => toggleRef.current()}
             className="size-11 shrink-0 rounded-full"
           >
             {playing ? <Pause aria-hidden className="size-5" /> : <Play aria-hidden className="size-5" />}
           </Button>
-          <span ref={clock} className="hidden shrink-0 text-sm text-field-muted tabular-nums sm:inline">
-            0:00
+          {/* Wide enough for its longest text from the first paint, so the waveform
+              beside it does not shrink when playing writes the length in. */}
+          <span
+            ref={clock}
+            style={{ minWidth: `${2 * clockLabel.length + 3}ch` }}
+            className="hidden shrink-0 text-sm text-field-muted tabular-nums sm:inline"
+          >
+            {`0:00 / ${clockLabel}`}
           </span>
-          <Waveform recordingId={recording.id} media={media} frames={frames} onSeek={(seconds) => seekRef.current(seconds)} />
+          <Waveform recordingId={recording.id} media={media} frames={frames} onSeek={(seconds) => seekRef.current(seconds)} onScrub={(seconds) => scrubRef.current(seconds)} />
           <SpeedControl speed={speed} onSpeed={changeSpeed} />
           {hasVideo && (
             <Button

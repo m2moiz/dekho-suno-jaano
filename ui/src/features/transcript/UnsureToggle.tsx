@@ -1,6 +1,7 @@
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Toggle } from "@/components/ui/toggle";
+import { FIELD_BUTTON, FIELD_EDGE } from "@/features/shell/field";
 import { cutoffFor, UNSURE, unsureHighlight, unsureWords } from "./confidence";
 import type { Reading } from "./document";
 
@@ -51,15 +52,13 @@ export function UnsureToggle({ reading, model, article }: Props) {
 
   if (cutoff === null || !reading.words.confidence.some((c) => !Number.isNaN(c))) return null;
   return (
-    // It lives in the blue bar: light text, a pale border, a faint fill when
-    // pressed, and 44 px tall on a phone (the default's pale hover fill would
-    // leave its white text unreadable).
+    // It lives in the blue bar: the field's button colours, and 44 px tall on a phone.
     <Toggle
       variant="outline"
       size="sm"
       pressed={on}
       onPressedChange={setOn}
-      className="h-11 border-white/30 text-field-foreground hover:bg-white/10 hover:text-field-foreground aria-pressed:bg-white/20 sm:h-8"
+      className={`h-11 sm:h-8 ${FIELD_EDGE} ${FIELD_BUTTON}`}
     >
       Unsure words ({words.length})
     </Toggle>

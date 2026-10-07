@@ -61,6 +61,20 @@ describe("the Hashiya palette", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("no control's edge on the field is a white wash, which measures under 3:1 against it", () => {
+    // border-white/20 on #132447 is about 1.9:1. An edge there is border-field-wave.
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else if (/\.tsx?$/.test(entry.name) && /border-white\//.test(readFileSync(file, "utf8"))) offenders.push(file);
+      }
+    };
+    walk(SRC);
+    expect(offenders).toEqual([]);
+  });
+
   it("the playhead highlight's literals are --playhead, light and dark", () => {
     const [light, dark] = pair(transcriptCss, "::highlight(dsj-playhead)", "background-color");
     expect(light).toBe(token(theme, "--playhead", "light"));

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type RefObject, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type PointerEvent, type RefObject, useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
@@ -60,8 +60,10 @@ type Props = {
   media: RefObject<HTMLMediaElement | null>;
   /** Where the playhead tells this view the time, every frame it paints (#60). */
   frames: Set<(seconds: number) => void>;
-  /** Move the one playhead there: the same seek a click on a word makes. */
+  /** Move the one playhead there and play: the same seek a click on a word makes. */
   onSeek: (seconds: number) => void;
+  /** Move the one playhead there without starting playback: a key press, a drag in progress. */
+  onScrub: (seconds: number) => void;
 };
 
 // One arrow key press moves this far; with Shift, SHIFT_STEP_S.
@@ -82,7 +84,7 @@ const SHIFT_STEP_S = 30;
  * it draws itself, and this one is the drawing of the recording, with the
  * playhead's frame moving its cursor outside React.
  */
-export function Waveform({ recordingId, media, frames, onSeek }: Props) {
+export function Waveform({ recordingId, media, frames, onSeek, onScrub }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const played = useRef<HTMLCanvasElement>(null);
   const cursor = useRef<HTMLDivElement>(null);
@@ -133,9 +135,18 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
   }, [peaks]);
 
   // The cursor and the gold clip move with the playhead's own frame, never
-  // with React state; the slider's value is written at most once a second.
+  // with React state. The slider's value is written at most once a second; its
+  // length and text are also written the moment the duration is known, so a
+  // screen reader has them before the first frame.
   useEffect(() => {
     let lastSecond = -1;
+    const describeAt = (seconds: number) => {
+      const duration = media.current?.duration ?? Number.NaN;
+      if (!Number.isFinite(duration) || duration <= 0 || slider.current === null) return;
+      slider.current.setAttribute("aria-valuenow", String(Math.floor(seconds)));
+      slider.current.setAttribute("aria-valuemax", String(Math.round(duration)));
+      slider.current.setAttribute("aria-valuetext", `${durationLabel(seconds) ?? "0:00"} of ${durationLabel(duration) ?? "0:00"}`);
+    };
     const move = (seconds: number) => {
       const duration = media.current?.duration ?? Number.NaN;
       if (!Number.isFinite(duration) || duration <= 0) return;
@@ -144,22 +155,32 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
       if (cursor.current !== null) cursor.current.style.transform = `translateX(${share * width}px)`;
       if (played.current !== null) played.current.style.clipPath = `inset(0 ${(1 - share) * 100}% 0 0)`;
       const second = Math.floor(seconds);
-      if (second !== lastSecond && slider.current !== null) {
+      if (second !== lastSecond) {
         lastSecond = second;
-        slider.current.setAttribute("aria-valuenow", String(second));
-        slider.current.setAttribute("aria-valuemax", String(Math.round(duration)));
-        slider.current.setAttribute("aria-valuetext", `${durationLabel(seconds) ?? "0:00"} of ${durationLabel(duration) ?? "0:00"}`);
+        describeAt(seconds);
       }
     };
+    // Media events do not bubble, so they are caught on the way down; the
+    // element can be swapped for a sound-only copy (#110), which a listener on
+    // one element would miss.
+    const known = (event: Event) => {
+      if (event.target === media.current) describeAt(media.current?.currentTime ?? 0);
+    };
+    describeAt(media.current?.currentTime ?? 0);
+    window.addEventListener("durationchange", known, true);
+    window.addEventListener("loadedmetadata", known, true);
     frames.add(move);
     return () => {
       frames.delete(move);
+      window.removeEventListener("durationchange", known, true);
+      window.removeEventListener("loadedmetadata", known, true);
     };
   }, [frames, media]);
 
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
     const element = media.current;
-    if (element === null) return;
+    // A chord (Cmd+Left, Ctrl+Right, Option+arrow) belongs to the browser or the Mac.
+    if (element === null || event.ctrlKey || event.metaKey || event.altKey) return;
     const duration = Number.isFinite(element.duration) ? element.duration : Number.POSITIVE_INFINITY;
     const step = event.shiftKey ? SHIFT_STEP_S : STEP_S;
     const to =
@@ -174,7 +195,17 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
               : null;
     if (to === null) return;
     event.preventDefault();
-    onSeek(Math.min(Math.max(0, to), duration));
+    onScrub(Math.min(Math.max(0, to), duration));
+  };
+
+  // A press that began on the slider and has not been released.
+  const dragging = useRef(false);
+  /** The time under the pointer, clamped to the recording; null before the length is known. */
+  const secondsAt = (event: PointerEvent<HTMLDivElement>): number | null => {
+    const duration = media.current?.duration ?? Number.NaN;
+    if (!Number.isFinite(duration)) return null;
+    const box = event.currentTarget.getBoundingClientRect();
+    return Math.min(Math.max(0, (event.clientX - box.left) / box.width), 1) * duration;
   };
 
   return (
@@ -186,13 +217,29 @@ export function Waveform({ recordingId, media, frames, onSeek }: Props) {
       aria-valuemin={0}
       aria-valuemax={0}
       aria-valuenow={0}
-      className="relative h-11 min-w-0 flex-1 cursor-pointer rounded-md"
+      className="relative h-11 min-w-0 flex-1 cursor-pointer touch-none rounded-md"
       onKeyDown={key}
-      onClick={(event) => {
-        const duration = media.current?.duration ?? Number.NaN;
-        if (!Number.isFinite(duration)) return;
-        const box = event.currentTarget.getBoundingClientRect();
-        onSeek(((event.clientX - box.left) / box.width) * duration);
+      onPointerDown={(event) => {
+        // The primary button or a touch; the capture keeps a drag that leaves the rail.
+        if (event.button !== 0) return;
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        dragging.current = true;
+        const at = secondsAt(event);
+        if (at !== null) onScrub(at);
+      }}
+      onPointerMove={(event) => {
+        if (!dragging.current) return;
+        const at = secondsAt(event);
+        if (at !== null) onScrub(at);
+      }}
+      onPointerUp={(event) => {
+        if (!dragging.current) return;
+        dragging.current = false;
+        const at = secondsAt(event);
+        if (at !== null) onSeek(at);
+      }}
+      onPointerCancel={() => {
+        dragging.current = false;
       }}
     >
       <canvas ref={canvas} aria-label="Waveform" className="h-full w-full text-field-wave" />

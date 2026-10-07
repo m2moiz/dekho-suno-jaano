@@ -83,6 +83,99 @@ describe("the player rail", () => {
   });
 });
 
+/** A media element whose `paused` follows play() and pause(), as a real one's does. */
+function playable(audio: HTMLAudioElement): { paused: () => boolean; pauses: () => number } {
+  let paused = true;
+  let pauses = 0;
+  Object.defineProperty(audio, "paused", { get: () => paused });
+  audio.play = () => {
+    paused = false;
+    audio.dispatchEvent(new Event("play"));
+    return Promise.resolve();
+  };
+  audio.pause = () => {
+    paused = true;
+    pauses += 1;
+    audio.dispatchEvent(new Event("pause"));
+  };
+  return { paused: () => paused, pauses: () => pauses };
+}
+
+describe("the one play and pause", () => {
+  it("forgets an audition's stop when the rail's Play button resumes after Hear and a pause", async () => {
+    const controls = { current: null } as { current: PlayerControls | null };
+    render(<Player recording={recording} reading={reading} controls={controls} />);
+    const audio = document.querySelector("audio") as HTMLAudioElement;
+    const state = playable(audio);
+    act(() => controls.current?.hear(1, 2));
+    act(() => controls.current?.pause());
+    const pausedBefore = state.pauses();
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    expect(state.paused()).toBe(false);
+    // Past the old audition end: the frame that reaches it must not pause.
+    audio.currentTime = 5;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(state.pauses()).toBe(pausedBefore);
+    expect(state.paused()).toBe(false);
+  });
+});
+
+describe("the waveform slider", () => {
+  function setup(duration = 120) {
+    render(<Player recording={recording} reading={reading} />);
+    const audio = document.querySelector("audio") as HTMLAudioElement;
+    Object.defineProperty(audio, "duration", { value: duration, configurable: true });
+    const state = playable(audio);
+    const slider = screen.getByRole("slider", { name: "Position" });
+    slider.getBoundingClientRect = () => ({ left: 0, width: 200, top: 0, height: 44, right: 200, bottom: 44, x: 0, y: 0, toJSON: () => ({}) });
+    return { audio, slider, state };
+  }
+
+  it("leaves a key chord with Control, Command or Option to the browser", () => {
+    const { audio, slider } = setup();
+    for (const chord of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }]) {
+      const event = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true, ...chord });
+      act(() => {
+        slider.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(false);
+      expect(audio.currentTime).toBe(0);
+    }
+  });
+
+  it("moves with the arrow keys without starting playback", () => {
+    const { audio, slider, state } = setup();
+    act(() => fireEvent.keyDown(slider, { key: "ArrowRight" }));
+    expect(audio.currentTime).toBe(5);
+    expect(state.paused()).toBe(true);
+  });
+
+  it("can be dragged: down, move and up seek along the slider, and playing starts on release", () => {
+    const { audio, slider, state } = setup();
+    act(() => fireEvent.pointerDown(slider, { clientX: 50, pointerId: 1, pointerType: "touch" }));
+    expect(audio.currentTime).toBe(30);
+    act(() => fireEvent.pointerMove(slider, { clientX: 100, pointerId: 1, pointerType: "touch" }));
+    expect(audio.currentTime).toBe(60);
+    expect(state.paused()).toBe(true);
+    act(() => fireEvent.pointerUp(slider, { clientX: 150, pointerId: 1, pointerType: "touch" }));
+    expect(audio.currentTime).toBe(90);
+    expect(state.paused()).toBe(false);
+    // A move after the release is not a drag.
+    act(() => fireEvent.pointerMove(slider, { clientX: 0, pointerId: 1, pointerType: "touch" }));
+    expect(audio.currentTime).toBe(90);
+  });
+
+  it("states its length and text as soon as the duration is known, before any frame", () => {
+    const { audio, slider } = setup();
+    expect(slider.getAttribute("aria-valuemax")).toBe("0");
+    act(() => {
+      audio.dispatchEvent(new Event("durationchange"));
+    });
+    expect(slider.getAttribute("aria-valuemax")).toBe("120");
+    expect(slider.getAttribute("aria-valuetext")).toBe("0:00 of 2:00");
+  });
+});
+
 describe("stepSpeed", () => {
   it("walks Review's four speeds and stops at either end", () => {
     expect(REVIEW_SPEEDS).toEqual([0.75, 1, 1.25, 1.5]);

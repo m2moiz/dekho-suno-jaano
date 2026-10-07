@@ -1,6 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 
+import { FIELD_BUTTON } from "./field";
 import { SettingsMenu } from "./SettingsMenu";
 
 // The custom property on <html> holding the bar's height, which the page's
@@ -34,7 +35,7 @@ export function AppBar({ back = false, children, settings }: { back?: boolean; c
           <a
             href="/"
             aria-label="Library"
-            className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg hover:bg-white/10"
+            className={`inline-flex size-11 shrink-0 items-center justify-center rounded-lg ${FIELD_BUTTON}`}
           >
             <ArrowLeft aria-hidden className="size-5" />
           </a>

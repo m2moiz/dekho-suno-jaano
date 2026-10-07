@@ -4,4 +4,11 @@
  * the dark scheme too, so each is a faint wash of white instead.
  */
 export const FIELD_BUTTON =
-  "text-field-foreground hover:bg-white/10 hover:text-field-foreground aria-expanded:bg-white/10 aria-expanded:text-field-foreground dark:hover:bg-white/10";
+  "text-field-foreground hover:bg-white/10 hover:text-field-foreground aria-expanded:bg-white/10 aria-expanded:text-field-foreground aria-pressed:bg-white/20 dark:hover:bg-white/10";
+
+/**
+ * The edge of a control that has one on the blue field: the waveform's colour,
+ * which palette.test.ts holds to 3:1 against the field. A white wash there
+ * measures about 1.9:1.
+ */
+export const FIELD_EDGE = "border-field-wave";

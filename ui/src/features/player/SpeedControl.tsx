@@ -1,4 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FIELD_BUTTON, FIELD_EDGE } from "@/features/shell/field";
 import { type Speed, SPEEDS, speedLabel } from "./speed";
 
 const ITEMS = SPEEDS.map((value) => ({ value, label: speedLabel(value) }));
@@ -20,7 +21,9 @@ export function SpeedControl({ speed, onSpeed }: { speed: Speed; onSpeed: (speed
       <SelectTrigger
         size="sm"
         aria-label="Playback speed"
-        className="h-11 w-20 border-white/20 bg-transparent text-field-foreground tabular-nums"
+        // 44 px on a phone, 36 on a laptop; the primitive's own data-[size=sm]:h-7 is
+        // the same variant, so these replace it.
+        className={`w-20 tabular-nums data-[size=sm]:h-11 sm:data-[size=sm]:h-9 dark:bg-transparent ${FIELD_EDGE} ${FIELD_BUTTON}`}
       >
         <SelectValue />
       </SelectTrigger>
