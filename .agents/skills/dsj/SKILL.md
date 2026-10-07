@@ -345,7 +345,11 @@ and 10000 that serves nothing yet; a port already serving something is skipped, 
 replaced, and 443 is never used. It prints `https://<mac>.<tailnet>.ts.net:<https>/#t=<token>`
 on stdout instead, and a QR code of it on stderr; the token is still required, and
 `<mac>.<tailnet>.ts.net:<https>` is the one extra `Host` let in. The lock file records
-which port the run took, and only that entry is removed when it stops, however it stops.
+which port the run took, and only that entry is removed when it stops: on Ctrl-C,
+`kill`, a closed Terminal window (SIGHUP), the idle stop or an error. `kill -9` and a
+power cut cannot clean up; the lock file keeps the record, and the next `dsj ui`, with
+or without `--tailnet`, removes the entry first, only if it still points at that dead
+run's port. A record stays until its entry is confirmed gone.
 It waits 30 minutes for a page instead of three, and a page's goodbye does not stop it,
 because a phone sends one on every app switch or screen lock. It exits 1 with one line,
 changing nothing, when `tailscale` is not on PATH, when Tailscale is not running (it

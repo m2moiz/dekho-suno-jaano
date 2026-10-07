@@ -52,6 +52,7 @@ import math
 import os
 import re
 import secrets
+import signal
 import socket
 import sys
 import threading
@@ -61,7 +62,8 @@ from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from types import FrameType
+from typing import Any, cast
 from urllib.parse import parse_qs
 
 import uvicorn
@@ -445,33 +447,66 @@ def _already_running(lock: Path, *, tailnet: bool, open_browser: bool) -> None:
         webbrowser.open(url)
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+def _recorded(previous: dict[str, object]) -> list[dict[str, int]]:
+    """The serve entries the lock file records as not yet confirmed removed (#250).
 
-
-def _clear_stale(tailnet: Tailnet, previous: dict[str, object]) -> None:
-    """Remove the serve entry a killed --tailnet run left behind (#250).
-
-    Only when the lock file, which a `kill -9` leaves written, records a
-    --tailnet run whose pid is dead, only on the HTTPS port that run recorded,
-    and only when the entry there still points at that run's loopback port:
-    anything else is not dsj's to remove.
+    Two kinds: those a run that stopped could not remove (`stale`), and the one
+    a --tailnet run killed before it could clean up (its `tailnet` record, which
+    a `kill -9` leaves written). Each is a dead run's loopback `port` and the
+    tailnet `https` port it served on. The lock is held, so whoever wrote them
+    has gone.
     """
-    pid, port = previous.get("pid"), previous.get("port")
-    https = cast("dict[str, object]", previous.get("tailnet") or {}).get("port")
-    if not all(isinstance(n, int) for n in (pid, port, https)):
-        return
-    if _pid_alive(cast("int", pid)):
-        return
-    if tailnet.close(cast("int", port), cast("int", https)):
-        print(f"Removed the tailscale serve entry on {https} that a stopped "
-              f"dsj ui (pid {pid}) left behind.", file=sys.stderr, flush=True)
+    raw: list[object] = []
+    stale = previous.get("stale")
+    if isinstance(stale, list):
+        raw.extend(cast("list[object]", stale))
+    tail = previous.get("tailnet")
+    if isinstance(tail, dict):
+        https = cast("dict[str, object]", tail).get("port")
+        raw.append({"port": previous.get("port"), "https": https})
+    entries: list[dict[str, int]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        record = cast("dict[str, object]", item)
+        port, https = record.get("port"), record.get("https")
+        if isinstance(port, int) and isinstance(https, int):
+            entry = {"port": port, "https": https}
+            if entry not in entries:
+                entries.append(entry)
+    return entries
+
+
+def _retry_removal(
+    entries: list[dict[str, int]], tailnet: Tailnet | None
+) -> list[dict[str, int]]:
+    """Remove each recorded entry still pointing at its dead run; return those left.
+
+    Every start runs this first, plain or --tailnet: an entry left on the
+    tailnet serves whatever later listens on that loopback port, to every
+    tailnet device. One is dropped from the record only once it is confirmed
+    gone, or found pointing elsewhere (not dsj's to remove); when tailscale
+    cannot be asked (not installed, a command failing) it stays recorded for
+    the next start.
+    """
+    if not entries:
+        return []
+    try:
+        proxy = tailnet or Tailnet()
+    except TailnetUnavailable:
+        return entries
+    left: list[dict[str, int]] = []
+    for entry in entries:
+        try:
+            outcome = proxy.remove(entry["port"], entry["https"])
+        except TailnetUnavailable:
+            outcome = "left"
+        if outcome == "removed":
+            print(f"Removed the tailscale serve entry on {entry['https']} that a stopped "
+                  f"dsj ui left behind.", file=sys.stderr, flush=True)
+        elif outcome == "left":
+            left.append(entry)
+    return left
 
 
 class _Undo:
@@ -480,6 +515,9 @@ class _Undo:
     def __init__(self, tailnet: Tailnet) -> None:
         self.tailnet = tailnet
         self.port: int | None = None
+        # The entry, when it could not be confirmed removed: kept in the lock
+        # file, so the next start tries again.
+        self.left: dict[str, int] | None = None
         self._lock = threading.Lock()
 
     def __call__(self) -> None:
@@ -487,14 +525,82 @@ class _Undo:
             port, self.port = self.port, None
         if port is None:
             return
+        https = self.tailnet.port
         try:
-            self.tailnet.close(port, self.tailnet.port)
-        except (TailnetUnavailable, OSError, ValueError) as exc:
-            # Never over the error that stopped the server, if there was one.
-            with contextlib.suppress(OSError):
-                print(f"dsj ui could not remove its tailscale serve entry ({exc}); "
-                      f"`tailscale serve --https={self.tailnet.port} off` removes it.",
-                      file=sys.stderr, flush=True)
+            outcome = self.tailnet.remove(port, https)
+            why = "it was still there after `tailscale serve off`"
+        except (TailnetUnavailable, OSError) as exc:
+            outcome, why = "left", str(exc)
+        if outcome != "left":
+            return
+        self.left = {"port": port, "https": https}
+        # Never over the error that stopped the server, if there was one.
+        with contextlib.suppress(OSError):
+            print(f"dsj ui could not remove its tailscale serve entry on {https} ({why}); "
+                  f"the next dsj ui tries again, or `tailscale serve --https={https} off` "
+                  f"removes it.", file=sys.stderr, flush=True)
+
+
+class _Signalled(BaseException):
+    """A stop signal outside uvicorn: unwind through serve()'s `finally`."""
+
+
+class _Stops:
+    """SIGINT, SIGTERM and SIGHUP for a --tailnet run, from before its entry exists.
+
+    uvicorn handles only SIGINT and SIGTERM (`uvicorn.server.HANDLED_SIGNALS`
+    in 0.54.0), and only while it runs. SIGHUP, which closing the Terminal
+    window sends, would end the process at its default with the entry left
+    on the tailnet, and so would a SIGTERM before uvicorn starts (#250 review,
+    I1). Outside uvicorn a signal unwinds; inside it, it asks uvicorn to stop,
+    so the lifespan removes the entry. Either way the process then ends by that
+    same signal, so the shell sees 130, 143 or 129 as before.
+    """
+
+    SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+    def __init__(self) -> None:
+        self.signum: int | None = None
+        self.server: uvicorn.Server | None = None
+        self._saved: dict[
+            signal.Signals, signal.Handlers | Callable[[int, FrameType | None], Any]
+        ] = {}
+
+    def install(self) -> None:
+        """Take each signal still at its default; off the main thread, none."""
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for sig in self.SIGNALS:
+            current = signal.getsignal(sig)
+            # An ignored SIGINT (a `&` job) or SIGHUP (nohup) is the caller's
+            # choice, and stays as it is.
+            if current is signal.SIG_DFL:
+                self._saved[sig] = signal.SIG_DFL
+            elif current is signal.default_int_handler:
+                self._saved[sig] = signal.default_int_handler
+            else:
+                continue
+            signal.signal(sig, self._caught)
+
+    def _caught(self, signum: int, _frame: FrameType | None) -> None:
+        if self.signum is None:
+            self.signum = signum
+        if self.server is not None:
+            self.server.should_exit = True
+            return
+        raise _Signalled
+
+    def restore(self) -> None:
+        """Put back what was there, so a second signal during cleanup acts at once."""
+        for sig, handler in self._saved.items():
+            signal.signal(sig, handler)
+        self._saved.clear()
+
+    def reraise(self) -> None:
+        """End the process by the signal that stopped it, now the cleanup is done."""
+        if self.signum is not None:
+            signal.signal(self.signum, signal.SIG_DFL)
+            signal.raise_signal(self.signum)
 
 
 def _undo_on_stop(app: FastAPI, undo: _Undo) -> None:
@@ -567,15 +673,17 @@ def serve(
     if fd is None:
         _already_running(lock, tailnet=tailnet, open_browser=open_browser)
         return
+    # What the lock file held before this run took it: entries a stopped or
+    # killed run could not remove. Kept until each is confirmed gone (#250).
+    unremoved = _recorded(_read_holder(lock))
     undo: _Undo | None = None
+    stops = _Stops()
     try:
-        proxy: Tailnet | None = None
-        if tailnet:
+        proxy = Tailnet() if tailnet else None
+        unremoved = _retry_removal(unremoved, proxy)
+        if proxy:
             # All before the bind: a refusal leaves nothing listening.
-            proxy = Tailnet()
             proxy.connect()
-            # What the lock file held before this run took it: a killed run's.
-            _clear_stale(proxy, _read_holder(lock))
             proxy.choose_port()
             undo = _Undo(proxy)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -590,14 +698,17 @@ def serve(
                 "url": url, "port": port, "pid": os.getpid(),
                 "started": datetime.now(UTC).isoformat(timespec="seconds"),
             }
+            if unremoved:
+                holder["stale"] = unremoved
             shown = url
             if proxy and undo:
                 shown = f"https://{proxy.host}/#t={token}"
                 holder["tailnet"] = {"host": proxy.name, "port": proxy.port, "url": shown}
             # Written before the entry is made, so a run killed at any point
-            # after it leaves the record the next run's _clear_stale() reads.
+            # after it leaves the record the next start's _retry_removal() reads.
             _write_holder(fd, holder)
             if proxy and undo:
+                stops.install()
                 undo.port = port
                 _undo_on_stop(app, undo)
                 proxy.open(port)
@@ -621,23 +732,36 @@ def serve(
                 daemon=True,
             )
             watchdog.start()
+            stops.server = server
             try:
                 # uvicorn shuts down cleanly on Ctrl-C or SIGTERM and then
                 # re-raises the signal, so the exit code is the one the shell
                 # expects for it: 130 or 143. The watchdog's stop returns here.
                 server.run(sockets=[sock])
             finally:
+                stops.server = None
                 done.set()
+    except _Signalled:
+        pass  # stops.signum names it; the process ends by it below, after cleanup.
     finally:
-        # Usually done already, by the app's shutdown; this catches a failure
-        # before or outside uvicorn.
+        # Defaults back first: a second signal during the cleanup acts at once,
+        # and the lock file still records the entry for the next start.
+        stops.restore()
+        # Usually done already, by the app's shutdown; this catches a signal
+        # or a failure before or outside uvicorn.
         if undo:
             undo()
+        left = [*unremoved, *([undo.left] if undo and undo.left else [])]
         # Emptied, not deleted: the token goes with the server, and deleting a
-        # file another `dsj ui` may be waiting to flock would let two run.
+        # file another `dsj ui` may be waiting to flock would let two run. Only
+        # entries not confirmed removed stay, with no token.
         with contextlib.suppress(OSError):
-            os.ftruncate(fd, 0)
+            if left:
+                _write_holder(fd, {"stale": left})
+            else:
+                os.ftruncate(fd, 0)
         os.close(fd)
+    stops.reraise()
 
 
 def dev_app() -> FastAPI:

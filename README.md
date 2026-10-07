@@ -626,8 +626,9 @@ nothing reaches it from the public internet. It takes the first of ports 8443,
 8444, 8445 and 10000 that serves nothing yet, never 443, and never replaces
 something you already serve: if all four are in use it names them and stops.
 The phone address carries the same key after `#` as the Mac's, and every
-request still needs it. When the server stops, its own entry goes with it and
-no other. A phone sends no sign of life from the background, and says goodbye
+request still needs it. When the server stops (Ctrl-C, `kill`, closing the
+Terminal window, the idle stop, an error), its own entry goes with it and no
+other. `kill -9` or a power cut leaves it; the next `dsj ui` removes it first. A phone sends no sign of life from the background, and says goodbye
 whenever you switch apps or lock the screen, so with `--tailnet` a goodbye does
 not stop the server: it waits 30 minutes without a sign of life instead of
 three. dsj never starts Tailscale and never uses `tailscale funnel`. A plain

@@ -41,7 +41,7 @@ from dsj.ui import UIUnavailable
 TAILNET_PORTS = (8443, 8444, 8445, 10000)
 
 # The idle stop with --tailnet, in seconds: 30 minutes, where the desktop's
-# IDLE_S is 3. A phone puts a tab it is not showing to sleep, and a sleeping tab
+# IDLE_S is 180 s, three minutes. A phone puts a tab it is not showing to sleep, and a sleeping tab
 # sends no heartbeat at all, so the desktop's three minutes would stop the
 # server under a review paused to answer a message. Thirty minutes is the
 # owner's ruling for #250, not a measurement.
@@ -112,7 +112,7 @@ class Tailnet:
         Raises:
             TailnetUnavailable: when Tailscale is not running.
         """
-        status = _object(json.loads(self._run("status", "--json")))
+        status = _object(self._json("status", "--json"))
         name = _object(status.get("Self")).get("DNSName")
         if status.get("BackendState") != "Running" or not isinstance(name, str) or not name:
             raise TailnetUnavailable(_NOT_RUNNING)
@@ -130,8 +130,17 @@ class Tailnet:
         """
         return f"{self.name}:{self.port}"
 
+    def _json(self, *args: str) -> object:
+        out = self._run(*args)
+        try:
+            return json.loads(out or "null")
+        except ValueError:
+            raise TailnetUnavailable(
+                f"`tailscale {' '.join(args)}` did not print JSON: {out[:80]!r}"
+            ) from None
+
     def _config(self) -> dict[str, object]:
-        return _object(json.loads(self._run("serve", "status", "--json") or "null"))
+        return _object(self._json("serve", "status", "--json"))
 
     @staticmethod
     def _serving(config: dict[str, object], https: int) -> str | None:
@@ -179,13 +188,19 @@ class Tailnet:
         """
         self._run("serve", "--bg", f"--https={self.port}", f"http://127.0.0.1:{port}")
 
-    def close(self, port: int, https: int) -> bool:
+    def remove(self, port: int, https: int) -> str:
         """Remove the entry on `https` if, and only if, it points at 127.0.0.1:`port`.
 
-        Returns whether it removed one. An entry pointing anywhere else is not
-        this run's, and is left as it is.
+        Returns "absent" when no such entry is there (none, or someone else's,
+        which is left as it is), "removed" when the off command took it and a
+        second read confirms it is gone, and "left" when it is still there
+        after the off. Only "left" means the entry may still be dsj's.
+
+        Raises:
+            TailnetUnavailable: when a tailscale command fails.
         """
-        if self._serving(self._config(), https) != f"http://127.0.0.1:{port}":
-            return False
+        target = f"http://127.0.0.1:{port}"
+        if self._serving(self._config(), https) != target:
+            return "absent"
         self._run("serve", f"--https={https}", "off")
-        return True
+        return "left" if self._serving(self._config(), https) == target else "removed"

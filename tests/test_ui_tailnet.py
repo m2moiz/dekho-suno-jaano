@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
@@ -42,7 +43,7 @@ ANY_PHONE_URL = re.compile(rf"https://{re.escape(NAME)}:(\d+)/#t=([A-Za-z0-9_-]{
 
 FAKE = """\
 #!{python}
-import json, os, sys
+import json, os, sys, time
 path = os.environ["FAKE_TAILSCALE_STATE"]
 with open(path) as f:
     state = json.load(f)
@@ -61,6 +62,13 @@ elif len(argv) == 4 and argv[:2] == ["serve", "--bg"] and argv[2].startswith("--
     serve.setdefault("TCP", {{}})[port] = {{"HTTPS": True}}
     serve.setdefault("Web", {{}})[web_key] = {{"Handlers": {{"/": {{"Proxy": argv[3]}}}}}}
     state["serve"] = serve
+    with open(path, "w") as f:
+        json.dump(state, f)
+    # The entry is in place; a slow command keeps dsj waiting after it.
+    time.sleep(state["bg_sleep"])
+elif argv[2:] == ["off"] and state["off_fails"]:
+    print("fake tailscale: off failed", file=sys.stderr)
+    code = 1
 elif len(argv) == 3 and argv[0] == "serve" and argv[1].startswith("--https=") and argv[2] == "off":
     serve = state["serve"] or {{}}
     serve.get("TCP", {{}}).pop(port, None)
@@ -87,7 +95,10 @@ class FakeTailscale:
         exe = self.bin / "tailscale"
         exe.write_text(FAKE.format(python=sys.executable))
         exe.chmod(0o755)
-        self.write(backend="Running", dns=f"{NAME}.", serve=None, calls=[])
+        self.write(
+            backend="Running", dns=f"{NAME}.", serve=None, calls=[], off_fails=False,
+            bg_sleep=0,
+        )
 
     def read(self) -> dict[str, Any]:
         return json.loads(self.state.read_text())
@@ -211,7 +222,7 @@ def test_8443_taken_goes_to_the_next_port_and_leaves_8443_alone(
     # Only its own entry went; 443 and 8443 are exactly as they were.
     assert tailscale.read()["serve"] == theirs
     assert tailscale.calls == [
-        STATUS, SERVE_STATUS, serve_on(port, 8444), SERVE_STATUS, off(8444),
+        STATUS, SERVE_STATUS, serve_on(port, 8444), SERVE_STATUS, off(8444), SERVE_STATUS,
     ]
 
 
@@ -269,7 +280,11 @@ def test_a_tailnet_run_serves_8443_prints_the_phone_url_and_cleans_up(
     assert qr.getvalue() in captured.err
     assert opened == []
     assert tailscale.proxy() is None, "the 8443 entry outlived the server"
-    assert tailscale.calls == [STATUS, SERVE_STATUS, serve_on(port), SERVE_STATUS, OFF]
+    # The off, then a read to confirm the entry is gone.
+    assert tailscale.calls == [
+        STATUS, SERVE_STATUS, serve_on(port), SERVE_STATUS, OFF, SERVE_STATUS,
+    ]
+    assert dsj.ui.server.lock_path().read_text() == ""
 
 
 def test_the_entry_is_removed_when_the_server_raises(
@@ -282,7 +297,7 @@ def test_the_entry_is_removed_when_the_server_raises(
     with pytest.raises(RuntimeError, match="the server broke"):
         dsj.ui.server.serve(open_browser=False, tailnet=True)
     assert tailscale.proxy() is None
-    assert tailscale.calls[-1] == OFF
+    assert tailscale.calls[-2:] == [OFF, SERVE_STATUS]
 
 
 def test_the_entry_is_removed_on_the_idle_stop(
@@ -292,10 +307,10 @@ def test_the_entry_is_removed_on_the_idle_stop(
     dsj.ui.server.serve(open_browser=False, tailnet=True, idle_s=0.5)
     assert "dsj ui stopped" in capsys.readouterr().err
     assert tailscale.proxy() is None
-    assert tailscale.calls[-1] == OFF
+    assert tailscale.calls[-2:] == [OFF, SERVE_STATUS]
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
 def test_the_entry_is_removed_when_the_process_is_signalled(
     sig: signal.Signals, tailscale: FakeTailscale
 ) -> None:
@@ -303,7 +318,9 @@ def test_the_entry_is_removed_when_the_process_is_signalled(
 
     uvicorn re-raises SIGTERM after its shutdown, which kills the process
     before any `finally` in serve() runs, so the removal has to happen inside
-    uvicorn's own shutdown.
+    uvicorn's own shutdown. SIGHUP is what closing the Terminal window sends,
+    and uvicorn does not handle it at all. Each still ends the process by its
+    own signal, so the shell sees 143, 130 or 129.
     """
     proc = subprocess.Popen(
         [str(CONSOLE_SCRIPT), "ui", "--tailnet", "--print-url"],
@@ -314,9 +331,7 @@ def test_the_entry_is_removed_when_the_process_is_signalled(
         url = proc.stdout.readline().strip()
         assert PHONE_URL.fullmatch(url), url
         assert tailscale.proxy() is not None
-        # Once uvicorn answers, so its signal handlers are in place. A SIGTERM
-        # before that ends the process outright, and the next run's stale-entry
-        # check is what removes the entry then.
+        # Once uvicorn answers; the window before it has its own test below.
         loopback = wait_for_holder()["url"]
         with urllib.request.urlopen(loopback, timeout=30) as reply:
             assert reply.status == 200
@@ -327,7 +342,40 @@ def test_the_entry_is_removed_when_the_process_is_signalled(
             proc.kill()
             proc.wait()
     assert tailscale.proxy() is None, proc.stderr.read() if proc.stderr else ""
-    assert tailscale.calls[-1] == OFF
+    assert tailscale.calls[-2:] == [OFF, SERVE_STATUS]
+    assert proc.returncode == -sig
+    assert dsj.ui.server.lock_path().read_text() == ""
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_a_signal_before_uvicorn_starts_still_removes_the_entry(
+    sig: signal.Signals, tailscale: FakeTailscale
+) -> None:
+    """The entry exists from `tailscale serve --bg` on; uvicorn's handlers come later.
+
+    The fake holds `serve --bg` open for a while after writing the entry, so the
+    signal lands while dsj waits on it: the narrowest point of that window.
+    """
+    tailscale.write(bg_sleep=20)
+    proc = subprocess.Popen(
+        [str(CONSOLE_SCRIPT), "ui", "--tailnet", "--print-url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while tailscale.proxy() is None:
+            assert time.monotonic() < deadline, "dsj never made its entry"
+            assert proc.poll() is None, proc.stderr.read() if proc.stderr else ""
+            time.sleep(0.05)
+        proc.send_signal(sig)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    assert tailscale.proxy() is None, proc.stderr.read() if proc.stderr else ""
+    assert proc.returncode == -sig
+    assert dsj.ui.server.lock_path().read_text() == ""
 
 
 def test_a_stale_entry_from_a_dead_run_is_removed_first(
@@ -351,8 +399,9 @@ def test_a_stale_entry_from_a_dead_run_is_removed_first(
     monkeypatch.setattr("uvicorn.Server.run", serving)
     assert main(["ui", "--tailnet", "--print-url"]) == 0
     (port,) = ports
-    assert tailscale.calls[:5] == [
-        STATUS, SERVE_STATUS, OFF, SERVE_STATUS, serve_on(port),
+    # The recorded entry first, confirmed gone, then the run's own start.
+    assert tailscale.calls[:6] == [
+        SERVE_STATUS, OFF, SERVE_STATUS, STATUS, SERVE_STATUS, serve_on(port),
     ]
 
 
@@ -375,6 +424,90 @@ def test_a_stale_lock_does_not_license_removing_an_entry_it_did_not_make(
     assert tailscale.read()["serve"] == theirs
     assert OFF not in tailscale.calls
     assert off(8444) in tailscale.calls, "it should have served, and cleaned up, 8444"
+    # Its entry is gone (replaced by someone else's), so the record is dropped.
+    assert dsj.ui.server.lock_path().read_text() == ""
+
+
+def write_killed_run(port: int = 5555, https: int = 8443) -> None:
+    """The lock file a `--tailnet` run killed with -9 leaves, and its live entry."""
+    dsj.ui.server.lock_path().parent.mkdir(parents=True, exist_ok=True)
+    dsj.ui.server.lock_path().write_text(json.dumps({
+        "url": f"http://127.0.0.1:{port}/#t=x", "port": port, "pid": dead_pid(),
+        "tailnet": {"host": NAME, "port": https, "url": f"https://{NAME}:{https}/#t=x"},
+    }))
+
+
+def recorded() -> list[Any]:
+    """The un-removed entries the lock file still records."""
+    text = dsj.ui.server.lock_path().read_text()
+    return json.loads(text).get("stale", []) if text else []
+
+
+def dead_entry(port: int = 5555, https: int = 8443) -> dict[str, Any]:
+    return {
+        "TCP": {str(https): {"HTTPS": True}},
+        "Web": {f"{NAME}:{https}": entry(f"http://127.0.0.1:{port}")},
+    }
+
+
+def test_a_plain_dsj_ui_removes_a_killed_runs_entry(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Probe P2: a plain run used to overwrite the record and lose the entry for ever."""
+    write_killed_run()
+    tailscale.write(serve=dead_entry())
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    assert main(["ui", "--print-url"]) == 0
+    assert tailscale.proxy() is None
+    assert tailscale.calls == [SERVE_STATUS, OFF, SERVE_STATUS]
+    assert dsj.ui.server.lock_path().read_text() == ""
+
+
+def test_the_record_outlives_runs_that_cannot_remove_the_entry(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Probe P3: a plain run with no tailscale, then a refused --tailnet, keep the record."""
+    write_killed_run()
+    tailscale.write(serve=dead_entry())
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    # A plain run on a PATH with no tailscale: it serves, and keeps the record.
+    monkeypatch.setenv("PATH", str(tailscale.bin.parent))
+    assert main(["ui", "--print-url"]) == 0
+    assert recorded() == [{"port": 5555, "https": 8443}]
+    # Tailscale stopped, and its off failing: refused, record kept, entry untouched.
+    monkeypatch.setenv("PATH", str(tailscale.bin))
+    tailscale.write(backend="Stopped", off_fails=True)
+    assert main(["ui", "--tailnet", "--print-url"]) == 1
+    assert recorded() == [{"port": 5555, "https": 8443}]
+    assert tailscale.proxy() == "http://127.0.0.1:5555"
+    # Tailscale back: the next --tailnet start removes it, then serves.
+    tailscale.write(backend="Running", off_fails=False)
+    assert main(["ui", "--tailnet", "--print-url"]) == 0
+    assert tailscale.proxy() is None
+    assert dsj.ui.server.lock_path().read_text() == ""
+
+
+def test_a_failed_removal_at_stop_is_recorded_and_retried(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ports: list[int] = []
+
+    def serving(_server: object, sockets: list[socket.socket]) -> None:
+        ports.append(sockets[0].getsockname()[1])
+        tailscale.write(off_fails=True)
+
+    monkeypatch.setattr("uvicorn.Server.run", serving)
+    assert main(["ui", "--tailnet", "--print-url"]) == 0
+    (port,) = ports
+    assert "could not remove" in capsys.readouterr().err
+    assert tailscale.proxy() == f"http://127.0.0.1:{port}"
+    assert recorded() == [{"port": port, "https": 8443}]
+    tailscale.write(off_fails=False)
+    monkeypatch.setattr("uvicorn.Server.run", no_serving)
+    assert main(["ui", "--print-url"]) == 0
+    assert tailscale.proxy() is None
+    assert dsj.ui.server.lock_path().read_text() == ""
 
 
 # --------------------------------------------------------------------------
@@ -469,6 +602,43 @@ def test_with_the_tailnet_name_allowed_only_that_name_and_loopback_get_in() -> N
     # The tailnet name does not lift the token check.
     reply = client.get("/api/recordings", headers={"Host": f"{NAME}:8443"})
     assert reply.status_code == 401
+
+
+def test_a_tailnet_server_lets_the_phone_host_in_and_only_it(
+    tailscale: FakeTailscale,
+) -> None:
+    """Through serve() itself, not create_app(): the Host it was built with is the one used."""
+    tailscale.write(serve={
+        "TCP": {"8443": {"HTTPS": True}},
+        "Web": {f"{NAME}:8443": entry("http://127.0.0.1:8787")},
+    })
+    server = threading.Thread(
+        target=dsj.ui.server.serve,
+        kwargs={"open_browser": False, "idle_s": 3.0, "tailnet": True},
+    )
+    server.start()
+    try:
+        holder = wait_for_holder()
+        port, token = re.findall(r"http://127\.0\.0\.1:(\d+)/#t=(.+)", holder["url"])[0]
+
+        def get(host: str, auth: bool) -> int:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/recordings",
+                headers={"Host": host, **({"Authorization": f"Bearer {token}"} if auth else {})},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=10) as reply:
+                    return reply.status
+            except urllib.error.HTTPError as refused:
+                return refused.code
+
+        assert holder["tailnet"]["port"] == 8444
+        assert get(f"{NAME}:8444", auth=True) == 200
+        assert get(f"{NAME}:8444", auth=False) == 401
+        assert get(f"{NAME}:8443", auth=True) == 403
+        assert get(NAME, auth=True) == 403
+    finally:
+        server.join(timeout=30)
 
 
 def test_a_plain_app_refuses_the_tailnet_name() -> None:
