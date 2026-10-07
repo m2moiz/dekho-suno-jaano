@@ -11,7 +11,7 @@ const fetchMock = vi.hoisted(() => {
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { KeySheet } from "../../src/features/shell/KeySheet";
-import { audio, box, item, items, key, serveReview, server, start } from "./reviewServer";
+import { audio, box, item, items, key, savedElsewhere, serveReview, server, start } from "./reviewServer";
 
 beforeEach(() => serveReview(fetchMock));
 
@@ -382,9 +382,11 @@ describe("Review saves one change, not the whole review (#251)", () => {
   });
 
   it("a review changed in another tab: the patch is refused, nothing more is sent, and the page says to reload", async () => {
-    server.refuseReview = true;
     const went: string[] = [];
     const field = await start((href) => went.push(href));
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    // Another tab saved the review since: not what this page holds, before or after its change.
+    savedElsewhere({ ...(server.saved as object), cursor_s: 3.5 });
     key(field, { key: "Enter", code: "Enter" });
     await vi.waitFor(() => expect(currentError()?.error).toBe("ReviewChanged"), { timeout: 2000 });
     key(await box(), { key: "Enter", code: "Enter" });
@@ -392,5 +394,73 @@ describe("Review saves one change, not the whole review (#251)", () => {
     await vi.waitFor(() => expect(screen.getByText(/^Still in Review/).textContent).toMatch(/Reload the page/));
     expect(server.reviewPatches).toHaveLength(1);
     expect(went).toEqual([]);
+  });
+});
+
+describe("Review saves whose fate is in doubt, and a second tab (#251 fix round 1)", () => {
+  const states = () => (server.saved as { segments: { state: string }[] } | null)?.segments.map((s) => s.state);
+
+  for (const fault of ["lost-after", "500-after"] as const) {
+    it(`a check applied but answered ${fault === "lost-after" ? "never" : "with a 500"}: the next check goes against the server's sha, nothing lost, no reload asked`, async () => {
+      const field = await start();
+      await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+      server.reviewFault = fault;
+      key(field, { key: "Enter", code: "Enter" });
+      await vi.waitFor(() => expect(server.reviewReads).toBe(1), { timeout: 2000 });
+      key(await box(), { key: "Enter", code: "Enter" });
+      await vi.waitFor(() => expect(states()).toEqual(["checked", "checked", "unchecked"]), { timeout: 2000 });
+      expect(server.reviewPatches.map((p) => p.review_sha)).toEqual(["review-1", "review-2"]);
+      expect(currentError()).toBeNull();
+    });
+  }
+
+  it("a check lost before it arrived is sent again against the same sha", async () => {
+    const field = await start();
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    server.reviewFault = "lost-before";
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(states()).toEqual(["checked", "unchecked", "unchecked"]), { timeout: 2000 });
+    expect(server.reviewReads).toBe(1);
+    expect(currentError()).toBeNull();
+  });
+
+  it("the creating save's answer lost: the review is the server's, and the first check patches it", async () => {
+    server.reviewFault = "lost-after";
+    const field = await start();
+    await vi.waitFor(() => expect(server.reviewReads).toBe(1), { timeout: 2000 });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(states()).toEqual(["checked", "unchecked", "unchecked"]), { timeout: 2000 });
+    expect(server.reviews).toHaveLength(2);
+    expect(currentError()).toBeNull();
+  });
+
+  it("a second tab that saw no review cannot write over the review another device made since (I2)", async () => {
+    render(<ReviewPage recording={2} transcript={7} />);
+    const every = await screen.findByRole("button", { name: /^Every sentence/ });
+    // The phone made the review and checked a sentence while this tab sat at the chooser.
+    const phone = {
+      version: 1, transcript_sha: "s1", review_pass: "every", cursor_s: 2.0, started_at: "x", updated_at: "x",
+      segments: [
+        { start: 0.2, end: 1.3, state: "checked", flags: [], speaker: null, edited: false },
+        { start: 2.0, end: 2.9, state: "unchecked", flags: [], speaker: null, edited: false },
+        { start: 3.5, end: 3.9, state: "unchecked", flags: [], speaker: null, edited: false },
+      ],
+      corrections: [],
+    };
+    savedElsewhere(phone);
+    fireEvent.click(every);
+    await vi.waitFor(() => expect(currentError()?.error).toBe("ReviewChanged"), { timeout: 2000 });
+    expect(server.reviewPuts).toEqual(["none"]);
+    expect(server.saved).toBe(phone);
+  });
+
+  it("a review really changed in another tab: refused, read once, and the page says to reload", async () => {
+    const field = await start();
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    savedElsewhere({ ...(server.saved as object), cursor_s: 3.5 });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(currentError()?.error).toBe("ReviewChanged"), { timeout: 2000 });
+    expect(server.reviewReads).toBe(1);
+    expect(server.reviewPatches).toHaveLength(1);
   });
 });

@@ -328,7 +328,9 @@ describe("TranscriptPage, editing", () => {
     });
     save.release();
     await vi.waitFor(() => expect(currentError()?.message).toMatch(/^Review did not open/));
-    expect(save.log).toEqual(["saved"]);
+    // A 500 may have been written all the same: the list is read, found without
+    // the change, and the change sent once more, which fails too (#251 fix round 1).
+    expect(save.log).toEqual(["saved", "saved"]);
   });
 
   it("offers Unmute in place of Mute once every selected word is muted, and it takes the mute away", async () => {

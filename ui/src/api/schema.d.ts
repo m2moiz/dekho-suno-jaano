@@ -441,6 +441,9 @@ export interface paths {
          * Save Review
          * @description Save the page's review in place of the last one, or refuse it whole, naming the segment.
          *
+         *     `review_sha` is the sha of the review this replaces, or "none" when the
+         *     page saw no review: anything else on disk is refused 409 ReviewChanged
+         *     (#251 fix round 1). Left out, the review is saved over whatever is there.
          *     The answer is its sha, not the review sent back: the page already has it (#251).
          */
         put: operations["save_review_api_transcripts__transcript_id__review_put"];
@@ -1702,7 +1705,9 @@ export interface operations {
     };
     save_review_api_transcripts__transcript_id__review_put: {
         parameters: {
-            query?: never;
+            query?: {
+                review_sha?: string | null;
+            };
             header?: never;
             path: {
                 transcript_id: string;

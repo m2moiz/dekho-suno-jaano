@@ -146,12 +146,14 @@ describe("useSave settle", () => {
   it("tries again for a change an earlier failure left behind", async () => {
     const e = editable();
     const { result } = renderHook(() => useSave(7, e));
+    // The save, then the read that asks whether it landed after all (#251 fix round 1): both fail.
+    fetchMock.mockResolvedValueOnce(Response.json({ detail: "disk full" }, { status: 500 }));
     fetchMock.mockResolvedValueOnce(Response.json({ detail: "disk full" }, { status: 500 }));
     muteOne(e.editor, 1);
     await expect(result.current.settle()).rejects.toBeInstanceOf(NotSaved);
     fetchMock.mockResolvedValueOnce(ok());
     await result.current.settle();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([r]) => r.method)).toEqual(["PATCH", "GET", "PATCH"]);
   });
 
   it("refuses while a drag is under way", async () => {
@@ -239,13 +241,19 @@ describe("useSave settle", () => {
     const e = editable();
     const { result } = renderHook(() => useSave(7, e));
     const changed = { error: "ListChanged", message: "This transcript's edits were changed in another tab. Reload the page.", request: "/api/transcripts/7/edits" };
-    fetchMock.mockImplementation(async () => Response.json(changed, { status: 409 }));
+    // The other tab's list: neither this page's list before the change nor after it.
+    const theirs = CONTENT.map((x) => (x.kind === "item" ? { ...x, text: `${x.text}!` } : x));
+    fetchMock.mockImplementation(async (request) =>
+      request.method === "GET"
+        ? Response.json({ content: theirs, names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null, replaced: null, transcript_sha: "sha-1", list_sha: "list-theirs" })
+        : Response.json(changed, { status: 409 }),
+    );
     muteOne(e.editor, 1);
     await vi.waitFor(() => expect(currentError()?.error).toBe("ListChanged"));
     muteOne(e.editor, 2);
     await expect(result.current.settle()).rejects.toBeInstanceOf(Outdated);
-    // Never sent whole: that would write over the other tab's list.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Read once to rule out its own patch landing; never sent whole: that would write over the other tab's list.
+    expect(fetchMock.mock.calls.map(([r]) => r.method)).toEqual(["PATCH", "GET"]);
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
@@ -329,6 +337,104 @@ describe("useSave when the page goes away (Task 14 re-review, R1-I1; #251)", () 
     expect(server.sent[0]?.keepalive).toBe(false);
     server.answers[0]?.(ok());
     await result.current.settle();
+  });
+});
+
+describe("useSave when a patch's fate is in doubt (#251 fix round 1, I1)", () => {
+  // A server that holds a list and its sha, and applies patches as the real one does.
+  // `fault` says what happens to the next patch: its answer lost after it was applied
+  // (a phone's Wi-Fi handing over mid-request), a 500 after it was written, or the
+  // request lost before it arrived.
+  type Fault = "none" | "lost-after" | "500-after" | "lost-before";
+  function listServer() {
+    const state = { content: CONTENT as Content, saves: 0, fault: "none" as Fault, patches: [] as string[], reads: 0 };
+    const sha = () => `list-${state.saves + 1}`;
+    fetchMock.mockImplementation(async (request) => {
+      if (request.method === "GET") {
+        state.reads += 1;
+        return Response.json({
+          content: state.content, names: {}, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null,
+          replaced: null, transcript_sha: "sha-1", list_sha: sha(),
+        });
+      }
+      const body = (await request.json()) as Splice<Entry> & { list_sha: string };
+      state.patches.push(body.list_sha);
+      const fault = state.fault;
+      state.fault = "none";
+      if (fault === "lost-before") throw new TypeError("Failed to fetch");
+      if (body.list_sha !== sha()) {
+        return Response.json({ error: "ListChanged", message: "This transcript's edits were changed in another tab. Reload the page.", request: "/api/transcripts/7/edits" }, { status: 409 });
+      }
+      state.content = spliced(state.content, body);
+      state.saves += 1;
+      if (fault === "lost-after") throw new TypeError("Failed to fetch");
+      if (fault === "500-after") return Response.json({ error: "OSError", message: "The library could not be written.", request: "/api/transcripts/7/edits" }, { status: 500 });
+      return Response.json(SAVED(sha()));
+    });
+    return state;
+  }
+
+  const mutedOf = (content: Content) => content.map((x) => (x.kind === "item" ? x.muted : null));
+
+  for (const fault of ["lost-after", "500-after"] as const) {
+    it(`a patch applied but answered ${fault === "lost-after" ? "never" : "with a 500"}: the next change is made against the server's sha, and nothing is lost`, async () => {
+      const e = editable();
+      const { result } = renderHook(() => useSave(7, e));
+      const server = listServer();
+      server.fault = fault;
+      muteOne(e.editor, 1);
+      await vi.waitFor(() => expect(server.patches.length).toBeGreaterThanOrEqual(1));
+      muteOne(e.editor, 2);
+      await result.current.settle();
+      expect(server.reads).toBe(1);
+      expect(mutedOf(server.content)).toEqual([null, true, true]);
+      expect(e.saved.listSha).toBe("list-3");
+      expect(currentError()?.error).not.toBe("ListChanged");
+      expect(result.current.state).toBe("saved");
+    });
+  }
+
+  it("the reviewer's probe: answer lost after the mute was applied, then a second change is not refused as another tab's", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const server = listServer();
+    server.fault = "lost-after";
+    muteOne(e.editor, 1);
+    await vi.waitFor(() => expect(server.reads).toBe(1));
+    await vi.waitFor(() => expect(result.current.state).toBe("saved"));
+    expect(e.saved.listSha).toBe("list-2");
+    muteOne(e.editor, 2);
+    await result.current.settle();
+    expect(server.patches).toEqual(["list-1", "list-2"]);
+    expect(mutedOf(server.content)).toEqual([null, true, true]);
+  });
+
+  it("a patch lost before it arrived is sent again, once, against the same sha", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const server = listServer();
+    server.fault = "lost-before";
+    muteOne(e.editor, 1);
+    await result.current.settle();
+    expect(server.patches).toEqual(["list-1", "list-1"]);
+    expect(server.reads).toBe(1);
+    expect(mutedOf(server.content)).toEqual([null, true, false]);
+    expect(currentError()).toBeNull();
+  });
+
+  it("a list really changed in another tab: the page stops saving and says to reload, as before", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const server = listServer();
+    // Another tab muted " there" and saved it.
+    server.content = spliced(CONTENT, { start: 2, delete: 1, insert: [{ ...(CONTENT[2] as Entry), muted: true } as Entry] });
+    server.saves = 1;
+    muteOne(e.editor, 1);
+    await expect(result.current.settle()).rejects.toBeInstanceOf(Outdated);
+    expect(currentError()?.error).toBe("ListChanged");
+    expect(server.reads).toBe(1);
+    expect(server.patches).toEqual(["list-1"]);
+    expect(mutedOf(server.content)).toEqual([null, false, true]);
   });
 });
 

@@ -78,8 +78,15 @@ export const server = {
   reviews: [] as Saved[],
   /** Every patch of the review, as sent (#251). */
   reviewPatches: [] as Record<string, unknown>[],
-  /** Whether the next patch of the review is refused as made against a review changed in another tab. */
-  refuseReview: false,
+  /**
+   * What happens to the next save of the review (#251 fix round 1): its answer
+   * lost after it was applied, a 500 after it was written, or lost before it arrived.
+   */
+  reviewFault: "none" as "none" | "lost-after" | "500-after" | "lost-before",
+  /** Every whole-review PUT's `review_sha`, as sent (null when the page named none). */
+  reviewPuts: [] as (string | null)[],
+  /** Reads of the review after the first. */
+  reviewReads: 0,
   /** The review document the server holds on opening. */
   saved: null as unknown,
   /** Whether a second transcript of the recording exists (the second opinion). */
@@ -153,7 +160,9 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
   server.content = null;
   server.down = false;
   server.reviewPatches = [];
-  server.refuseReview = false;
+  server.reviewFault = "none";
+  server.reviewPuts = [];
+  server.reviewReads = -1;
   listSaves = 0;
   reviewSaves = 0;
   window.localStorage.clear();
@@ -190,18 +199,29 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
       return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1", list_sha: listSha() });
     }
     if (path === "/api/transcripts/7/review") {
+      const fault = saving ? server.reviewFault : "none";
+      if (saving) server.reviewFault = "none";
+      if (fault === "lost-before") throw new TypeError("Failed to fetch");
+      // The answer to a save the server made, or that answer lost on its way back.
+      const answered = (reply: Response): Response => {
+        if (fault === "lost-after") throw new TypeError("Failed to fetch");
+        if (fault === "500-after") return Response.json({ error: "OSError", message: "The library could not be written.", request: path }, { status: 500 });
+        return reply;
+      };
+      const changedElsewhere = () => refused("ReviewChanged", "This review was changed in another tab or window after this page loaded it. Reload the page.");
       if (request.method === "PUT") {
+        const named = new URL(request.url).searchParams.get("review_sha");
+        server.reviewPuts.push(named);
+        if (named !== null && named !== (server.saved === null ? "none" : reviewSha())) return changedElsewhere();
         server.reviews.push(body as Saved);
         server.saved = body;
         reviewSaves += 1;
-        return Response.json({ review_sha: reviewSha(), updated_at: "x" });
+        return answered(Response.json({ review_sha: reviewSha(), updated_at: "x" }));
       }
       if (request.method === "PATCH") {
         const change = body as Splice<unknown> & { review_sha: string; transcript_sha: string; review_pass: string; cursor_s: number; corrections: Saved["corrections"] };
         server.reviewPatches.push(body as Record<string, unknown>);
-        if (server.refuseReview || server.saved === null || change.review_sha !== reviewSha()) {
-          return refused("ReviewChanged", "This review was changed in another tab or window after this page loaded it. Reload the page.");
-        }
+        if (server.saved === null || change.review_sha !== reviewSha()) return changedElsewhere();
         const was = server.saved as Saved;
         const next = {
           ...was,
@@ -214,8 +234,9 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
         server.reviews.push(next);
         server.saved = next;
         reviewSaves += 1;
-        return Response.json({ review_sha: reviewSha(), updated_at: "x" });
+        return answered(Response.json({ review_sha: reviewSha(), updated_at: "x" }));
       }
+      server.reviewReads += 1;
       return Response.json({ document: server.saved, transcript_sha: "s1", review_sha: server.saved === null ? null : reviewSha() });
     }
     if (path === "/api/transcripts/7/reference") return Response.json({ files: ["a.reference.json", "a.reference.txt"], segments: 3, unchecked: 0 });
@@ -233,6 +254,12 @@ export const items = (content: Content | undefined) => (content ?? []).filter((e
 export const audio = () => document.querySelector("audio") as HTMLAudioElement;
 
 /** Open Review and take the pass the chooser offers first (F13). */
+/** Another tab or device saves `document` as the review, as the real server would take it. */
+export function savedElsewhere(document: unknown): void {
+  server.saved = document;
+  reviewSaves += 1;
+}
+
 export async function start(navigate?: (href: string) => void, pass = "Every sentence"): Promise<HTMLTextAreaElement> {
   render(<ReviewPage recording={2} transcript={7} {...(navigate === undefined ? {} : { navigate })} />);
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${pass}`) }));

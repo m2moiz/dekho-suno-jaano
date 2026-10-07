@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/api/client";
 import type { components } from "@/api/schema";
 import { KEEPALIVE_SHARE, keepaliveFits, NotSaved, Outdated, type SaveState } from "@/features/edit/editing";
-import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import { ApiError, fromBody, fromThrown, inDoubt, showError } from "@/features/errors/appError";
 import { spliceOf } from "@/lib/splice";
 import type { CurrentSha, ReviewDocument, Segment } from "./model";
 
@@ -37,15 +37,20 @@ export async function loadReview(
   return { document: data.document, sha: data.transcript_sha as CurrentSha, reviewSha: data.review_sha };
 }
 
-/** Save a review whole: once, for a review the server does not have yet. Answers its sha. */
+/**
+ * Save a review whole: once, for a review the server does not have yet, so
+ * only if it still has none (`review_sha=none`). A tab that opened Review
+ * before any review existed is refused 409 ReviewChanged rather than writing
+ * over one another device made since (#251 fix round 1, I2). Answers its sha.
+ */
 async function putReview(transcriptId: number, document: ReviewDocument, keepalive: boolean): Promise<string> {
   const route = `/api/transcripts/${transcriptId}/review`;
   const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/review", {
-    params: { path: { transcript_id: String(transcriptId) } },
+    params: { path: { transcript_id: String(transcriptId) }, query: { review_sha: "none" } },
     body: document,
     ...(keepalive ? { keepalive: true } : {}),
   });
-  if (data === undefined) throw new ApiError(fromBody(error, response, route));
+  if (data === undefined) throw new ApiError(fromBody(error, response, route), response.status);
   return data.review_sha;
 }
 
@@ -57,7 +62,7 @@ async function patchReview(transcriptId: number, body: ReviewPatch, keepalive: b
     body,
     ...(keepalive ? { keepalive: true } : {}),
   });
-  if (data === undefined) throw new ApiError(fromBody(error, response, route));
+  if (data === undefined) throw new ApiError(fromBody(error, response, route), response.status);
   return data.review_sha;
 }
 
@@ -86,6 +91,22 @@ function sameSegment(a: Segment, b: Segment): boolean {
   );
 }
 
+/**
+ * Whether two reviews hold the same: segments, corrections, pass, cursor and
+ * transcript. Not `updated_at`, which the server sets on each patch, nor
+ * `started_at`, which a patch keeps from the review it patches.
+ */
+function sameReview(a: ReviewDocument, b: ReviewDocument): boolean {
+  return (
+    a.transcript_sha === b.transcript_sha &&
+    a.review_pass === b.review_pass &&
+    a.cursor_s === b.cursor_s &&
+    a.segments.length === b.segments.length &&
+    a.segments.every((segment, i) => sameSegment(segment, b.segments[i] as Segment)) &&
+    JSON.stringify(a.corrections) === JSON.stringify(b.corrections)
+  );
+}
+
 /** The review as the server holds it: what the next patch is worked out from and made against (#251). */
 type Held = { document: ReviewDocument; reviewSha: string };
 
@@ -98,6 +119,11 @@ type Held = { document: ReviewDocument; reviewSha: string };
 function patchOf(held: Held, next: ReviewDocument): ReviewPatch | null {
   const was = held.document;
   const change = spliceOf(was.segments, next.segments, sameSegment);
+  // Corrections are only ever added, so the server's are the first of the page's;
+  // a change that removed or replaced one would be lost here, so it fails loudly (review Minor 8).
+  if (was.corrections.some((c, i) => c !== next.corrections[i] && JSON.stringify(c) !== JSON.stringify(next.corrections[i]))) {
+    throw new Error("A correction the server holds was changed or removed on the page; a patch only adds corrections.");
+  }
   const corrections = next.corrections.slice(was.corrections.length);
   const same =
     change === null &&
@@ -152,7 +178,7 @@ export function useReviewSave(
   const outdated = useRef<string | null>(null);
   const flying = useRef<Promise<boolean> | null>(null);
 
-  const save = useCallback(
+  const saveOnce = useCallback(
     async (next: ReviewDocument) => {
       const was = held.current;
       if (was === null) {
@@ -164,6 +190,47 @@ export function useReviewSave(
       held.current = { document: next, reviewSha: await patchReview(transcriptId, body, keepaliveFits(body, KEEPALIVE_SHARE)) };
     },
     [transcriptId],
+  );
+
+  // A save whose fate is in doubt (#251 fix round 1, I1), as the edit list's
+  // (editing.ts, useSave): its answer lost, a 5xx, or a ReviewChanged that may
+  // be this page's own save landing with its answer lost. The review is read
+  // once. Holding `next`, the save landed and its sha is taken; holding the
+  // review before it (or none, for the creating save), it did not, and is sent
+  // once more. Anything else was saved elsewhere, and only a reload helps.
+  const save = useCallback(
+    async (next: ReviewDocument) => {
+      try {
+        await saveOnce(next);
+      } catch (thrown) {
+        if (!inDoubt(thrown, "ReviewChanged")) throw thrown;
+        const route = `/api/transcripts/${transcriptId}/review`;
+        const read = await loadReview(transcriptId).catch(() => null);
+        // Not readable either: the network is still down, and the ordinary failure says so.
+        if (read === null) throw thrown;
+        if (read.sha !== next.transcript_sha) {
+          throw new ApiError({ error: "TranscriptChanged", message: "This transcript was made again while its review was open. Reload the page.", request: route });
+        }
+        const before = held.current?.document ?? null;
+        const server = read.document;
+        if (server !== null && read.reviewSha !== null && sameReview(server, next)) {
+          held.current = { document: next, reviewSha: read.reviewSha };
+          return;
+        }
+        const notLanded = before === null ? server === null : server !== null && sameReview(server, before);
+        if (!notLanded) {
+          if (thrown instanceof ApiError && thrown.detail.error === "ReviewChanged") throw thrown;
+          throw new ApiError({
+            error: "ReviewChanged",
+            message: "This review was changed in another tab or window after this page loaded it, so this change was not saved. Reload the page to load it again.",
+            request: route,
+          });
+        }
+        if (before !== null && read.reviewSha !== null) held.current = { document: before, reviewSha: read.reviewSha };
+        await saveOnce(next);
+      }
+    },
+    [transcriptId, saveOnce],
   );
 
   const send = useCallback((): Promise<boolean> => {

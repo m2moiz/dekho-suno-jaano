@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "@/api/client";
-import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import { ApiError, fromBody, fromThrown, inDoubt, showError } from "@/features/errors/appError";
 import type { Names } from "@/features/transcript/speakers";
-import { type Content, Editor } from "@/lib/editOps";
+import { type Content, Editor, type Entry } from "@/lib/editOps";
 import { devCheck } from "@/lib/linter";
 import { sameEntry, spliceOf } from "@/lib/splice";
 
@@ -205,6 +205,11 @@ const TRANSCRIPT_CHANGED = "TranscriptChanged";
 /** The server's refusal of a patch made against a list changed since, in another tab (#251). */
 const LIST_CHANGED = "ListChanged";
 
+/** Whether two edit lists hold the same entries, by the fields the file holds. */
+function sameList(a: readonly Entry[], b: readonly Entry[]): boolean {
+  return a.length === b.length && a.every((entry, i) => sameEntry(entry, b[i] as Entry));
+}
+
 /**
  * Save the list after every change, one request at a time, so a burst of
  * edits is never saved out of order. Each save is a patch (#251): only the
@@ -251,7 +256,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
     // What differs between the server's list and `content`, made against the
     // server's list, with keepalive when it fits: so a commit a moment before
     // the page dies still lands (#251).
-    const patch = async (content: Content) => {
+    const patchOnce = async (content: Content) => {
       const change = spliceOf(saved.content, content, sameEntry);
       if (change === null) {
         saved.content = content;
@@ -263,10 +268,51 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
         body,
         ...(keepaliveFits(body, KEEPALIVE_SHARE) ? { keepalive: true } : {}),
       });
-      if (data === undefined) throw new ApiError(fromBody(error, response, route));
+      if (data === undefined) throw new ApiError(fromBody(error, response, route), response.status);
       saved.content = content;
       saved.listSha = data.list_sha;
       if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
+    };
+    // A patch whose fate is in doubt (#251 fix round 1, I1): its answer lost,
+    // a 5xx, or a ListChanged that may be this page's own patch landing with
+    // its answer lost. The list is read once and compared with what the page
+    // holds. Holding `content`, the patch landed: its sha is taken and the
+    // queue goes on. Holding the list before it, it did not: it is sent once
+    // more. Anything else is a change made elsewhere, and only a reload helps.
+    // Within the patch's own turn, so no other save goes between.
+    const patch = async (content: Content) => {
+      try {
+        await patchOnce(content);
+      } catch (thrown) {
+        if (!inDoubt(thrown, LIST_CHANGED)) throw thrown;
+        const read = await api
+          .GET("/api/transcripts/{transcript_id}/edits", { params: { path: { transcript_id: String(transcriptId) } } })
+          .catch(() => null);
+        // Not readable either: the network is still down, and the ordinary failure says so.
+        const data = read?.data;
+        if (data === undefined) throw thrown;
+        if (data.transcript_sha !== sha) {
+          throw new ApiError({ error: TRANSCRIPT_CHANGED, message: "This transcript was made again while it was open. Reload the page.", request: route });
+        }
+        const landed = sameList(data.content, content);
+        if (!landed && !sameList(data.content, saved.content)) {
+          if (thrown instanceof ApiError && thrown.detail.error === LIST_CHANGED) throw thrown;
+          throw new ApiError({
+            error: LIST_CHANGED,
+            message: "This transcript's edits were changed in another tab or window after this page loaded them, so this change was not saved. Reload the page to load them again.",
+            request: route,
+          });
+        }
+        // A rename whose answer was lost is the server's too: its names are taken with its sha.
+        saved.listSha = data.list_sha;
+        if (live) names.set(data.names);
+        if (landed) {
+          saved.content = content;
+          if (live) renderable.set({ spans: spansOf(data.spans), unrenderable: data.unrenderable });
+          return;
+        }
+        await patchOnce(content);
+      }
     };
     // The transcript was made again under the page: the patch kept nothing,
     // so the whole list goes, for the server to keep aside under its own
@@ -339,7 +385,9 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
     // it waits for its answer, which names the list the next is made against
     // (#251). Sending it beside the one in flight, as before #251, would make
     // two patches against one list. The window that leaves is one small
-    // request's round trip.
+    // request's round trip. Review's box words are covered across it by the
+    // draft (draft.ts), cleared only once the list is saved; a reader edit or
+    // a check made in that window is not (Task 15c review, Minor 2).
     keeping.current = () => {
       if (outdated === null && !editor.inGesture && editor.content !== saved.content) void start();
     };
@@ -363,7 +411,10 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
       window.removeEventListener("beforeunload", leaving);
       stopHiding();
     };
-  }, [transcriptId, editor, renderable, sha, saved]);
+    // Every value here is fixed for one load of the list. Were the effect to run
+    // again with a save in flight, the new `turn` would not wait for the old
+    // one, and two patches could be made against one sha (Task 15c review, Minor 7).
+  }, [transcriptId, editor, renderable, sha, saved, names]);
   const settle = useCallback(() => settling.current(), []);
   const keep = useCallback(() => keeping.current(), []);
   const rename = useCallback(
