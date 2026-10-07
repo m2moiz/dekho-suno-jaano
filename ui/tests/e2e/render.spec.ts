@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { editableTranscript, openBleep, saveStatus } from "./editable.ts";
+import { editableTranscript, openBleep } from "./editable.ts";
 import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
 
 test("a render from the app writes the bleeped copy beside the recording and links it", async ({ page }, info) => {
@@ -24,7 +24,7 @@ test("a render from the app writes the bleeped copy beside the recording and lin
     await panel.getByRole("button", { name: "Add" }).click();
     await expect(panel.getByRole("listitem", { name: word })).toContainText("muted");
   }
-  await expect(saveStatus(page)).toHaveText("Saved");
+  await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
   await expect(panel).toContainText("with 2 spans silenced");
 
   await panel.getByRole("button", { name: "Render", exact: true }).click();

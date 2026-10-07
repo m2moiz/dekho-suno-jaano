@@ -39,14 +39,19 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  overlay = true,
+  overlayClassName,
   ...props
 }: SheetPrimitive.Popup.Props & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
+  /** Whether a dim sits behind the sheet: a non-modal sheet leaves the page in reach and has none. */
+  overlay?: boolean
+  overlayClassName?: string
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      {overlay && <SheetOverlay className={overlayClassName} />}
       <SheetPrimitive.Popup
         data-slot="sheet-content"
         data-side={side}

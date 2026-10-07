@@ -152,11 +152,12 @@ export function BleepPanel({ transcriptId, editor, content, renderable, padS, co
         </ul>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        {/* The rail's Play is the reader's one gold button; this one is a quieter fill (F23). */}
+        {/* The drawer's main action, filled with the text colour (navy on the light card,
+            pale on the dark one): the strongest fill here short of gold, which the
+            rail's Play keeps (F23). */}
         <Button
-          variant="secondary"
           size="sm"
-          className={tall}
+          className={`bg-foreground text-background hover:bg-foreground/85 ${touch ? "h-11 px-4" : "h-8 px-4"}`}
           disabled={busy || renderable.spans === null || renderable.spans.length === 0}
           onClick={() => void render(content)}
         >

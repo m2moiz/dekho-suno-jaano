@@ -73,13 +73,3 @@ export async function openBleep(page: Page) {
   await panel.waitFor();
   return panel;
 }
-
-/**
- * The Edit toolbar's save status. Looked for through the accessibility tree's
- * hidden parts too, because an open bleep drawer hides the bar behind it.
- */
-export function saveStatus(page: Page) {
-  return page
-    .getByRole("toolbar", { name: "Edit", includeHidden: true })
-    .getByRole("status", { includeHidden: true });
-}

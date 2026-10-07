@@ -3,6 +3,7 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, us
 import { api } from "@/api/client";
 import { BleepDrawer } from "@/features/bleep/BleepDrawer";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
+import { isMuted } from "@/features/bleep/matches";
 import type { RenderJob } from "@/features/bleep/render";
 import { useMatches } from "@/features/bleep/useMatches";
 import { correction, textOf } from "@/features/edit/correct";
@@ -193,6 +194,9 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   const [bleeping, setBleeping] = useState(false);
   const [rendering, setRendering] = useState<RenderJob | null>(null);
   const matches = useMatches(transcriptId, editor, edit.reading);
+  // The badge counts what Mute all would still mute, not every word the lists found.
+  const unmuted = (matches.found?.matches ?? []).filter((m) => !isMuted(content, m)).length;
+  const more = useRef<HTMLButtonElement>(null);
   // The words being retyped in place (#83), while the field is open.
   const [correcting, setCorrecting] = useState<Picked | null>(null);
   // Where focus goes back to once Correct or Timing closes: these words, by
@@ -236,7 +240,8 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
         <>
           <EditBar editor={editor} saving={saving} />
           <MoreMenu
-            matchCount={matches.found?.matches.length ?? 0}
+            matchCount={unmuted}
+            triggerRef={more}
             onBleep={() => setBleeping(true)}
             timingWord={selected !== null && selected.first === selected.last ? selected.first : null}
             onTiming={setTiming}
@@ -293,7 +298,7 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
           />
         </div>
       )}
-      <BleepDrawer open={bleeping} onOpenChange={setBleeping}>
+      <BleepDrawer open={bleeping} onOpenChange={setBleeping} returnFocus={more}>
         <BleepPanel
           transcriptId={transcriptId}
           editor={editor}

@@ -23,7 +23,7 @@ import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
 import { installHighlights, painted } from "./highlights";
-import { openBleepPanel } from "./menus";
+import { choose, openBleepPanel } from "./menus";
 
 describe("spanReached", () => {
   const spans = [[1, 2], [3, 3.5]] as const;
@@ -376,6 +376,23 @@ describe("the words to bleep, on the transcript page", () => {
     expect(painted(registry, "dsj-muted")).toEqual(["bravo"]);
   });
 
+  it("badges the menu's Bleep item with the matches Mute all would still mute", async () => {
+    const section = await panel();
+    const openMenu = async () => {
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "More" }));
+      });
+      return screen.findByRole("menuitem", { name: /^Bleep/ });
+    };
+    const badged = await openMenu();
+    expect(badged.textContent).toBe("Bleep1");
+    // Bleep again closes the menu; the drawer is already open, and Mute all is in it.
+    choose(badged);
+    fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
+    await vi.waitFor(() => expect(painted(registry, "dsj-muted")).toEqual(["bravo"]));
+    expect((await openMenu()).textContent).toBe("Bleep");
+  });
+
   it("dismisses a match and brings it back with one undo each", async () => {
     const section = await panel();
     fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
@@ -389,8 +406,7 @@ describe("the words to bleep, on the transcript page", () => {
       fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     });
     expect(painted(registry, "dsj-muted")).toEqual([]);
-    // The open drawer hides the bar from the accessibility tree, so it is looked for there.
-    expect(screen.getByRole("button", { name: "Undo", hidden: true })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", true);
   });
 
   it("adds a word to the user's list and mutes what the next pass finds of it", async () => {
