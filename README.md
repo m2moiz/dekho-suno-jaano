@@ -621,15 +621,17 @@ dsj ui --tailnet      # prints the phone address and a QR code to scan
 ```
 
 The server still listens on this Mac only. Tailscale's own proxy (`tailscale
-serve`, HTTPS on port 8443) passes requests from your tailnet's devices to it,
-and nothing reaches it from the public internet. The phone address carries the
-same key after `#` as the Mac's, and every request still needs it. When the
-server stops, the 8443 entry goes with it. A phone tab in the background sends
-no sign of life, so with `--tailnet` the server waits 30 minutes for one
-instead of three. dsj never starts Tailscale, never uses `tailscale funnel`,
-and never replaces something you already serve on 8443: in each of those cases
-it says what is in the way and stops. A plain `dsj ui` already running must be
-stopped first.
+serve`, over HTTPS) passes requests from your tailnet's devices to it, and
+nothing reaches it from the public internet. It takes the first of ports 8443,
+8444, 8445 and 10000 that serves nothing yet, never 443, and never replaces
+something you already serve: if all four are in use it names them and stops.
+The phone address carries the same key after `#` as the Mac's, and every
+request still needs it. When the server stops, its own entry goes with it and
+no other. A phone sends no sign of life from the background, and says goodbye
+whenever you switch apps or lock the screen, so with `--tailnet` a goodbye does
+not stop the server: it waits 30 minutes without a sign of life instead of
+three. dsj never starts Tailscale and never uses `tailscale funnel`. A plain
+`dsj ui` already running must be stopped first.
 
 Only this Mac's own page can use it. The URL carries a key after `#`, which
 the page takes and wipes from the address bar; every request has to bring it

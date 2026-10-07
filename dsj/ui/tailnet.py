@@ -1,12 +1,13 @@
 """`dsj ui --tailnet`: the phone reaches dsj ui through `tailscale serve` (#250).
 
 The server keeps its loopback bind (dsj/ui/server.py, rule 1). Tailscale's own
-proxy listens on the Mac's tailnet address, port TAILNET_PORT, over HTTPS, and
+proxy listens on the Mac's tailnet address, on the first free port of
+TAILNET_PORTS, over HTTPS, and
 passes each request to 127.0.0.1. Only the owner's own tailnet devices can
 reach that address, and the per-run token is still asked of every request on
 top of it (owner's ruling, 7 Oct 2026).
 
-This module touches exactly one thing in the owner's tailnet: the 8443 entry
+This module touches exactly one thing in the owner's tailnet: the one entry
 its own run makes, and removes. It never starts or stops Tailscale, never runs
 `tailscale serve reset`, never runs `funnel`, and never replaces an entry it
 did not make. Standard library only, like everything under dsj.ui but the
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 __all__ = [
     "TAILNET_IDLE_S",
-    "TAILNET_PORT",
+    "TAILNET_PORTS",
     "Tailnet",
     "TailnetUnavailable",
 ]
@@ -29,9 +30,15 @@ from typing import cast
 
 from dsj.ui import UIUnavailable
 
-# HTTPS on 8443, not 443: an entry the owner already serves on 443 must never
-# be touched (#250). If 8443 is taken too, dsj refuses rather than replace it.
-TAILNET_PORT = 8443
+# The HTTPS ports a run may take, first free wins; never 443, which the owner
+# already serves (#250). The owner's Mac also serves 8443 to another live
+# service, which must stay as it is (ruling R5, 7 Oct 2026), hence a list. A
+# port serving anything is skipped, never replaced; all taken, dsj refuses.
+# Serve itself accepts any port: the 443, 8443 and 10000 limit is Funnel's
+# alone (`ipn.CheckFunnelPort` in ipn/serve.go, called only from
+# cmd/tailscale/cli/funnel.go, Tailscale v1.102.4); `srvTypeAndPortFromFlags`
+# in cmd/tailscale/cli/serve_v2.go checks only that the port fits in 16 bits.
+TAILNET_PORTS = (8443, 8444, 8445, 10000)
 
 # The idle stop with --tailnet, in seconds: 30 minutes, where the desktop's
 # IDLE_S is 3. A phone puts a tab it is not showing to sleep, and a sleeping tab
@@ -78,6 +85,8 @@ class Tailnet:
             )
         self.exe = exe
         self.name = ""
+        # The HTTPS port this run serves on, once choose_port() picks it.
+        self.port = TAILNET_PORTS[0]
 
     def _run(self, *args: str) -> str:
         """Run one tailscale command, with no stdin, and return its stdout."""
@@ -117,59 +126,66 @@ class Tailnet:
         Tailscale's proxy sets the outgoing Host to the incoming one
         (ipn/ipnlocal/serve.go at v1.102.4: `r.Out.Host = r.In.Host`), and a
         browser names a port that is not 443 in its Host, so this is
-        `<name>:8443`. Read from the source, not measured (#250).
+        `<name>:<port>`. Read from the source, not measured (#250).
         """
-        return f"{self.name}:{TAILNET_PORT}"
+        return f"{self.name}:{self.port}"
 
     def _config(self) -> dict[str, object]:
         return _object(json.loads(self._run("serve", "status", "--json") or "null"))
 
-    def serving(self) -> str | None:
-        """What this Mac's TAILNET_PORT is serving: a proxy target, a description, or None."""
-        config = self._config()
+    @staticmethod
+    def _serving(config: dict[str, object], https: int) -> str | None:
+        """What `config` serves on port `https`: a proxy target, a description, or None."""
         configs = [config, *map(_object, _object(config.get("Foreground")).values())]
         for each in configs:
             web = _object(each.get("Web"))
             for key, entry in web.items():
-                if key.endswith(f":{TAILNET_PORT}"):
+                if key.endswith(f":{https}"):
                     proxy = _object(_object(_object(entry).get("Handlers")).get("/")).get("Proxy")
                     return proxy if isinstance(proxy, str) else f"a {key} entry"
-            if str(TAILNET_PORT) in _object(each.get("TCP")):
-                return f"a TCP entry on port {TAILNET_PORT}"
+            if str(https) in _object(each.get("TCP")):
+                return f"a TCP entry on port {https}"
         return None
 
-    def refuse_if_taken(self) -> None:
-        """Before binding: refuse when TAILNET_PORT already serves anything.
+    def choose_port(self) -> int:
+        """Before binding: take the first of TAILNET_PORTS that serves nothing.
 
         Raises:
-            TailnetUnavailable: when it does, naming what it serves.
+            TailnetUnavailable: when every one serves something, naming each.
         """
-        if (taken := self.serving()) is not None:
-            raise TailnetUnavailable(
-                f"port {TAILNET_PORT} of this Mac's tailnet address already serves {taken}, "
-                f"and dsj will not replace it. Remove it yourself if it is no longer "
-                f"needed (`tailscale serve --https={TAILNET_PORT} off`), then run "
-                f"dsj ui --tailnet again."
-            )
+        config = self._config()
+        taken: list[str] = []
+        for https in TAILNET_PORTS:
+            what = self._serving(config, https)
+            if what is None:
+                self.port = https
+                return https
+            taken.append(f"{https}: {what}")
+        raise TailnetUnavailable(
+            f"every port dsj ui --tailnet may use on this Mac's tailnet address already "
+            f"serves something ({'; '.join(taken)}), and dsj will not replace any of them. "
+            f"Free one (`tailscale serve --https=<port> off`) if it is no longer needed, "
+            f"then run dsj ui --tailnet again."
+        )
 
     def open(self, port: int) -> None:
-        """Serve https://<name>:8443 from http://127.0.0.1:`port`, in the background.
+        """Serve https://<name>:<self.port> from http://127.0.0.1:`port`, in the background.
 
-        After refuse_if_taken(), and after the socket is bound, so the proxy
-        never points at a port nobody holds.
+        After choose_port(), and after the socket is bound, so the proxy never
+        points at a port nobody holds.
 
         Raises:
             TailnetUnavailable: when tailscale fails.
         """
-        self._run("serve", "--bg", f"--https={TAILNET_PORT}", f"http://127.0.0.1:{port}")
+        self._run("serve", "--bg", f"--https={self.port}", f"http://127.0.0.1:{port}")
 
-    def close(self, port: int) -> bool:
-        """Remove the 8443 entry if, and only if, it still points at 127.0.0.1:`port`.
+    def close(self, port: int, https: int) -> bool:
+        """Remove the entry on `https` if, and only if, it points at 127.0.0.1:`port`.
 
         Returns whether it removed one. An entry pointing anywhere else is not
         this run's, and is left as it is.
         """
-        if self.serving() != f"http://127.0.0.1:{port}":
+        if self._serving(self._config(), https) != f"http://127.0.0.1:{port}":
             return False
-        self._run("serve", f"--https={TAILNET_PORT}", "off")
+        self._run("serve", f"--https={https}", "off")
         return True

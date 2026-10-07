@@ -32,12 +32,13 @@ from fastapi.testclient import TestClient
 import dsj.ui.server
 from dsj.cli import main
 from dsj.ui.server import IDLE_S, create_app
-from dsj.ui.tailnet import TAILNET_IDLE_S, TAILNET_PORT
+from dsj.ui.tailnet import TAILNET_IDLE_S, TAILNET_PORTS
 
 CONSOLE_SCRIPT = Path(sys.executable).parent / "dsj"
 
 NAME = "mac.tail0000.ts.net"
 PHONE_URL = re.compile(rf"https://{re.escape(NAME)}:8443/#t=([A-Za-z0-9_-]{{43}})")
+ANY_PHONE_URL = re.compile(rf"https://{re.escape(NAME)}:(\d+)/#t=([A-Za-z0-9_-]{{43}})")
 
 FAKE = """\
 #!{python}
@@ -49,19 +50,20 @@ argv = sys.argv[1:]
 state["calls"].append(argv)
 out = None
 code = 0
-web_key = state["dns"].rstrip(".") + ":8443"
+port = next((a.removeprefix("--https=") for a in argv if a.startswith("--https=")), "")
+web_key = state["dns"].rstrip(".") + ":" + port
 if argv == ["status", "--json"]:
     out = {{"BackendState": state["backend"], "Self": {{"DNSName": state["dns"]}}}}
 elif argv == ["serve", "status", "--json"]:
     out = state["serve"]
-elif len(argv) == 4 and argv[:3] == ["serve", "--bg", "--https=8443"]:
+elif len(argv) == 4 and argv[:2] == ["serve", "--bg"] and argv[2].startswith("--https="):
     serve = state["serve"] or {{}}
-    serve.setdefault("TCP", {{}})["8443"] = {{"HTTPS": True}}
+    serve.setdefault("TCP", {{}})[port] = {{"HTTPS": True}}
     serve.setdefault("Web", {{}})[web_key] = {{"Handlers": {{"/": {{"Proxy": argv[3]}}}}}}
     state["serve"] = serve
-elif argv == ["serve", "--https=8443", "off"]:
+elif len(argv) == 3 and argv[0] == "serve" and argv[1].startswith("--https=") and argv[2] == "off":
     serve = state["serve"] or {{}}
-    serve.get("TCP", {{}}).pop("8443", None)
+    serve.get("TCP", {{}}).pop(port, None)
     serve.get("Web", {{}}).pop(web_key, None)
     state["serve"] = serve
 else:
@@ -99,11 +101,11 @@ class FakeTailscale:
     def calls(self) -> list[list[str]]:
         return self.read()["calls"]
 
-    def proxy(self) -> str | None:
-        """Where this Mac's 8443 entry points, or None when there is none."""
+    def proxy(self, https: int = 8443) -> str | None:
+        """Where this Mac's entry on port `https` points, or None when there is none."""
         serve: dict[str, Any] = self.read()["serve"] or {}
         web: dict[str, Any] = serve.get("Web", {})
-        entry: dict[str, Any] | None = web.get(f"{NAME}:8443")
+        entry: dict[str, Any] | None = web.get(f"{NAME}:{https}")
         return entry["Handlers"]["/"]["Proxy"] if entry else None
 
 
@@ -125,8 +127,16 @@ SERVE_STATUS = ["serve", "status", "--json"]
 OFF = ["serve", "--https=8443", "off"]
 
 
-def serve_on(port: int) -> list[str]:
-    return ["serve", "--bg", "--https=8443", f"http://127.0.0.1:{port}"]
+def off(https: int) -> list[str]:
+    return ["serve", f"--https={https}", "off"]
+
+
+def serve_on(port: int, https: int = 8443) -> list[str]:
+    return ["serve", "--bg", f"--https={https}", f"http://127.0.0.1:{port}"]
+
+
+def entry(target: str) -> dict[str, Any]:
+    return {"Handlers": {"/": {"Proxy": target}}}
 
 
 def dead_pid() -> int:
@@ -171,23 +181,57 @@ def test_tailscale_stopped_says_what_to_do_and_starts_nothing(
     assert tailscale.calls == [STATUS], "only the status may be read; never `tailscale up`"
 
 
-def test_8443_served_by_something_else_is_refused_and_left_alone(
+def test_8443_taken_goes_to_the_next_port_and_leaves_8443_alone(
     tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """The owner's Mac serves 8443 to another live service (R5): it must stay as it is."""
     theirs = {
         "TCP": {"443": {"HTTPS": True}, "8443": {"HTTPS": True}},
         "Web": {
-            f"{NAME}:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:4243"}}},
-            f"{NAME}:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8787"}}},
+            f"{NAME}:443": entry("http://127.0.0.1:4243"),
+            f"{NAME}:8443": entry("http://127.0.0.1:8787"),
         },
+    }
+    tailscale.write(serve=theirs)
+    seen: dict[str, object] = {}
+
+    def serving(_server: object, sockets: list[socket.socket]) -> None:
+        port = sockets[0].getsockname()[1]
+        seen.update(port=port, ours=tailscale.proxy(8444))
+
+    monkeypatch.setattr("uvicorn.Server.run", serving)
+    assert main(["ui", "--tailnet", "--print-url"]) == 0
+    port = seen["port"]
+    assert isinstance(port, int)
+    assert seen["ours"] == f"http://127.0.0.1:{port}"
+    found = ANY_PHONE_URL.fullmatch(capsys.readouterr().out.strip())
+    assert found
+    assert found[1] == "8444"
+    # Only its own entry went; 443 and 8443 are exactly as they were.
+    assert tailscale.read()["serve"] == theirs
+    assert tailscale.calls == [
+        STATUS, SERVE_STATUS, serve_on(port, 8444), SERVE_STATUS, off(8444),
+    ]
+
+
+def test_every_port_taken_is_refused_naming_each_and_left_alone(
+    tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert TAILNET_PORTS == (8443, 8444, 8445, 10000)
+    theirs = {
+        "TCP": {str(p): {"HTTPS": True} for p in TAILNET_PORTS},
+        "Web": {f"{NAME}:{p}": entry(f"http://127.0.0.1:{p + 1}") for p in TAILNET_PORTS},
     }
     tailscale.write(serve=theirs)
     monkeypatch.setattr("uvicorn.Server.run", no_serving)
     assert main(["ui", "--tailnet", "--print-url"]) == 1
-    err = capsys.readouterr().err
-    assert "8443" in err
-    assert "http://127.0.0.1:8787" in err
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    for p in TAILNET_PORTS:
+        assert f"{p}: http://127.0.0.1:{p + 1}" in captured.err, captured.err
+    assert len(captured.err.strip().splitlines()) == 1, captured.err
     assert tailscale.read()["serve"] == theirs, "someone else's serve entry was changed"
     assert tailscale.calls == [STATUS, SERVE_STATUS]
 
@@ -327,9 +371,10 @@ def test_a_stale_lock_does_not_license_removing_an_entry_it_did_not_make(
     }
     tailscale.write(serve=theirs)
     monkeypatch.setattr("uvicorn.Server.run", no_serving)
-    assert main(["ui", "--tailnet", "--print-url"]) == 1
+    assert main(["ui", "--tailnet", "--print-url"]) == 0
     assert tailscale.read()["serve"] == theirs
     assert OFF not in tailscale.calls
+    assert off(8444) in tailscale.calls, "it should have served, and cleaned up, 8444"
 
 
 # --------------------------------------------------------------------------
@@ -439,7 +484,6 @@ def test_a_plain_app_refuses_the_tailnet_name() -> None:
 def test_tailnet_waits_thirty_minutes_and_the_desktop_three(
     tailscale: FakeTailscale, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert TAILNET_PORT == 8443
     assert TAILNET_IDLE_S == 30 * 60
     assert IDLE_S == 180
     used: list[float] = []
@@ -453,3 +497,56 @@ def test_tailnet_waits_thirty_minutes_and_the_desktop_three(
     assert main(["ui", "--tailnet", "--print-url"]) == 0
     assert used == [IDLE_S, TAILNET_IDLE_S]
     assert os.environ["PATH"] == str(tailscale.bin)
+
+
+# --------------------------------------------------------------------------
+# A goodbye does not stop a --tailnet run (R5)
+# --------------------------------------------------------------------------
+
+
+def post(url: str, path: str, page: str) -> int:
+    """POST `path` to the loopback server `url` names, as page `page`."""
+    port, token = re.findall(r"http://127\.0\.0\.1:(\d+)/#t=(.+)", url)[0]
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", method="POST",
+        headers={"Authorization": f"Bearer {token}", "X-Dsj-Page": page},
+    )
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        return reply.status
+
+
+@pytest.mark.parametrize("tailnet", [False, True])
+def test_a_goodbye_stops_a_plain_run_and_not_a_tailnet_one(
+    tailnet: bool, tailscale: FakeTailscale, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With --tailnet only the idle stop may end the server.
+
+    A phone says goodbye on `pagehide` when the owner switches apps or locks
+    the screen, not only when the tab closes.
+    """
+    idle, bye = 6.0, 0.5
+    server = threading.Thread(
+        target=dsj.ui.server.serve,
+        kwargs={"open_browser": False, "idle_s": idle, "bye_s": bye, "tailnet": tailnet},
+    )
+    server.start()
+    try:
+        url = wait_for_holder()["url"]
+        assert post(url, "/api/heartbeat", "phone") == 204
+        said = time.monotonic()
+        assert post(url, "/api/bye", "phone") == 204
+        server.join(timeout=bye + 3)
+        stopped_by_bye = not server.is_alive()
+    finally:
+        server.join(timeout=idle + 30)
+    took = time.monotonic() - said
+    assert not server.is_alive()
+    err = capsys.readouterr().err
+    if tailnet:
+        assert not stopped_by_bye, "a goodbye stopped the --tailnet server"
+        assert took >= idle - 1, took
+        assert f"No dsj page has been open for {idle:g} s" in err
+        assert tailscale.proxy() is None
+    else:
+        assert stopped_by_bye, "a goodbye no longer stops a plain dsj ui"
+        assert "The dsj page was closed" in err

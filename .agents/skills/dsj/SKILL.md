@@ -339,17 +339,20 @@ with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_cou
 `GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
 
 With `--tailnet` (for a phone or tablet, #250) it still listens on `127.0.0.1`, and
-runs `tailscale serve --bg --https=8443 http://127.0.0.1:<port>` in front of it, so
-only devices on the owner's tailnet reach it. It prints
-`https://<mac>.<tailnet>.ts.net:8443/#t=<token>` on stdout instead, and a QR code of it
-on stderr; the token is still required, and `<mac>.<tailnet>.ts.net:8443` is the one
-extra `Host` let in. It removes that 8443 entry when it stops, however it stops, and
-waits 30 minutes for a page instead of three, because a phone's background tab sends no
-heartbeat. It exits 1 with one line, changing nothing, when `tailscale` is not on
-PATH, when Tailscale is not running (it never starts it), when 8443 already serves
-something else (it never replaces it), or when a `dsj ui` without `--tailnet` is
-already running. It never runs `tailscale funnel`, so nothing is on the public
-internet. An agent should not run it: the phone check belongs to the owner.
+runs `tailscale serve --bg --https=<https> http://127.0.0.1:<port>` in front of it, so
+only devices on the owner's tailnet reach it. `<https>` is the first of 8443, 8444, 8445
+and 10000 that serves nothing yet; a port already serving something is skipped, never
+replaced, and 443 is never used. It prints `https://<mac>.<tailnet>.ts.net:<https>/#t=<token>`
+on stdout instead, and a QR code of it on stderr; the token is still required, and
+`<mac>.<tailnet>.ts.net:<https>` is the one extra `Host` let in. The lock file records
+which port the run took, and only that entry is removed when it stops, however it stops.
+It waits 30 minutes for a page instead of three, and a page's goodbye does not stop it,
+because a phone sends one on every app switch or screen lock. It exits 1 with one line,
+changing nothing, when `tailscale` is not on PATH, when Tailscale is not running (it
+never starts it), when all four ports already serve something (it names each), or when a
+`dsj ui` without `--tailnet` is already running. It never runs `tailscale funnel`, so
+nothing is on the public internet. An agent should not run it: the phone check belongs
+to the owner.
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.

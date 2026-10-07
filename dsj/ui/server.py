@@ -22,7 +22,7 @@ it only has to guess the port. So only this machine's own page may use this one
   3. A request whose `Host` is not this server's loopback address is refused
      before anything else is looked at. That is what stops a hostile site
      pointing its own domain at 127.0.0.1 (DNS rebinding). With `--tailnet`,
-     and only then, the Mac's tailnet name on port 8443 is let in as well.
+     and only then, the Mac's tailnet name on the port it serves is let in.
   4. No CORS header is ever sent, so another origin's script cannot read a
      reply even when it guesses the port and the token check lets it through.
   5. No route takes a filesystem path. The page names a recording by id and
@@ -48,6 +48,7 @@ __all__ = [
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import secrets
@@ -74,7 +75,7 @@ from dsj.ui.errors import STATUS, describe
 from dsj.ui.jobs import Jobs
 from dsj.ui.routes import jobs, marks, media, recording, review
 from dsj.ui.store import library_path
-from dsj.ui.tailnet import TAILNET_IDLE_S, TAILNET_PORT, Tailnet, TailnetUnavailable
+from dsj.ui.tailnet import TAILNET_IDLE_S, Tailnet, TailnetUnavailable
 
 # Committed, and inside the package, so an install carries the page with no
 # Node on the machine. `just ui-build` writes it from ui/ (#57 section 8).
@@ -287,7 +288,7 @@ def create_app(
     `extra_ports` are other loopback ports whose `Host` is accepted too: only
     `dev_app()` uses it, for Vite's dev server, which passes the browser's own
     `Host` through to this one. `extra_hosts` are whole `Host` values accepted
-    too: only `serve(tailnet=True)` passes one, the Mac's `<name>:8443` (#250).
+    too: only `serve(tailnet=True)` passes one, the Mac's `<name>:<port>` (#250).
     The app's Heartbeat is `app.state.heartbeat`.
 
     Raises:
@@ -455,24 +456,26 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _clear_stale(tailnet: Tailnet, previous: dict[str, object]) -> None:
-    """Remove the 8443 entry a killed --tailnet run left behind (#250).
+    """Remove the serve entry a killed --tailnet run left behind (#250).
 
     Only when the lock file, which a `kill -9` leaves written, records a
-    --tailnet run whose pid is dead, and only when the entry still points at
-    that run's loopback port: anything else on 8443 is not dsj's to remove.
+    --tailnet run whose pid is dead, only on the HTTPS port that run recorded,
+    and only when the entry there still points at that run's loopback port:
+    anything else is not dsj's to remove.
     """
     pid, port = previous.get("pid"), previous.get("port")
-    if not previous.get("tailnet") or not isinstance(pid, int) or not isinstance(port, int):
+    https = cast("dict[str, object]", previous.get("tailnet") or {}).get("port")
+    if not all(isinstance(n, int) for n in (pid, port, https)):
         return
-    if _pid_alive(pid):
+    if _pid_alive(cast("int", pid)):
         return
-    if tailnet.close(port):
-        print(f"Removed the tailscale serve entry on {TAILNET_PORT} that a stopped "
+    if tailnet.close(cast("int", port), cast("int", https)):
+        print(f"Removed the tailscale serve entry on {https} that a stopped "
               f"dsj ui (pid {pid}) left behind.", file=sys.stderr, flush=True)
 
 
 class _Undo:
-    """Remove this run's 8443 entry, once, whichever way the server stops."""
+    """Remove this run's serve entry, once, whichever way the server stops."""
 
     def __init__(self, tailnet: Tailnet) -> None:
         self.tailnet = tailnet
@@ -485,12 +488,12 @@ class _Undo:
         if port is None:
             return
         try:
-            self.tailnet.close(port)
+            self.tailnet.close(port, self.tailnet.port)
         except (TailnetUnavailable, OSError, ValueError) as exc:
             # Never over the error that stopped the server, if there was one.
             with contextlib.suppress(OSError):
                 print(f"dsj ui could not remove its tailscale serve entry ({exc}); "
-                      f"`tailscale serve --https={TAILNET_PORT} off` removes it.",
+                      f"`tailscale serve --https={self.tailnet.port} off` removes it.",
                       file=sys.stderr, flush=True)
 
 
@@ -543,15 +546,22 @@ def serve(
     It is listening before the URL is printed, so anything that reads the URL
     and connects at once is queued, not refused.
 
-    With `tailnet`, Tailscale's proxy serves it to the owner's tailnet on 8443
-    (dsj/ui/tailnet.py, #250), the phone URL is printed instead, and the idle
-    stop is TAILNET_IDLE_S unless `idle_s` says otherwise.
+    With `tailnet`, Tailscale's proxy serves it to the owner's tailnet on the
+    first free port of TAILNET_PORTS (dsj/ui/tailnet.py, #250), the phone URL
+    is printed instead, the idle stop is TAILNET_IDLE_S unless `idle_s` says
+    otherwise, and a page's goodbye does not stop it (R5).
 
     Raises:
         TailnetUnavailable: with `tailnet`, when Tailscale cannot serve it.
     """
     if idle_s is None:
         idle_s = TAILNET_IDLE_S if tailnet else IDLE_S
+    if tailnet:
+        # A phone sends its goodbye on `pagehide`, which it fires when the owner
+        # switches apps or locks the screen, not only when the tab closes: a
+        # goodbye would stop the server mid-review. Only the idle stop applies
+        # (ruling R5, 7 Oct 2026).
+        bye_s = math.inf
     lock = lock_path()
     fd = _take_lock(lock)
     if fd is None:
@@ -566,7 +576,7 @@ def serve(
             proxy.connect()
             # What the lock file held before this run took it: a killed run's.
             _clear_stale(proxy, _read_holder(lock))
-            proxy.refuse_if_taken()
+            proxy.choose_port()
             undo = _Undo(proxy)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((HOST, 0))
@@ -583,7 +593,7 @@ def serve(
             shown = url
             if proxy and undo:
                 shown = f"https://{proxy.host}/#t={token}"
-                holder["tailnet"] = {"host": proxy.name, "port": TAILNET_PORT, "url": shown}
+                holder["tailnet"] = {"host": proxy.name, "port": proxy.port, "url": shown}
             # Written before the entry is made, so a run killed at any point
             # after it leaves the record the next run's _clear_stale() reads.
             _write_holder(fd, holder)

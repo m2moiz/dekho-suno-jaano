@@ -631,8 +631,8 @@ def ui(
         bool,
         typer.Option(
             "--tailnet",
-            help="also serve it to your own Tailscale devices on port 8443, and print "
-            "the phone URL and its QR code",
+            help="also serve it to your own Tailscale devices (HTTPS on the first free of "
+            "8443, 8444, 8445, 10000), and print the phone URL and its QR code",
         ),
     ] = False,
 ) -> int:
@@ -650,7 +650,7 @@ def ui(
         serve(open_browser=not print_url, tailnet=tailnet)
     except TailnetUnavailable as exc:
         # The caller's to put right, in one line (#200, #250): Tailscale not
-        # installed or not running, 8443 taken, or a plain dsj ui in the way.
+        # installed or not running, every port taken, or a plain dsj ui in the way.
         print(f"dsj: {exc}", file=sys.stderr)
         raise typer.Exit(1) from None
     return 0
