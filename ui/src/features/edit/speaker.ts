@@ -65,6 +65,10 @@ export function speakerChange(content: Content, start: number, stop: number, spe
     const entry = content[i] as Entry;
     if (entry.kind === "paragraph") {
       if (entry.speaker !== speaker) changed = true;
+      // A mark inside the stretch would only say its speaker again (a merged
+      // sentence's middle, Task 5 review): the stretch becomes one paragraph.
+      // The first entry is the stretch's own mark, a sentence boundary, kept.
+      if (i > from || lead) continue;
       out.push({ ...entry, speaker });
     } else {
       out.push(entry);

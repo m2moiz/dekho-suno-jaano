@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import { correction } from "../../src/features/edit/correct";
 import {
+  caretInList,
   counts,
+  type CurrentSha,
   documentOf,
   entryRange,
   freshSegments,
@@ -18,6 +20,7 @@ import {
   splitAt,
   step,
   timeLeft,
+  wordCorrection,
   wordIndex,
 } from "../../src/features/review/model";
 import type { Content, Entry, Item } from "../../src/lib/editOps";
@@ -86,6 +89,63 @@ describe("a correction that changes the word count (Review Focus 2)", () => {
   });
 });
 
+describe("a correction made in Review changes only the words that differ (F4)", () => {
+  // "alpha bravo charlie delta": entries 2 to 5.
+  const range = { start: 2, stop: 6 };
+  const apply = (content: Content, op: { start: number; stop: number; entries: Entry[] }): Content => [
+    ...content.slice(0, op.start),
+    ...op.entries,
+    ...content.slice(op.stop),
+  ];
+  const texts = (entries: readonly Entry[]) => entries.map((e) => (e.kind === "item" ? e.text : "|"));
+
+  it("retypes one word and leaves every other entry of the sentence as it was, times and all", () => {
+    const fix = wordCorrection(CONTENT, range, "alpha bravo Charles Darwin delta");
+    if (fix === null) throw new Error("no change seen");
+    expect(fix.op).toMatchObject({ kind: "correct", start: 4, stop: 5 });
+    expect(texts(fix.op.entries)).toEqual([" Charles", " Darwin"]);
+    expect(fix.correction).toEqual({ start: 1.0, end: 1.3, before: "charlie", after: "Charles Darwin" });
+    const after = apply(CONTENT, fix.op);
+    expect(after.slice(0, 4)).toEqual(CONTENT.slice(0, 4));
+    expect(after.slice(6)).toEqual(CONTENT.slice(5));
+  });
+
+  it("finds nothing to do the second time, so checking a sentence again applies nothing twice", () => {
+    const fix = wordCorrection(CONTENT, range, "alpha bravo Charles Darwin delta");
+    if (fix === null) throw new Error("no change seen");
+    const after = apply(CONTENT, fix.op);
+    const again = entryRange(wordIndex(after), { start: 0.2, end: 1.6 });
+    if (again === null) throw new Error("no words");
+    expect(wordCorrection(after, again, "alpha bravo Charles Darwin delta")).toBeNull();
+  });
+
+  it("sees no change in spacing alone", () => {
+    expect(wordCorrection(CONTENT, range, "  alpha  bravo\ncharlie delta ")).toBeNull();
+  });
+
+  it("adds a word by retyping the word beside it, at either end", () => {
+    const end = wordCorrection(CONTENT, range, "alpha bravo charlie delta golf");
+    expect(end?.op).toMatchObject({ start: 5, stop: 6 });
+    expect(texts(end?.op.entries ?? [])).toEqual([" delta", " golf"]);
+    const start = wordCorrection(CONTENT, range, "zulu alpha bravo charlie delta");
+    expect(start?.op).toMatchObject({ start: 2, stop: 3 });
+    expect(texts(start?.op.entries ?? [])).toEqual([" zulu", " alpha"]);
+  });
+
+  it("drops a word, leaving its time as a pause", () => {
+    const fix = wordCorrection(CONTENT, range, "alpha charlie delta");
+    expect(fix?.op).toMatchObject({ start: 3, stop: 4 });
+    expect(texts(fix?.op.entries ?? [])).toEqual([""]);
+    expect(fix?.correction).toMatchObject({ before: "bravo", after: "" });
+  });
+
+  it("retypes a word in two pieces whole", () => {
+    const fix = wordCorrection(CONTENT, { start: 10, stop: 13 }, "a questions");
+    expect(fix?.op).toMatchObject({ start: 11, stop: 13 });
+    expect(fix?.correction).toMatchObject({ before: "question", after: "questions" });
+  });
+});
+
 describe("splitAt (Review Focus 3)", () => {
   const segments = freshSegments(CONTENT);
   // "alpha bravo charlie delta": alpha 0-5, bravo 6-11, charlie 12-19, delta 20-25.
@@ -115,6 +175,44 @@ describe("splitAt (Review Focus 3)", () => {
   });
 });
 
+describe("caretInList (Task 11 carry b)", () => {
+  // The box may hold other spacing than the list's text; the caret is found word by word.
+  const box = "  alpha   bravo\ncharlie ";
+  const list = "alpha bravo charlie";
+  it.each([
+    [0, 0],
+    [2, 0],
+    [4, 2],
+    [7, 5],
+    [8, 5],
+    [10, 6],
+    [12, 8],
+    [15, 11],
+    [16, 12],
+    [23, 19],
+    [24, 19],
+  ])("puts box caret %i at list place %i", (caret, at) => {
+    expect(caretInList(box, caret, list)).toBe(at);
+  });
+
+  it("finds nothing when the two do not hold the same words", () => {
+    expect(caretInList("alpha bravo", 3, "alpha")).toBeNull();
+  });
+});
+
+describe("splitting does not count a sentence twice (Task 11 carry e)", () => {
+  it("leaves the flags, the edit and the speaker on the first half only", () => {
+    const marked = [seg(0.2, 1.6, { flags: ["overlap"], edited: true, speaker: "SPEAKER_01", state: "checked" }), seg(2.0, 2.4), seg(3.0, 3.6)];
+    const split = splitAt(CONTENT, marked, 0, 6);
+    if ("refused" in split) throw new Error(split.refused);
+    expect(split.segments.slice(0, 2)).toEqual([
+      seg(0.2, 0.6, { flags: ["overlap"], edited: true, speaker: "SPEAKER_01" }),
+      seg(0.6, 1.6),
+    ]);
+    expect(counts(split.segments)).toMatchObject({ edited: 1, flagged: 1, reassigned: 1 });
+  });
+});
+
 describe("merging", () => {
   it("joins a sentence to the one before, unchecked, keeping both sets of flags", () => {
     const merged = mergeWithPrevious([seg(0.2, 1.6, { state: "checked", flags: ["overlap"] }), seg(2.0, 2.4, { flags: ["unclear"] })], 1);
@@ -141,9 +239,15 @@ describe("resume (Review Focus 4)", () => {
   it("hands the new sha to the document it saves, so the server accepts the next save", () => {
     const old = [seg(0.2, 1.6, { state: "checked" }), seg(2.0, 2.4), seg(3.0, 3.6)];
     const back = resume(saved("a".repeat(64), old), CONTENT, "b".repeat(64));
-    const document = documentOf({ sha: "b".repeat(64), pass: "every", cursorS: 0, startedAt: "x", segments: back.segments, corrections: [] });
+    const document = documentOf({ sha: "b".repeat(64) as CurrentSha, pass: "every", cursorS: 0, startedAt: "x", segments: back.segments, corrections: [] });
     expect(document.transcript_sha).toBe("b".repeat(64));
     expect(document.segments.map((s) => s.state)).toEqual(["checked", "unchecked", "unchecked"]);
+  });
+
+  it("takes only the current sha, never a saved document's (Task 11 carry d)", () => {
+    const old = saved("a".repeat(64), [seg(0.2, 1.6)]);
+    // @ts-expect-error: a saved document's sha is a plain string, not the transcript's sha as it is now.
+    documentOf({ sha: old.transcript_sha, pass: "every", cursorS: 0, startedAt: "x", segments: old.segments, corrections: [] });
   });
 
   it("transcribed again: keeps what still matches by span, and counts the checked ones that do not", () => {

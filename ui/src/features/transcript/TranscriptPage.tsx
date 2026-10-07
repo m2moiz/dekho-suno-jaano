@@ -1,6 +1,7 @@
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { BleepDrawer } from "@/features/bleep/BleepDrawer";
 import { BleepPanel } from "@/features/bleep/BleepPanel";
@@ -17,6 +18,8 @@ import { focusText, selectWords, turnTexts } from "@/features/edit/selection";
 import { type Picked, SelectionToolbar } from "@/features/edit/SelectionToolbar";
 import { TimingStrip } from "@/features/edit/TimingStrip";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
+import type { ReviewDocument } from "@/features/review/model";
+import { loadReview } from "@/features/review/reviewApi";
 import { displayTitle, titleFace } from "@/features/library/title";
 import type { RecordingRow } from "@/features/library/types";
 import { Player, type PlayerControls } from "@/features/player/Player";
@@ -25,13 +28,15 @@ import { AppBar, BAR_HEIGHT } from "@/features/shell/AppBar";
 import { KeysItem } from "@/features/shell/KeySheet";
 import { READ_ONLY_SHEET, READER_SHEET, type Sheet } from "@/features/shell/keys";
 import { TOUCH, useMediaQuery } from "@/lib/media";
+import { reviewHref } from "@/lib/route";
+import { cn } from "@/lib/utils";
 import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
 import { type ExportFormat, exportTranscript } from "./exportFile";
 import { MoreMenu } from "./MoreMenu";
 import { Nameplate } from "./Nameplate";
 import { useReaderKeys } from "./readerKeys";
 import type { Names } from "./speakers";
-import { type ReviewMarks, TranscriptView } from "./TranscriptView";
+import { type ReviewMarks, type ReviewState, TranscriptView } from "./TranscriptView";
 import { UnsureNav } from "./UnsureNav";
 import { VersionPicker } from "./VersionPicker";
 
@@ -176,6 +181,40 @@ function useTimingInSight(
   }, [word, article, dock]);
 }
 
+/** The margin's review marks (Hashiya spec, "The margin"): a flagged sentence as flagged, else a checked one as checked. */
+export function reviewMarks(document: ReviewDocument): ReviewMarks {
+  const sentences: { start: number; end: number; state: ReviewState }[] = [];
+  for (const s of document.segments) {
+    if (s.flags.length > 0) sentences.push({ start: s.start, end: s.end, state: "flagged" });
+    else if (s.state === "checked") sentences.push({ start: s.start, end: s.end, state: "checked" });
+  }
+  return { sentences };
+}
+
+/**
+ * The transcript's review, as marks for the margin. None while it loads, when
+ * there is no review, or when the review was made against an earlier version
+ * of the transcript: its checks vouch for other words (#249).
+ */
+function useReviewMarks(transcriptId: number, sha: string): ReviewMarks | undefined {
+  const [marks, setMarks] = useState<ReviewMarks | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    loadReview(transcriptId).then(
+      ({ document }) => {
+        if (live && document !== null && document.transcript_sha === sha) setMarks(reviewMarks(document));
+      },
+      (thrown: unknown) => {
+        if (live) showError(fromThrown(thrown, `/api/transcripts/${transcriptId}/review`));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [transcriptId, sha]);
+  return marks;
+}
+
 const EXPORTS: readonly (readonly [ExportFormat, string])[] = [
   ["srt", "Subtitles (SRT)"],
   ["vtt", "Subtitles (WebVTT)"],
@@ -256,7 +295,9 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
   useUndoKeys(editor);
   useMutedPaint(edit, content, article);
   useCorrectedPaint(edit.reading, fixed, article);
-  useReaderKeys(controls, READER_SHEET);
+  const review = reviewHref(opened.recording.id, transcriptId);
+  const marks = useReviewMarks(transcriptId, editable.sha);
+  useReaderKeys(controls, READER_SHEET, review);
   return (
     <Page
       opened={opened}
@@ -268,10 +309,15 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
       corrections={fixed}
       names={names}
       nameplate={nameplate}
+      {...(marks === undefined ? {} : { review: marks })}
       selectOnTap
       tools={
         <>
           <EditBar editor={editor} saving={saving} />
+          {/* The bar's one gold primary (Hashiya spec, Reader): the default variant is gold. */}
+          <a href={review} className={cn(buttonVariants(), "h-11 px-4 font-semibold")}>
+            Review
+          </a>
           <MoreMenu
             matchCount={unmuted}
             triggerRef={more}
@@ -306,6 +352,11 @@ function EditablePage({ opened, editable, transcriptId }: { opened: Opened; edit
         </>
       }
     >
+      {editable.replaced !== null && (
+        <p role="note" className="mb-6 rounded-lg border border-border bg-card px-4 py-3 text-sm">
+          {editable.replaced}
+        </p>
+      )}
       <SelectionToolbar
         editor={editor}
         content={content}

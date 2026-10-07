@@ -75,6 +75,17 @@ describe("speakerChange", () => {
     expect(turns(apply(three, 4, 14, "SPEAKER_00"))).toEqual([["SPEAKER_00", " alpha bravo charlie delta echo foxtrot golf"]]);
   });
 
+  it("leaves no mark inside the stretch that says its speaker again (Task 5 carry)", () => {
+    // Review sets a merged sentence's speaker over both its halves: the mark between them would only repeat it.
+    const after = apply(CONTENT, 6, 12, "SPEAKER_02");
+    expect(after.filter((e) => e.kind === "paragraph").map((e) => e.kind === "paragraph" && e.speaker)).toEqual(["SPEAKER_00", "SPEAKER_02"]);
+    const whole = apply(CONTENT, 2, 12, "SPEAKER_01");
+    expect(whole.filter((e) => e.kind === "paragraph").map((e) => e.kind === "paragraph" && e.speaker)).toEqual(["SPEAKER_01"]);
+    // A mark before the stretch is a sentence's own boundary and stays, even when it names the same speaker.
+    const next = apply(CONTENT, 9, 12, "SPEAKER_00");
+    expect(next.filter((e) => e.kind === "paragraph").map((e) => e.kind === "paragraph" && e.speaker)).toEqual(["SPEAKER_00", "SPEAKER_00"]);
+  });
+
   it("is undone in one step, back to the list as it was", () => {
     const op = speakerChange(CONTENT, 4, 5, "SPEAKER_01");
     if (op === null) throw new Error("no change");

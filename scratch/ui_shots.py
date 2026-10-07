@@ -148,6 +148,9 @@ QUERIES = {
     "reader-timing": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "keys": lambda ids: "?recording={}&transcript={}".format(*ids["mixed"]),
     "review": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["mixed"]),
+    "review-choose": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["mixed"]),
+    "review-flags": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["mixed"]),
+    "review-urdu": lambda ids: "?recording={}&transcript={}&review=1".format(*ids["urdu"]),
 }
 
 # What to do on a page before its shot. Base UI's menus open on the pointer
@@ -161,6 +164,11 @@ KEYS = {
     "library-focus": ["Tab", "Tab"],
     # Backwards from the page's start: the rail's speed, its waveform, then its Play button.
     "reader-focus": ["Shift+Tab", "Shift+Tab", "Shift+Tab"],
+    # Review opens on its pass chooser (Task 13, F13): Enter takes the pass offered first.
+    "review": ["Enter"],
+    "review-urdu": ["Enter"],
+    # Then Ctrl+F, the flag menu (F12).
+    "review-flags": ["Enter", "Control+f"],
 }
 # Select one word of the transcript, as a double-click would (Task 3).
 SELECT = (

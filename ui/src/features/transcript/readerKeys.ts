@@ -1,6 +1,6 @@
 // The reader's keys (Hashiya spec; critique, Alex: "undo/redo only; Space
-// scrolls"): Space plays or pauses, `?` opens the key sheet, Esc lets go of
-// the selection. By `event.code` where a printed key could differ: with the
+// scrolls"): Space plays or pauses, R opens Review, `?` opens the key sheet,
+// Esc lets go of the selection. By `event.code` where a printed key could differ: with the
 // Urdu input source the key labelled "/" types something else, and the
 // sheet must still open.
 
@@ -25,7 +25,8 @@ export function isOurs(event: KeyboardEvent): boolean {
   return !(press && target?.closest?.(PRESSABLE));
 }
 
-export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet: Sheet): void {
+/** The reader's keys; with `review`, the address R opens (an editable transcript's). */
+export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet: Sheet, review?: string): void {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (!isOurs(event)) return;
@@ -35,11 +36,14 @@ export function useReaderKeys(controls: RefObject<PlayerControls | null>, sheet:
       } else if (event.code === "Slash" && event.shiftKey) {
         event.preventDefault();
         showKeys(sheet);
+      } else if (event.code === "KeyR" && !event.shiftKey && review !== undefined) {
+        event.preventDefault();
+        window.location.assign(review);
       } else if (event.key === "Escape") {
         window.getSelection()?.removeAllRanges();
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [controls, sheet]);
+  }, [controls, sheet, review]);
 }

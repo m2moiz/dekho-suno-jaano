@@ -119,6 +119,8 @@ describe("the Render buttons", () => {
         return Response.json([{ ...JOB, state: polls > 1 ? "done" : "rendering", fraction: polls > 1 ? 1 : 0.5 }]);
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The reader reads the review for its margin marks (Task 13); none here.
+      if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });

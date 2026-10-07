@@ -1,0 +1,103 @@
+/* Review mode's desk (Hashiya spec, Review mode). The sentence in hand is the
+   only thing at full contrast: large, already in an edit box with a gold edge.
+   The sentences around it and the second opinion are the dim ink (4.5:1,
+   palette.test.ts), plainly not the one in hand. Urdu in Nastaliq at 1.3x and
+   2.1 leading, as in the reader (transcript.css). */
+
+/* The margin on the left of every sentence, the same side for Urdu and
+   English, as the reader's: the grid runs left to right, each text its own way. */
+.review-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  column-gap: 1.75rem;
+  direction: ltr;
+}
+
+.review-margin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.45rem;
+  font: 500 0.8125rem/1.35 var(--font-sans);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-margin .nameplate {
+  max-width: 100%;
+  color: var(--speaker, var(--muted-foreground));
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* How long the sentence lasted, to scale: 15 s fills the margin. */
+.review-tick {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  inline-size: max(3px, var(--tick, 0%));
+  background: var(--speaker, var(--muted-foreground));
+}
+
+/* The Textarea primitive with the box Review needs. Unlayered, so it outranks
+   the primitive's utilities (index.css says why). Focus stays in it the whole
+   time, so its gold edge is its focus mark; the outline would only double it. */
+.review-box {
+  min-height: 4.75rem;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--gold-ink);
+  border-radius: 0.75rem;
+  background: var(--card);
+  color: var(--foreground);
+  font: 400 1.5rem/1.6 var(--font-reading);
+  unicode-bidi: plaintext;
+  text-align: start;
+  resize: none;
+}
+
+.review-box:focus-visible {
+  outline: none;
+  border-color: var(--gold-ink);
+  box-shadow: none;
+}
+
+.review-box:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.95rem;
+  line-height: 2.1;
+}
+
+.review-context {
+  margin: 0;
+  color: var(--dim);
+  font: 400 1.0625rem/1.65 var(--font-reading);
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+.review-context:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.38rem;
+  line-height: 2.1;
+}
+
+/* The phone and a narrow window: the margin folds into one line above the
+   sentence, as the reader's does (Task 14 gives the phone its own card). */
+@media (max-width: 767px) {
+  .review-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-margin {
+    flex-flow: row wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    padding: 0 0 0.25rem;
+  }
+
+  .review-tick {
+    inline-size: calc(max(3px, var(--tick, 0%)) * 0.6);
+  }
+}

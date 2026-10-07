@@ -10,14 +10,22 @@
 // list stays the one home of the words.
 
 import type { components } from "@/api/schema";
-import { textOf } from "@/features/edit/correct";
-import type { Content } from "@/lib/editOps";
+import { correction, textOf } from "@/features/edit/correct";
+import type { Content, CorrectOp } from "@/lib/editOps";
 
 export type ReviewDocument = components["schemas"]["ReviewDocument"];
 export type Segment = components["schemas"]["ReviewSegment"];
 export type ReviewCorrection = components["schemas"]["ReviewCorrection"];
 export type Flag = Segment["flags"][number];
 export type ReviewPass = ReviewDocument["review_pass"];
+
+/**
+ * The sha of the transcript as it is now, as the review route said it on
+ * loading (reviewApi.ts, loadReview, the one place one is made). The only sha
+ * a review is saved under: a saved document's own `transcript_sha` is a plain
+ * string, so it cannot be passed to `documentOf` by mistake (Task 11 review).
+ */
+export type CurrentSha = string & { readonly __current: true };
 
 export type Span = { start: number; end: number };
 export type Range = { start: number; stop: number };
@@ -189,8 +197,11 @@ export function splitAt(content: Content, segments: readonly Segment[], index: n
   }
   if (k <= 0 || k >= begins.length) return { refused: BETWEEN };
   const at = opens[k]?.time ?? segment.start;
+  // The flags, the edit and the speaker stay with the first half only, so the
+  // pass's counts do not count one sentence twice (Task 11 review). Both
+  // halves are to be checked again, and either can be flagged again.
   const first: Segment = { ...segment, end: at, state: "unchecked" };
-  const second: Segment = { ...segment, start: at, state: "unchecked" };
+  const second: Segment = { ...segment, start: at, state: "unchecked", flags: [], edited: false, speaker: null };
   return { segments: [...segments.slice(0, index), first, second, ...segments.slice(index + 1)] };
 }
 
@@ -290,7 +301,7 @@ export function timeLeft(checkedAtMs: readonly number[], remaining: number): str
 
 /** The document the page saves. */
 export function documentOf(fields: {
-  sha: string;
+  sha: CurrentSha;
   pass: ReviewPass;
   cursorS: number;
   startedAt: string;
@@ -307,4 +318,92 @@ export function documentOf(fields: {
     segments: [...fields.segments],
     corrections: [...fields.corrections],
   };
+}
+
+/** A change of words made in Review: the edit, and what it changed, for sub-project C. */
+export type WordFix = { op: CorrectOp; correction: Omit<ReviewCorrection, "at"> };
+
+/**
+ * The edit that makes entries [range) say `text`, changing only the words
+ * that differ (F4): the common words at either end are left as they are,
+ * times and all, so a one-word fix keeps every other word's link to the audio
+ * and the reader's margin strikes through only what changed. Null when the
+ * words are the same, spacing aside, so checking a sentence again applies
+ * nothing twice (Review Focus 2). A word added with nothing to replace takes
+ * the time of the word beside it, retyped with it; a word in pieces
+ * (" questi" "on") is retyped whole.
+ */
+export function wordCorrection(content: Content, range: Range, text: string): WordFix | null {
+  // The words as the reader reads them: an item opening with a space starts one.
+  const groups: { first: number; last: number; text: string }[] = [];
+  for (let e = range.start; e < range.stop; e += 1) {
+    const entry = content[e];
+    if (entry?.kind !== "item" || entry.text === "") continue;
+    const open = groups.at(-1);
+    if (open === undefined || /^\s/.test(entry.text)) groups.push({ first: e, last: e, text: entry.text });
+    else {
+      open.last = e;
+      open.text += entry.text;
+    }
+  }
+  // Compared as the box shows them, a word between spaces, each knowing the entries holding it.
+  const mine: { word: string; group: number }[] = [];
+  groups.forEach((g, k) => {
+    for (const word of g.text.trim().split(/\s+/)) if (word !== "") mine.push({ word, group: k });
+  });
+  const typed = text.trim().split(/\s+/).filter((w) => w !== "");
+  if (mine.length === 0) return null;
+  let p = 0;
+  while (p < mine.length && p < typed.length && mine[p]?.word === typed[p]) p += 1;
+  let s = 0;
+  while (s < mine.length - p && s < typed.length - p && mine[mine.length - 1 - s]?.word === typed[typed.length - 1 - s]) s += 1;
+  if (mine.length - p - s === 0 && typed.length - p - s === 0) return null;
+  // Only words added: retype the word before them with them, or at the start the word after.
+  if (mine.length - p - s === 0) {
+    if (p > 0) p -= 1;
+    else s -= 1;
+  }
+  // An edit replaces whole entries, so a changed word in pieces is retyped whole.
+  const firstGroup = mine[p]?.group ?? 0;
+  const lastGroup = mine[mine.length - 1 - s]?.group ?? firstGroup;
+  while (p > 0 && mine[p - 1]?.group === firstGroup) p -= 1;
+  while (s > 0 && mine[mine.length - s]?.group === lastGroup) s -= 1;
+  const start = groups[firstGroup]?.first ?? range.start;
+  const stop = (groups[lastGroup]?.last ?? range.stop - 1) + 1;
+  const after = typed.slice(p, typed.length - s).join(" ");
+  const before = mine
+    .slice(p, mine.length - s)
+    .map((w) => w.word)
+    .join(" ");
+  let from = Number.POSITIVE_INFINITY;
+  let to = 0;
+  for (let e = start; e < stop; e += 1) {
+    const entry = content[e];
+    if (entry?.kind !== "item") continue;
+    from = Math.min(from, entry.sourceStart);
+    to = Math.max(to, entry.sourceStart + entry.length);
+  }
+  return { op: correction(content, start, stop, after), correction: { start: from, end: to, before, after } };
+}
+
+/**
+ * Where `caret`, a place in the box's text, falls in the list's text of the
+ * same words (Task 11 review): the box may be spaced otherwise (two spaces, a
+ * line break), so the place is found word by word. Inside or at the edge of
+ * a word, the same place in that word; in a gap, the end of the word before
+ * it. Null when the two do not hold the same number of words.
+ */
+export function caretInList(box: string, caret: number, list: string): number | null {
+  const tokens = (text: string) => [...text.matchAll(/\S+/g)].map((m) => ({ at: m.index, end: m.index + m[0].length }));
+  const mine = tokens(box);
+  const theirs = tokens(list);
+  if (mine.length !== theirs.length) return null;
+  for (let k = 0; k < mine.length; k += 1) {
+    const word = mine[k];
+    const same = theirs[k];
+    if (word === undefined || same === undefined) break;
+    if (caret < word.at) return k === 0 ? 0 : (theirs[k - 1]?.end ?? 0);
+    if (caret <= word.end) return same.at + (caret - word.at);
+  }
+  return list.length;
 }

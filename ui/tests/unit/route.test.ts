@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readRoute, transcriptHref } from "../../src/lib/route";
+import { readRoute, reviewHref, transcriptHref } from "../../src/lib/route";
 
 describe("readRoute", () => {
   it("names the library when there is no query", () => {
@@ -29,4 +29,12 @@ describe("readRoute", () => {
       expect(readRoute(search)).toEqual({ page: "library" });
     },
   );
+});
+
+describe("the review route", () => {
+  it("is a transcript's address with review=1, and round-trips", () => {
+    expect(reviewHref(2, 7)).toBe("/?recording=2&transcript=7&review=1");
+    expect(readRoute("?recording=2&transcript=7&review=1")).toEqual({ page: "review", recording: 2, transcript: 7 });
+    expect(readRoute("?recording=2&transcript=7&review=0")).toEqual({ page: "transcript", recording: 2, transcript: 7 });
+  });
 });

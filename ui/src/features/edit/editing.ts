@@ -61,6 +61,8 @@ export type Editable = {
    * made again (#249) instead of trusting old words over new ones.
    */
   sha: string;
+  /** Why a saved list was put aside and this one built fresh (#249), or null. */
+  replaced: string | null;
 };
 
 /**
@@ -81,6 +83,7 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
       renderable: new Latest<Renderable>({ spans: spansOf(data.spans), unrenderable: data.unrenderable }),
       names: new Latest<Names>(data.names),
       sha: data.transcript_sha,
+      replaced: data.replaced,
     };
   }
   const detail = fromBody(error, response, route);

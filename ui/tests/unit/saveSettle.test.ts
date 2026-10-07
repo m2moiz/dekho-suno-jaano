@@ -29,6 +29,7 @@ function editable(): Editable {
     renderable: new Latest({ spans: null, unrenderable: null }),
     names: new Latest({}),
     sha: "sha-1",
+    replaced: null,
   };
 }
 

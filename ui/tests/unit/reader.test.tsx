@@ -50,6 +50,7 @@ const DOC = {
 let saved: Content[] = [];
 // Each name table the page sent to PUT /names (#243).
 let named: Record<string, string>[] = [];
+let review: unknown = null;
 
 beforeEach(() => {
   installHighlights();
@@ -58,6 +59,7 @@ beforeEach(() => {
   takeToken();
   saved = [];
   named = [];
+  review = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
@@ -80,6 +82,7 @@ beforeEach(() => {
       return Response.json({ content: CONTENT, names: body.names, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
     }
     if (path === "/api/transcripts/7/matches") return Response.json({ matches: [], words_searched: 4, lists: ["en"], recall: "recall: x" });
+    if (path === "/api/transcripts/7/review") return Response.json({ document: review, transcript_sha: "sha-1" });
     if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
     return Response.json({ detail: "Not Found" }, { status: 404 });
   });
@@ -307,8 +310,28 @@ describe("the reader", () => {
     );
     const marks = Array.from(container.querySelectorAll("[data-margin]"), (m) => m.querySelector(".review")?.textContent?.trim());
     // Turn 0: one sentence, flagged; turn 1 is checked as a whole.
-    expect(marks).toEqual(["1", "Checked"]);
-    expect(container.querySelector("[data-margin] .review [aria-label]")?.getAttribute("aria-label")).toBe("1 flagged");
+    expect(marks).toEqual(["1 flagged", "Checked"]);
+    // Said in words, not by an aria-label on a span with no role (Task 3 review).
+    expect(container.querySelector("[data-margin] .review [aria-label]")).toBeNull();
+  });
+
+  it("marks the margin from the transcript's review, and not from one made against an earlier transcript", async () => {
+    const segments = [
+      { start: 0.2, end: 1.3, state: "checked", flags: [], speaker: null, edited: false },
+      { start: 2.0, end: 2.4, state: "unchecked", flags: ["overlap"], speaker: null, edited: false },
+    ];
+    review = { version: 1, transcript_sha: "sha-1", review_pass: "every", cursor_s: 0, started_at: "x", updated_at: "x", segments, corrections: [] };
+    const { unmount } = render(<TranscriptPage recording={2} transcript={7} />);
+    await vi.waitFor(() => expect(document.querySelectorAll("[data-margin] .review")).toHaveLength(2));
+    const marks = Array.from(document.querySelectorAll("[data-margin] .review"), (m) => m.textContent?.trim());
+    expect(marks[0]).toMatch(/^1 of the turn's 1 reviewed sentences checked$/);
+    expect(marks[1]).toBe("1 flagged");
+    unmount();
+    review = { ...(review as object), transcript_sha: "sha-0" };
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findAllByRole("listitem");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(document.querySelectorAll("[data-margin] .review")).toHaveLength(0);
   });
 
   it("offers the recording's other transcripts in a version picker only when it has more than one", async () => {

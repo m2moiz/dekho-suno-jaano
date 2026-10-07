@@ -26,6 +26,16 @@ export type Opinions = {
   disagree: Set<number>;
 };
 
+// How far before the first span, or after the last, a word of the other
+// reading may sit (its middle from the span's edge, in seconds) and still be
+// given to that span, so Ctrl+G at either end of a transcript keeps it (Task
+// 12 review, M9). A choice, with no measurement behind it: about one long
+// edge word (parakeet's first word in scratch/eval/arm_a_transcript.json runs
+// 0.32 to 1.36 s, as that review read it), short enough that a stretch only
+// the other engine transcribed is not poured into one sentence. Tested at 0.1
+// and 0.7 s in, 1.1 and 1.7 s out (second-opinion.test.ts).
+export const EDGE_S = 1.0;
+
 /** The other reading's words for each span, in one walk (both are in time order). */
 export function opinionWords(other: Reading, spans: readonly Span[]): string[][] {
   const { start, end, turn, offset, length } = other.words;
@@ -34,15 +44,22 @@ export function opinionWords(other: Reading, spans: readonly Span[]): string[][]
   for (let w = 0; w < start.length; w += 1) {
     const middle = ((start[w] ?? 0) + (end[w] ?? 0)) / 2;
     while (k < spans.length && middle >= (spans[k]?.end ?? 0)) k += 1;
-    if (k === spans.length) break;
     let place = k;
-    if (middle < (spans[k]?.start ?? 0)) {
+    if (k === spans.length) {
+      // After the last span: it takes a word close behind it.
+      const last = spans[k - 1];
+      if (last === undefined || middle - last.end > EDGE_S) continue;
+      place = k - 1;
+    } else if (middle < (spans[k]?.start ?? 0)) {
       // In a pause between two spans (an engine stretches a sentence's last word
       // into the silence after it): the nearer span takes the word, so the grey
-      // line never loses one. Before the first span there is no nearer one.
+      // line never loses one. Before the first span, the first takes a word close in front of it.
       const before = spans[k - 1];
-      if (before === undefined) continue;
-      if (middle - before.end <= (spans[k]?.start ?? 0) - middle) place = k - 1;
+      if (before === undefined) {
+        if ((spans[k]?.start ?? 0) - middle > EDGE_S) continue;
+      } else if (middle - before.end <= (spans[k]?.start ?? 0) - middle) {
+        place = k - 1;
+      }
     }
     const from = offset[w] ?? 0;
     const text = other.turns[turn[w] ?? 0]?.text.slice(from, from + (length[w] ?? 0)).trim();

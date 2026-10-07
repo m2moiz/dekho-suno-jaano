@@ -41,9 +41,18 @@ describe("opinionWords, placement", () => {
     expect(opinionWords(read({ audio: "a", model: "m", sentences: [stretched(1.4, 0.9)] }), spans)).toEqual([["one"], ["two"]]);
   });
 
-  it("drops a word before the first span and one after the last", () => {
-    const other = read({ audio: "a", model: "m", sentences: [sentence(0, [" p", " q", " r"], 1)] });
-    expect(opinionWords(other, [{ start: 1, end: 2 }])).toEqual([["q"]]);
+  it("gives a word just before the first span to it, and one just after the last to that, so Ctrl+G loses neither (Task 12 M9)", () => {
+    // Words at 0 to 5, each 1 s, middles 0.5 to 5.5. The span runs 2.2 to 3.4:
+    // w1 (middle 1.5) is 0.7 s before it and w3 (middle 3.5) 0.1 s after it, both within EDGE_S.
+    const other = read({ audio: "a", model: "m", sentences: [sentence(0, [" w0", " w1", " w2", " w3", " w4", " w5"], 1)] });
+    expect(opinionWords(other, [{ start: 2.2, end: 3.4 }])).toEqual([["w1", "w2", "w3"]]);
+  });
+
+  it("leaves out a word further than EDGE_S from the first or last span", () => {
+    // w0 (middle 0.5) is 1.7 s before the span, w4 (4.5) 1.1 s after it: a stretch only the other engine heard.
+    const other = read({ audio: "a", model: "m", sentences: [sentence(0, [" w0", " w1", " w2", " w3", " w4", " w5"], 1)] });
+    expect(opinionWords(other, [{ start: 2.2, end: 3.4 }])[0]).not.toContain("w0");
+    expect(opinionWords(other, [{ start: 2.2, end: 3.4 }])[0]).not.toContain("w4");
   });
 });
 

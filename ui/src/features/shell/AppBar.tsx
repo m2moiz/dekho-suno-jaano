@@ -1,5 +1,5 @@
 import { ArrowLeft } from "lucide-react";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useRef } from "react";
 
 import { FIELD_BUTTON } from "./field";
 import { SettingsMenu } from "./SettingsMenu";
@@ -11,8 +11,9 @@ export const BAR_HEIGHT = "--dsj-bar-height";
 
 /**
  * The blue field's top half (Hashiya spec, "Colour owns regions"): the
- * wordmark on the library, a way back everywhere else, then the page's own
- * tools, then settings. It wraps to a second row on a phone rather than
+ * wordmark on the library, a way back everywhere else (to the library, or
+ * where `back` names: Review goes back to its transcript, saving first, as
+ * Esc does, F27), then the page's own tools, then settings. It wraps to a second row on a phone rather than
  * squeezing its targets under 44 px.
  */
 export function AppBar({
@@ -21,7 +22,7 @@ export function AppBar({
   settings,
   measure = "max-w-6xl",
 }: {
-  back?: boolean;
+  back?: boolean | { href: string; label: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void };
   children?: ReactNode;
   settings?: ReactNode;
   /** The bar content's max width, so a page can line it up with its own column. */
@@ -44,8 +45,9 @@ export function AppBar({
       <div className={`mx-auto flex min-h-14 w-full ${measure} flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 sm:px-6`}>
         {back ? (
           <a
-            href="/"
-            aria-label="Library"
+            href={back === true ? "/" : back.href}
+            aria-label={back === true ? "Library" : back.label}
+            onClick={back === true ? undefined : back.onClick}
             className={`inline-flex size-11 shrink-0 items-center justify-center rounded-lg ${FIELD_BUTTON}`}
           >
             <ArrowLeft aria-hidden className="size-5" />

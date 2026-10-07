@@ -18,7 +18,8 @@ export type ReviewState = "checked" | "flagged";
 /**
  * Review's marks for the margin: per turn, by its index, and per sentence, by
  * its stretch of the recording in seconds. Anything not named is unmarked.
- * Review mode fills it (Task 13); the reader draws nothing without it.
+ * The reader fills it from the transcript's review (TranscriptPage.tsx,
+ * useReviewMarks); it draws nothing without it.
  */
 export type ReviewMarks = {
   turns?: ReadonlyMap<number, ReviewState>;
@@ -42,14 +43,17 @@ function ReviewMark({ own, sentences }: { own: ReviewState | undefined; sentence
           <Flag aria-hidden className="size-3.5" /> Flagged
         </span>
       )}
+      {/* Said in words for a screen reader: an aria-label on a span with no role is not read (Task 3 review). */}
       {own === undefined && checked > 0 && (
-        <span className="checked" aria-label={`${checked} of ${sentences.length} sentences checked`}>
+        <span className="checked">
           <Check aria-hidden className="size-3.5" /> {checked}
+          <span className="sr-only"> of the turn's {sentences.length.toLocaleString("en")} reviewed sentences checked</span>
         </span>
       )}
       {own === undefined && flagged > 0 && (
-        <span aria-label={`${flagged} flagged`}>
+        <span>
           <Flag aria-hidden className="size-3.5" /> {flagged}
+          <span className="sr-only"> flagged</span>
         </span>
       )}
     </span>

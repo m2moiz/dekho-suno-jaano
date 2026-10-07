@@ -79,13 +79,13 @@ export function KeySheet() {
 }
 
 /** "Keys" in the settings menu, for the page's own sheet. */
-export function KeysItem({ sheet }: { sheet: Sheet }) {
+export function KeysItem({ sheet, shortcut = "?" }: { sheet: Sheet; shortcut?: string }) {
   return (
     <>
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => showKeys(sheet)}>
         Keys
-        <Kbd className="ml-auto">?</Kbd>
+        <Kbd className="ml-auto">{shortcut}</Kbd>
       </DropdownMenuItem>
     </>
   );
