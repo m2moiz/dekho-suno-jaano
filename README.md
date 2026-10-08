@@ -697,18 +697,18 @@ it was checked against) and `<name>.reference.txt` beside the transcript.
 You pick the pass on the way in, and can switch it in the top bar: **Every
 sentence**, in order, for an answer key, or **Likely errors**. Arriving on a
 sentence plays it from 0.3 s before its start to 0.2 s after its end; typing
-pauses it, and playing again backs up 1.5 s. A footer line always shows the
+pauses it, and playing again backs up 1.5 s, never past the sentence's start, and stops at its end. A footer line always shows the
 five keys used most. Every key, as the key sheet lists them:
 
 | Key | Does |
 |---|---|
 | Enter | Mark checked (with any edits), go to the next sentence, play it |
 | Shift+Enter | Previous sentence |
-| Tab | Play or pause (playing again backs up 1.5 s) |
+| Tab | Play or pause (playing again backs up 1.5 s, not past the sentence's start) |
 | Shift+Tab | Replay the sentence from its start |
 | Ctrl+, and Ctrl+. | Slower and faster, through 0.75x, 1x, 1.25x and 1.5x |
 | Ctrl+1 to Ctrl+9 | This sentence was said by speaker n |
-| Ctrl+G | Take the second opinion's reading |
+| Ctrl+G | Take the second opinion's reading; Ctrl+G again, or Cmd+Z, puts your words back |
 | Ctrl+U | Flag: can't make it out (puts `[?]` in place of the selected words, or in an empty box) |
 | Ctrl+F | Flag menu: not speech, overlapping talk, cut off |
 | Ctrl+S | Split the sentence at the cursor |

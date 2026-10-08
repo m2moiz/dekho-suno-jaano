@@ -374,7 +374,7 @@ The keys, for answering the owner's questions about them:
 | Tab / Shift+Tab | play or pause / replay the sentence |
 | Ctrl+, / Ctrl+. | slower / faster (0.75x to 1.5x) |
 | Ctrl+1 to Ctrl+9 | said by speaker n |
-| Ctrl+G | take the second opinion's reading |
+| Ctrl+G | take the second opinion's reading; Ctrl+G again, or Cmd+Z, puts the words back |
 | Ctrl+U / Ctrl+F | flag can't make it out / flag menu |
 | Ctrl+S / Ctrl+M | split at the cursor / merge with the previous |
 | Ctrl+J / Ctrl+Shift+J | next / previous likely error |
