@@ -214,8 +214,9 @@ export function BleepPanel({ transcriptId, editor, content, renderable, padS, co
         )}
       </form>
       <details className="text-xs text-muted-foreground">
-        <summary className={`w-fit cursor-pointer select-none ${touch ? "py-3" : ""}`} aria-label="How playing and rendering mute">
-          ?
+        {/* Named for what it holds, not a bare "?" (critique 7 Oct round 2, P2-2). */}
+        <summary className={`w-fit cursor-pointer select-none underline-offset-4 hover:underline ${touch ? "min-h-11 py-3" : ""}`}>
+          How muting and rendering work
         </summary>
         <p className="mt-2">
           Playing mutes what a render would mute, each word from {padS} s before it to {padS} s after.

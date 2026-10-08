@@ -1,4 +1,4 @@
-import { Pause, Play } from "lucide-react";
+import { Image as ImageIcon, ImageOff, LocateFixed, Pause, Play } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { MuteGate } from "@/features/bleep/liveMute";
@@ -105,6 +105,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
   const [noPicture, setNoPicture] = useState(false);
   const [speed, setSpeedState] = useState<Speed>(() => readSpeed());
   const clock = useRef<HTMLSpanElement>(null);
+  const clockTotal = useRef<HTMLSpanElement>(null);
   const playhead = useRef<Playhead | null>(null);
   const [following, setFollowing] = useState(true);
   // Views that move with the playhead's frame: the waveform's cursor (#61).
@@ -302,8 +303,8 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     const tick = (seconds: number) => {
       const duration = media.current?.duration ?? Number.NaN;
       if (clock.current === null) return;
-      const total = Number.isFinite(duration) ? ` / ${durationLabel(duration)}` : "";
-      clock.current.textContent = `${durationLabel(seconds)}${total}`;
+      clock.current.textContent = durationLabel(seconds) ?? "0:00";
+      if (clockTotal.current !== null && Number.isFinite(duration)) clockTotal.current.textContent = `\u00a0/ ${durationLabel(duration)}`;
     };
     frames.add(tick);
     return () => {
@@ -369,35 +370,47 @@ export function Player({ recording, reading, article, muteSpans = null, controls
             {playing ? <Pause aria-hidden className="size-5" /> : <Play aria-hidden className="size-5" />}
           </Button>
           {/* Wide enough for its longest text from the first paint, so the waveform
-              beside it does not shrink when playing writes the length in. */}
-          <span
-            ref={clock}
-            style={{ minWidth: `${2 * clockLabel.length + 3}ch` }}
-            className="shrink-0 text-xs text-field-muted tabular-nums sm:text-sm"
-          >
-            {`0:00 / ${clockLabel}`}
+              beside it does not shrink when playing writes the length in. On a
+              phone only the time now, so the waveform, the only scrubber,
+              keeps its width: with the length too it was 32 px for a short
+              video and none at 2.5 h (fix round 1 review I3, measured in
+              tests/e2e/video.spec.ts). */}
+          <span className="shrink-0 text-xs text-field-muted tabular-nums sm:text-sm">
+            {/* Each part keeps its width as the time ticks; a no-break space
+                inside the second, since an inline block drops a plain one. */}
+            <span ref={clock} className="inline-block text-end" style={{ minWidth: `${clockLabel.length - 0.5}ch` }}>
+              0:00
+            </span>
+            <span ref={clockTotal} className="hidden sm:inline-block" style={{ minWidth: `${clockLabel.length + 2.5}ch` }}>
+              {`\u00a0/ ${clockLabel}`}
+            </span>
           </span>
           <Waveform recordingId={recording.id} media={media} frames={frames} onSeek={(seconds) => seekRef.current(seconds)} onScrub={(seconds) => scrubRef.current(seconds)} />
           <SpeedControl speed={speed} onSpeed={changeSpeed} />
           {hasVideo && (
             <Button
               variant="ghost"
-              className={`h-11 shrink-0 ${FIELD_BUTTON}`}
+              aria-label={videoShown ? "Hide picture" : "Show picture"}
+              className={`h-11 min-w-11 shrink-0 max-sm:px-0 ${FIELD_BUTTON}`}
               onClick={() => {
                 setVideoShown(!videoShown);
                 saveVideoShown(!videoShown);
               }}
             >
-              {videoShown ? "Hide picture" : "Show picture"}
+              {/* A 44 px icon on a phone, words from sm up: the waveform needs the width (I3). */}
+              {videoShown ? <ImageOff aria-hidden className="sm:hidden" /> : <ImageIcon aria-hidden className="sm:hidden" />}
+              <span className="hidden sm:inline">{videoShown ? "Hide picture" : "Show picture"}</span>
             </Button>
           )}
           {!following && (
             <Button
               variant="ghost"
-              className={`h-11 shrink-0 ${FIELD_BUTTON}`}
+              aria-label="Follow playback"
+              className={`h-11 min-w-11 shrink-0 max-sm:px-0 ${FIELD_BUTTON}`}
               onClick={() => playhead.current?.follow()}
             >
-              Follow playback
+              <LocateFixed aria-hidden className="sm:hidden" />
+              <span className="hidden sm:inline">Follow playback</span>
             </Button>
           )}
         </div>

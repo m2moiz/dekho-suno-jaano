@@ -27,6 +27,23 @@ import { type Engine, loadEngines, startJob } from "./jobs";
 
 type EngineName = Engine["name"];
 
+// What each engine is for, in a line (critique 7 Oct round 2, P2-2), from the
+// engine table in .agents/skills/dsj/references/engines.md. An engine the
+// server adds later (a cloud one, #247) shows without a line until it has one.
+const PURPOSE: Record<string, string> = {
+  parakeet: "Fast. English and European languages, no Urdu.",
+  whisper: "Reads Urdu and mixed speech. Slower.",
+  sherpa: "The portable engine, with parakeet's weights.",
+};
+
+// The answer, as the engine it picks is recommended for it.
+const RECOMMENDED: Record<ChoiceId, string> = {
+  mixed: "Recommended for mixed Urdu and English",
+  urdu: "Recommended for mostly Urdu",
+  english: "Recommended for English",
+  unsure: "Recommended when not sure",
+};
+
 const PLAIN: Advanced = { engine: null, model: "", prompt: "", diarize: true, requireDiarize: false, startOver: false };
 
 // A chosen radio in ink, not the primitive's gold: gold is this dialog's one
@@ -129,9 +146,10 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
       <DialogContent className="max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto sm:max-w-lg" showCloseButton={false}>
         {/* Clear of the close button in the corner. */}
         <DialogHeader className={touch ? "pr-10" : "pr-8"}>
-          <DialogTitle className="text-balance">
+          {/* One face for the whole title, the recording's (critique 7 Oct round 2, P2-2). */}
+          <DialogTitle className={cn("text-balance font-semibold", face.className)}>
             Transcribe{" "}
-            <bdi lang={face.lang} className={face.className}>
+            <bdi lang={face.lang}>
               {title}
             </bdi>
           </DialogTitle>
@@ -162,20 +180,6 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
           </RadioGroup>
         </fieldset>
 
-        {/* The expected time first and large: speed is what the owner weighs. */}
-        <div role="status" id={`${ids}-status`} className="flex flex-col gap-0.5">
-          {blocked === null ? (
-            <>
-              {expected !== null && <p className="text-lg font-semibold tabular-nums">{expected}. </p>}
-              <p className="text-sm text-muted-foreground">
-                Uses {advanced.engine === null ? choice.says : advanced.engine}.
-              </p>
-            </>
-          ) : (
-            <Blocked name={blocked} reason={engine?.reason ?? null} others={runnable.map((e) => e.name)} />
-          )}
-        </div>
-
         <fieldset className="flex flex-col">
           <legend id={`${ids}-engine`} className="mb-1 text-sm font-medium">
             Engine
@@ -192,12 +196,27 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
               const cost = costLabel(recording.duration_s, e.usd_per_hour);
               return (
                 <label key={e.name} className={cn(ROW, "flex-wrap gap-y-0 py-1")}>
-                  <RadioGroupItem value={e.name} className={INK_RADIO} />
-                  <span>{e.name}</span>
+                  {/* Named by the engine alone; what it is for and the recommendation describe it. */}
+                  <RadioGroupItem
+                    value={e.name}
+                    className={INK_RADIO}
+                    aria-labelledby={`${ids}-engine-${e.name}`}
+                    aria-describedby={[e.name === choice.engine ? `${ids}-recommended` : "", PURPOSE[e.name] !== undefined ? `${ids}-purpose-${e.name}` : ""].filter(Boolean).join(" ") || undefined}
+                  />
+                  <span id={`${ids}-engine-${e.name}`}>{e.name}</span>
                   {e.cloud && (
                     <span className="rounded-full border border-border px-2 text-xs text-muted-foreground">cloud</span>
                   )}
-                  {e.name === choice.engine && <span className="text-sm text-muted-foreground">for this answer</span>}
+                  {e.name === choice.engine && (
+                    <span id={`${ids}-recommended`} className="text-sm text-muted-foreground">
+                      {RECOMMENDED[choice.id]}
+                    </span>
+                  )}
+                  {PURPOSE[e.name] !== undefined && (
+                    <span id={`${ids}-purpose-${e.name}`} className="basis-full pl-7 text-sm text-muted-foreground">
+                      {PURPOSE[e.name]}
+                    </span>
+                  )}
                   {cost !== null && <span className="basis-full pl-7 text-sm text-muted-foreground tabular-nums">{cost}</span>}
                 </label>
               );
@@ -206,7 +225,10 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
           {unavailable.map((e) => (
             // One grey line an engine, its reason on request (spec, Transcribe).
             <Collapsible key={e.name} className="px-2 text-sm text-muted-foreground" data-unavailable={e.name}>
-              <span>{e.name} can't run on this Mac. </span>
+              <span>
+                {e.name}: {PURPOSE[e.name] === undefined ? "" : `${PURPOSE[e.name]?.charAt(0).toLowerCase()}${PURPOSE[e.name]?.slice(1)} `}
+                {/not installed/.test(e.reason ?? "") ? "Not installed on this Mac." : "Can't run on this Mac."}{" "}
+              </span>
               <CollapsibleTrigger
                 aria-label={`Why ${e.name} can't run`}
                 className={cn("underline underline-offset-4", touch && "min-h-11")}
@@ -217,6 +239,20 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             </Collapsible>
           ))}
         </fieldset>
+
+        {/* The estimate under the engines it depends on, at body size (critique 7 Oct round 2, P2-2). */}
+        <div role="status" id={`${ids}-status`} className="flex flex-col gap-0.5">
+          {blocked === null ? (
+            <>
+              {expected !== null && <p className="font-semibold tabular-nums">{expected}. </p>}
+              <p className="text-sm text-muted-foreground">
+                Uses {advanced.engine === null ? choice.says : advanced.engine}.
+              </p>
+            </>
+          ) : (
+            <Blocked name={blocked} reason={engine?.reason ?? null} others={runnable.map((e) => e.name)} />
+          )}
+        </div>
 
         <Collapsible>
           <CollapsibleTrigger className="group flex min-h-11 items-center gap-1 text-sm font-medium underline-offset-4 hover:underline">
@@ -299,7 +335,7 @@ function Blocked({ name, reason, others }: { name: string; reason: string | null
   const around = others.length > 0 ? `, or pick ${others.join(" or ")} below` : "";
   return (
     <>
-      <p className="text-lg font-semibold">{name} can't run on this Mac, so this can't start.</p>
+      <p className="font-semibold">{name} can't run on this Mac, so this can't start.</p>
       <p className="text-sm whitespace-pre-wrap select-text">{why}</p>
       <p className="text-sm text-muted-foreground">
         Fix that, then open this again{around}.

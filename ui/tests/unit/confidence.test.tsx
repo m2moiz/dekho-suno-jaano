@@ -87,8 +87,10 @@ describe("UnsureNav", () => {
 
   it("is off until switched on, then paints every unsure word, and clears when switched off", () => {
     mount(WHISPER, SHAKY);
-    const toggle = screen.getByRole("button", { name: "2 unsure" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    // A real switch named for what it does, the count beside it (critique 7 Oct round 2, P2-4).
+    const toggle = screen.getByRole("switch", { name: "Unsure words" });
+    expect(screen.getByRole("group", { name: "Unsure words" }).textContent).toContain("2");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(registry.has(UNSURE)).toBe(false);
     act(() => fireEvent.click(toggle));
     expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
@@ -101,7 +103,7 @@ describe("UnsureNav", () => {
     const next = screen.getByRole("button", { name: "Next unsure word" });
     act(() => fireEvent.click(next));
     expect(window.getSelection()?.toString()).toBe("two");
-    expect(screen.getByRole("button", { name: "2 unsure" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Unsure words" }).getAttribute("aria-checked")).toBe("true");
     expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
     act(() => fireEvent.click(next));
     expect(window.getSelection()?.toString()).toBe("three");

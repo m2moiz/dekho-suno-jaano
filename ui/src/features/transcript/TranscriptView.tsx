@@ -8,8 +8,10 @@ import { type Reading, TIME_EPS_S } from "./document";
 import { displayName, type Names, NO_NAMES, speakerColour } from "./speakers";
 import "./transcript.css";
 
-// A minute of speech fills the margin's tick; a longer turn stops there.
-const TICK_FULL_S = 60;
+/** Each turn's length in seconds, by its words' end. */
+function turnSeconds(reading: Reading, end: Float64Array): number[] {
+  return reading.turns.map((turn) => Math.max(0, (end[turn.first + turn.count - 1] ?? turn.start) - turn.start));
+}
 const NONE: readonly Correction[] = [];
 
 /** Where Review has got to with a turn or a sentence (Hashiya spec, "The margin": the review mark). */
@@ -95,6 +97,11 @@ export const TranscriptView = memo(function TranscriptView({
   const byTurn = new Map<number, Correction[]>();
   for (const c of corrections) byTurn.set(c.turn, [...(byTurn.get(c.turn) ?? []), c]);
   const { end } = reading.words;
+  // The tick is to the recording's scale: its longest turn fills the margin.
+  // A fixed minute left the turns of a quick call as 4 to 8 px specks
+  // (critique 7 Oct round 2, P2-5). O(turns) per draw; the view is memoised.
+  const lengths = turnSeconds(reading, end);
+  const longest = Math.max(0, ...lengths);
   return (
     <article ref={articleRef} className="transcript" aria-label="Transcript">
       <ol className="turns">
@@ -108,7 +115,7 @@ export const TranscriptView = memo(function TranscriptView({
             .map((m) => m.state);
           const style = {
             "--speaker": speakerColour(turn.speaker),
-            "--tick": `${Math.min(100, (seconds / TICK_FULL_S) * 100)}%`,
+            "--tick": `${longest > 0 ? (seconds / longest) * 100 : 0}%`,
           } as CSSProperties;
           return (
             <li key={i} className="turn" style={style}>

@@ -48,7 +48,8 @@ export function MoreMenu({ matchCount, onBleep, timingWord, onTiming, extra, tri
         <DropdownMenuItem className={tall} onClick={onBleep}>
           Bleep
           {matchCount > 0 && (
-            <span className="ml-auto rounded-full bg-gold px-2 text-xs font-semibold text-primary-foreground tabular-nums">
+            // A count, not an action, so not gold: the bar's Review is the screen's gold (DESIGN.md, The One Gold Rule).
+            <span className="ml-auto rounded-full bg-secondary px-2 text-xs font-semibold text-secondary-foreground tabular-nums">
               {matchCount}
             </span>
           )}

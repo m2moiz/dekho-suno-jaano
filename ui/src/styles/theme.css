@@ -66,6 +66,13 @@
   --ring: light-dark(#7f6016, #c8a24a);
   --playhead: light-dark(#ebd9a6, #5c4a1c);
 
+  /* The unsure words' rose as a mark on the blue field: the switch's track
+     when on, and its thumb's edge. The washes behind the words themselves
+     stay in transcript.css's ::highlight(dsj-unsure), which needs literals.
+     Same hue as those washes, lighter, so it reads on #132447: oklch(0.78
+     0.09 25), written in hex for palette.test.ts. */
+  --unsure-mark: #eca19a;
+
   /* Red is a correction; green is checked. */
   --correction: light-dark(#b8402a, #e5806a);
   --checked: light-dark(#3e7a5c, #79be98);

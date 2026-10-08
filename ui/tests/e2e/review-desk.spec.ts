@@ -85,6 +85,41 @@ test("Option+Tab reaches the bar's pass switch, and the switch works by keyboard
   await expect(likely).toHaveAttribute("aria-pressed", "true");
 });
 
+// Tab plays in the box (spec), so the box names its ways out and both work
+// (critique 7 Oct round 2, P1-1): Option+Tab, where the browser moves focus
+// with it, and F6, which steps through the regions on every keyboard: box,
+// the controls row, the bar, the rail, and round again. Runs on webkit too in
+// the full verify.
+test("leaves the Review box by Option+Tab and by F6, and F6 steps box, controls, bar, rail", async ({ page }, info) => {
+  await openReview(page, `review-regions-${info.project.name}`, 8.7);
+  await page.keyboard.press("Enter");
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toBeFocused();
+  await expect(box).toHaveAccessibleDescription("Tab plays. F6 or Option+Tab moves to the other controls.");
+
+  await page.keyboard.press("Alt+Tab");
+  await expect(box).not.toBeFocused();
+
+  await box.focus();
+  const inside = (name: string) =>
+    page.evaluate((name) => {
+      const active = document.activeElement;
+      if (name === "row") return active?.closest('[role="toolbar"][aria-label="Sentence controls"]') !== null;
+      if (name === "bar") return active?.closest("header") !== null;
+      return active?.closest('[role="region"][aria-label="Player"]') !== null;
+    }, name);
+  await page.keyboard.press("F6");
+  expect(await inside("row")).toBe(true);
+  await page.keyboard.press("F6");
+  expect(await inside("bar")).toBe(true);
+  await page.keyboard.press("F6");
+  expect(await inside("rail")).toBe(true);
+  await page.keyboard.press("F6");
+  await expect(box).toBeFocused();
+  await page.keyboard.press("Shift+F6");
+  expect(await inside("rail")).toBe(true);
+});
+
 test("Review opens from the reader only once a slow save of a correction has landed (Task 13 re-review)", async ({ page }, info) => {
   const dir = scratchDir();
   const seeded = seed(

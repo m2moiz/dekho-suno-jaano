@@ -320,6 +320,9 @@ for (const { width, height } of [
     await page.getByRole("button", { name: "Close" }).click();
     await more.click();
     await expect(menuBleep).toHaveText("Bleep1");
+    // A count, not an action: never gold, which the bar's Review already is (DESIGN.md, The One Gold Rule; fix round 1 review I4).
+    const badge = menuBleep.locator("span").last();
+    expect(await badge.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe("rgb(200, 162, 74)");
   });
 }
 

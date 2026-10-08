@@ -12,7 +12,8 @@ type Props = {
 /**
  * A speaker's nameplate, renamable where it stands (Hashiya spec, Reader:
  * "click a nameplate, type a name"; critique: "Speaker N not nameable").
- * Enter or leaving the field keeps the name typed, Esc keeps the old one, and
+ * Enter or leaving the field keeps the name typed (not a window losing focus,
+ * which leaves the field open), Esc keeps the old one, and
  * an emptied field gives the speaker its own label back. Leaving keeps it
  * because a phone has no Esc and no Enter on its way out: its keyboard's Done,
  * or a tap on the page, only leaves the field (Task 16a review I3, #261). It reads as the name in
@@ -57,6 +58,10 @@ export function Nameplate({ label, name, onRename }: Props) {
       className="nameplate bg-card dark:bg-card"
       onFocus={(event) => event.currentTarget.select()}
       onBlur={(event) => {
+        // The window lost focus (an app or tab switch), not the field: keep it
+        // open with what was typed, unsaved, for the owner's return. Saving
+        // here would keep a half-typed "Sa" (fix round 1 review, I1).
+        if (!document.hasFocus()) return;
         if (!settled.current && event.currentTarget.value !== name) onRename(label, event.currentTarget.value);
         settled.current = true;
         setEditing(false);

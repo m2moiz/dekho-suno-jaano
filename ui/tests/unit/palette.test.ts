@@ -105,6 +105,8 @@ describe("the Hashiya palette", () => {
       expect(measured("--input", "--popover", scheme)).toBeGreaterThanOrEqual(3);
     }
     expect(measured("--field-wave", "--field", "light")).toBeGreaterThanOrEqual(3);
+    // The unsure switch's track when on, on the bar (fix round 2, H).
+    expect(measured("--unsure-mark", "--field", "light")).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps the ground cool, never cream: more blue than red in the light ground", () => {

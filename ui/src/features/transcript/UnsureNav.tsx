@@ -2,12 +2,15 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Toggle } from "@/components/ui/toggle";
+import { Switch } from "@/components/ui/switch";
 import { selectWords, turnTexts } from "@/features/edit/selection";
 import { FIELD_BUTTON, FIELD_ICON_BUTTON } from "@/features/shell/field";
 import { cutoffFor, UNSURE, unsureHighlight, unsureWords } from "./confidence";
 import { type Reading, TIME_EPS_S } from "./document";
 import { isOurs } from "./readerKeys";
+
+const SWITCH_ID = "unsure-switch";
+const LABEL_ID = "unsure-switch-label";
 
 type Props = {
   reading: Reading;
@@ -95,29 +98,33 @@ export function UnsureNav({ reading, model, article }: Props) {
   // It lives in the blue bar: the field's button colours, 44 px targets.
   const quiet = FIELD_ICON_BUTTON;
   return (
-    <div role="group" aria-label="Unsure words" className="flex items-center">
-      {/* A switch, so it looks like one: an edge, and a swatch of the tint it
-          paints, hollow while off and filled while on (critique 7 Oct, P2-4).
-          Off by default, as #62 decided. */}
-      <Toggle
-        pressed={on}
-        onPressedChange={setOn}
-        className={`h-11 gap-2 border border-field-muted/60 px-3 ${FIELD_BUTTON}`}
-      >
-        <span
-          aria-hidden
-          className={`size-2.5 rounded-full border-2 border-[oklch(0.78_0.09_25)] ${on ? "bg-[oklch(0.78_0.09_25)]" : "bg-transparent"}`}
+    <div className="flex items-center gap-1">
+      {/* A real switch, track and thumb, named for what it does, its count
+          beside it, and the arrows a group of their own (critique 7 Oct round
+          2, P2-4). Off by default, as #62 decided. On, the track is the
+          unsure rose, not gold, which is the screen's one action. */}
+      <div role="group" aria-label="Unsure words" className={`flex h-11 items-center gap-2 rounded-lg px-2 ${FIELD_BUTTON}`}>
+        <Switch
+          id={SWITCH_ID}
+          aria-labelledby={LABEL_ID}
+          checked={on}
+          onCheckedChange={setOn}
+          className="data-checked:bg-unsure-mark data-unchecked:bg-field-wave dark:data-unchecked:bg-field-wave"
         />
-        <span>
-          <span className="tabular-nums">{words.length}</span> unsure
-        </span>
-      </Toggle>
-      <Button variant="ghost" size="icon" aria-label="Previous unsure word" disabled={words.length === 0} className={quiet} onClick={() => go(-1)}>
-        <ChevronLeft aria-hidden />
-      </Button>
-      <Button variant="ghost" size="icon" aria-label="Next unsure word" disabled={words.length === 0} className={quiet} onClick={() => go(1)}>
-        <ChevronRight aria-hidden />
-      </Button>
+        {/* Heard on a phone, not shown: there the title needs the width. */}
+        <label id={LABEL_ID} htmlFor={SWITCH_ID} className="cursor-pointer text-sm font-medium max-sm:sr-only">
+          Unsure words
+        </label>
+        <span className="rounded-full bg-white/10 px-2 text-xs font-semibold tabular-nums">{words.length}</span>
+      </div>
+      <div role="group" aria-label="Step through unsure words" className="flex items-center">
+        <Button variant="ghost" size="icon" aria-label="Previous unsure word" disabled={words.length === 0} className={quiet} onClick={() => go(-1)}>
+          <ChevronLeft aria-hidden />
+        </Button>
+        <Button variant="ghost" size="icon" aria-label="Next unsure word" disabled={words.length === 0} className={quiet} onClick={() => go(1)}>
+          <ChevronRight aria-hidden />
+        </Button>
+      </div>
     </div>
   );
 }

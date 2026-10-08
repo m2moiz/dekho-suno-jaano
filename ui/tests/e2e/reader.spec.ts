@@ -104,6 +104,53 @@ test("a transcript opened from the library reads as typeset paragraphs", async (
   }
 });
 
+// The reader's block, margin and column, sits centred under the bar on a
+// laptop; and an Urdu line's start, on its right, sits close to its nameplate
+// on the left (critique 7 Oct round 2, P2-7; owner's ruling of 8 Oct: the
+// margin stays left, Urdu at about 40 to 45 letters). Measured at 1440 px.
+test("at 1440 px the reader is centred, and an Urdu line starts near its nameplate", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const dir = scratchDir();
+  const seeded = seed(
+    {
+      audio: tone(dir, 13.2, "urdu-centre.wav"),
+      model: "mlx-community/whisper-large-v3-turbo",
+      speakers: ["SPEAKER_00", "SPEAKER_01"],
+      diarization: "senko 0.1.0",
+      text: "",
+      unclear: [],
+      sentences: [
+        sentence(0, 0, [" آج", " صبح", " ہم", " نے", " نیا", " منصوبہ", " دیکھا", " اور", " اس", " پر", " بات", " کی۔"]),
+        sentence(4, 1, [" I", " said", " we", " should", " look", " at", " the", " plan", " again", " today."]),
+      ],
+    },
+    dir,
+  );
+  await page.goto(readerUrl(seeded));
+  await expect(page.getByRole("article", { name: "Transcript" }).locator("p")).toHaveCount(2);
+  const shape = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const [urdu, english] = Array.from(document.querySelectorAll("article li"));
+    const extent = (element: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = Array.from(range.getClientRects());
+      return { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)) };
+    };
+    const plate = (urdu as Element).querySelector(".nameplate") as Element;
+    const english_ = english as Element;
+    return {
+      gap: extent((urdu as Element).querySelector("p") as Element).right - plate.getBoundingClientRect().right,
+      blockLeft: (english_.querySelector("[data-margin]") as Element).getBoundingClientRect().left,
+      blockRight: (english_.querySelector("p") as Element).getBoundingClientRect().right,
+    };
+  });
+  console.log(`nameplate end to Urdu start: ${shape.gap.toFixed(0)} px; block ${shape.blockLeft.toFixed(0)} to ${shape.blockRight.toFixed(0)}`);
+  // Centred: as much room left of the block as right of it, within 8 px.
+  expect(Math.abs(shape.blockLeft - (1440 - shape.blockRight))).toBeLessThanOrEqual(8);
+  expect(shape.gap).toBeLessThanOrEqual(470);
+});
+
 // Urdu as Urdu (Hashiya spec, Type), and Review Focus 1: a turn that opens in
 // Urdu script is set right to left in Nastaliq at about 1.3x with 2.1
 // leading, a number and an English word inside it keep their own order, a
@@ -195,10 +242,10 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
   // An Urdu turn starts at its right edge, so it gets a narrower measure, about
   // 45 letters, to bring that start near the margin on the left (owner's
   // ruling, 8 Oct; critique 7 Oct P1-1). An English turn keeps the full one.
-  // 30ch of the face's "0" is about 45 Nastaliq letters (transcript.css).
-  for (const turn of [urdu, mixed]) expect(turn?.measure).toBeLessThanOrEqual(31);
+  // 27ch of the face's "0" is about 40 Nastaliq letters (transcript.css).
+  for (const turn of [urdu, mixed]) expect(turn?.measure).toBeLessThanOrEqual(28);
   expect(english?.measure ?? 0).toBeGreaterThan(60);
-    // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
+  // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
   for (const turn of shape.turns) expect(turn.marginRight).toBeLessThan(turn.textLeft);
   expect((urdu?.size ?? 0) / (english?.size ?? 1)).toBeCloseTo(1.3, 1);
   expect(english?.lang).toBeNull();

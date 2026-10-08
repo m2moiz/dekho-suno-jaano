@@ -13,10 +13,12 @@ import { REVIEW_SHEET } from "@/features/shell/keys";
 import { FINE, useMediaQuery } from "@/lib/media";
 import { langOf } from "@/lib/script";
 import { FinishPanel } from "./FinishPanel";
-import { BOX_HINT, BOX_HINT_ID, FLAGS, FlagMenu, onBoxKey, PassChooser, SAVE_TEXT, SecondOpinion } from "./ReviewDesk";
+import { BOX_HINT_ID, FLAGS, FlagMenu, onBoxKey, PassChooser, SAVE_TEXT, SecondOpinion } from "./ReviewDesk";
 import { useSwipe } from "./swipe";
 import type { Session } from "./useReviewSession";
 import "./review.css";
+
+const CARD_HINT = "Tab plays. Option+Tab moves to the other controls.";
 
 type Props = { session: Session; title: string; back: string; transcriptId: number };
 
@@ -137,13 +139,18 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
                 </span>
               ))}
             </p>
-            <span id={BOX_HINT_ID} className="sr-only">
-              {BOX_HINT}
-            </span>
+            {/* Only where a keyboard is likely: read to VoiceOver on a phone with
+                none, it names keys nobody has (fix round 1 review, M2). F6 is the
+                desk's; the card has no regions to step through. */}
+            {fine && (
+              <span id={BOX_HINT_ID} className="sr-only">
+                {CARD_HINT}
+              </span>
+            )}
             <Textarea
               ref={box}
               aria-label="What was said"
-              aria-describedby={BOX_HINT_ID}
+              {...(fine ? { "aria-describedby": BOX_HINT_ID } : {})}
               className="review-box"
               dir="auto"
               lang={langOf(session.text)}

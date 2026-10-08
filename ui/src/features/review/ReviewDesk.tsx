@@ -1,7 +1,8 @@
 import { type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject, useEffect, useRef } from "react";
+import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -24,7 +25,7 @@ import "./review.css";
  * plays rather than moving on: WCAG 2.1.2 asks that a way out a field does
  * not take by Tab be announced (critique 7 Oct, P1-3). The footer says it too.
  */
-export const BOX_HINT = "Tab plays. Option+Tab moves to the other controls.";
+export const BOX_HINT = "Tab plays. F6 or Option+Tab moves to the other controls.";
 export const BOX_HINT_ID = "review-box-hint";
 
 export const SAVE_TEXT: Record<SaveState, string> = { saved: "Saved", saving: "Saving…", failed: "Not saved" };
@@ -165,7 +166,9 @@ export function FlagMenu({
       <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
       {/* The menu's edge and shadow from DESIGN.md (Menu), which read on the
           pale ground where the primitive's own hardly did; each flag taken shows
-          its check, and Ctrl+U its key (critique 7 Oct, P2-8). */}
+          its check (critique 7 Oct, P2-8). No key beside an item: Ctrl+U adds
+          its flag but does not toggle it (fix round 1 review, M1); the menu's
+          own key, Ctrl+F, is on the trigger. */}
       <DropdownMenuContent align="start" side={side} className="w-auto shadow-lg shadow-black/15 ring-input/70" finalFocus={finalFocus}>
         {FLAGS.map(([flag, label]) => (
           <DropdownMenuCheckboxItem
@@ -173,11 +176,9 @@ export function FlagMenu({
             checked={current.segment.flags.includes(flag)}
             closeOnClick
             className={roomy ? "min-h-11" : undefined}
-            {...(flag === "unclear" ? { "aria-keyshortcuts": "Control+U" } : {})}
             onCheckedChange={() => session.act({ kind: "flag", flag })}
           >
             {label}
-            {flag === "unclear" && <DropdownMenuShortcut aria-hidden>Ctrl U</DropdownMenuShortcut>}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
@@ -201,6 +202,13 @@ export function onBoxKey(session: Session, event: KeyboardEvent<HTMLTextAreaElem
 
 type Props = { session: Session; title: string; back: string; transcriptId: number };
 
+const FOCUSABLE = 'textarea, input, select, button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+/** `region` itself when it takes focus, else the first control in it. */
+function firstFocusable(region: HTMLElement): HTMLElement | null {
+  return region.matches(FOCUSABLE) ? region : region.querySelector<HTMLElement>(FOCUSABLE);
+}
+
 /**
  * Review mode on a Mac (Hashiya spec, "Laptop, keyboard-first"): the
  * sentence in hand in the middle, large, in an edit box that keeps the focus
@@ -210,7 +218,33 @@ type Props = { session: Session; title: string; back: string; transcriptId: numb
  */
 export function ReviewDesk({ session, title, back, transcriptId }: Props) {
   const box = useRef<HTMLTextAreaElement>(null);
+  const row = useRef<HTMLDivElement>(null);
   const current = session.current;
+  // F6 and Shift+F6 step the focus through the page's regions, box, controls
+  // row, bar and rail, the way a desktop app's panes go (critique 7 Oct round
+  // 2, P1-1): Tab stays play in the box, as the spec has it, and this is the
+  // way out that every keyboard has. Option+Tab still works where the browser
+  // moves focus with it.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "F6" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const regions = [
+        box.current,
+        row.current,
+        document.querySelector<HTMLElement>("header"),
+        document.querySelector<HTMLElement>('[role="region"][aria-label="Player"]'),
+      ].filter((region): region is HTMLElement => region !== null);
+      if (regions.length === 0) return;
+      event.preventDefault();
+      const active = document.activeElement;
+      const at = regions.findIndex((region) => region === active || (active !== null && region.contains(active)));
+      const step = event.shiftKey ? -1 : 1;
+      const next = regions[(at + step + regions.length) % regions.length] as HTMLElement;
+      firstFocusable(next)?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   // Back in the box after each move, and after the flag menu closes; never
   // while it is open, so the menu keeps the keyboard (F12).
   useEffect(() => {
@@ -304,38 +338,6 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                   {FLAGS.find(([f]) => f === flag)?.[1]}
                 </span>
               ))}
-              {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
-              <FlagMenu
-                session={session}
-                side="inline-end"
-                finalFocus={box}
-                trigger={<Button variant="ghost" size="sm" className="-ml-2.5 h-8 text-muted-foreground max-md:h-11" />}
-              >
-                Flag
-              </FlagMenu>
-              {/* Who said it, by pointer too, each speaker with the key that sets
-                  it, so Ctrl+n stays readable once speakers have names (critique
-                  7 Oct, P2-5). A press keeps the focus in the box. */}
-              <div role="group" aria-label="Who said it" className="-ml-2.5 flex flex-col items-start">
-                {session.speakers.slice(0, 9).map((speaker, i) => (
-                  <Button
-                    key={speaker.label}
-                    variant="ghost"
-                    size="sm"
-                    aria-pressed={current.label === speaker.label}
-                    aria-keyshortcuts={`Control+${i + 1}`}
-                    className="h-7 max-w-full gap-1.5 px-2.5 font-medium aria-pressed:bg-muted"
-                    style={{ "--speaker": speaker.colour } as CSSProperties}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => session.act({ kind: "speaker", n: i + 1 })}
-                  >
-                    <Kbd aria-hidden>{i + 1}</Kbd>
-                    <span dir="auto" lang={langOf(speaker.name)} className="nameplate truncate">
-                      {speaker.name}
-                    </span>
-                  </Button>
-                ))}
-              </div>
             </div>
             <div className="flex min-w-0 flex-col gap-3">
               <span id={BOX_HINT_ID} className="sr-only">
@@ -355,17 +357,67 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                 onKeyDown={(event) => onBoxKey(session, event)}
               />
               {session.second !== null && <SecondOpinion second={session.second} />}
-              {/* Enter's pointer path, quiet: the gold stays the box's edge (critique 7 Oct, P2-5). */}
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-keyshortcuts="Enter"
-                className="h-8 self-start text-muted-foreground"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => session.act({ kind: "check" })}
-              >
-                Checked, next
-              </Button>
+              {/* The desk's controls in one quiet row under the box, each with its
+                  key and an edge, so the margin holds facts only (critique 7 Oct
+                  round 2, P2-1). Not gold: the desk's one gold is the box's edge
+                  (DESIGN.md). A press keeps the focus in the box. Flag last, so
+                  its menu opens to the right of the row. F6 reaches the row. */}
+              <div ref={row} role="toolbar" aria-label="Sentence controls" className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-keyshortcuts="Enter"
+                  className="h-8 gap-1.5"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => session.act({ kind: "check" })}
+                >
+                  Checked, next
+                  <Kbd aria-hidden>⏎</Kbd>
+                </Button>
+                <div role="group" aria-label="Who said it" className="flex flex-wrap items-center gap-2">
+                  {session.speakers.slice(0, 9).map((speaker, i) => (
+                    <Button
+                      key={speaker.label}
+                      variant="outline"
+                      size="sm"
+                      aria-pressed={current.label === speaker.label}
+                      aria-keyshortcuts={`Control+${i + 1}`}
+                      className="review-chip h-8 max-w-48 gap-1.5 rounded-full px-3"
+                      style={{ "--speaker": speaker.colour } as CSSProperties}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => session.act({ kind: "speaker", n: i + 1 })}
+                    >
+                      <Kbd aria-hidden>⌃{i + 1}</Kbd>
+                      <span dir="auto" lang={langOf(speaker.name)} className="truncate">
+                        {speaker.name}
+                      </span>
+                    </Button>
+                  ))}
+                  {session.speakers.length < 9 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-keyshortcuts={`Control+${session.speakers.length + 1}`}
+                      className="h-8 gap-1.5 rounded-full px-3"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => session.act({ kind: "speaker", n: session.speakers.length + 1 })}
+                    >
+                      <Plus aria-hidden />
+                      New speaker
+                    </Button>
+                  )}
+                </div>
+                {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
+                <FlagMenu
+                  session={session}
+                  side="inline-end"
+                  finalFocus={box}
+                  trigger={<Button variant="outline" size="sm" aria-keyshortcuts="Control+F" className="h-8 gap-1.5" />}
+                >
+                  Flag
+                  <Kbd aria-hidden>⌃F</Kbd>
+                </FlagMenu>
+              </div>
             </div>
           </section>
         )}
@@ -385,10 +437,9 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
             {key.does}
           </span>
         ))}
-        {/* Tab stays in the box, so the way out is said here once (critique 7 Oct, P1-3). */}
+        {/* Tab stays in the box, so the way out is said here once (critique 7 Oct, P1-3; round 2, P1-1). */}
         <span className="flex items-center gap-1">
-          <Kbd>⌥</Kbd>
-          <Kbd>Tab</Kbd>
+          <Kbd>F6</Kbd>
           other controls
         </span>
       </footer>

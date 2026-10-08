@@ -65,9 +65,9 @@ describe("Review mode on a Mac", () => {
   it("says on the box, and once in the footer, that Tab plays and Option+Tab moves on (critique 7 Oct, P1-3)", async () => {
     const field = await start();
     const described = (field.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "");
-    expect(described).toContain("Tab plays. Option+Tab moves to the other controls.");
+    expect(described).toContain("Tab plays. F6 or Option+Tab moves to the other controls.");
     const footer = document.querySelector("footer");
-    expect(footer?.textContent).toContain("other controls");
+    expect(footer?.textContent).toContain("F6");
   });
 
   it("sets who said a sentence with Ctrl+2", async () => {
@@ -79,7 +79,13 @@ describe("Review mode on a Mac", () => {
 
   it("on the desk a pointer can check a sentence and say who said it, each speaker shown with its key (critique 7 Oct, P2-5)", async () => {
     await start();
-    const who = screen.getByRole("group", { name: "Who said it" });
+    // One row of controls under the box; the margin holds facts only (critique round 2, P2-1).
+    const row = screen.getByRole("toolbar", { name: "Sentence controls" });
+    const margin = document.querySelector(".review-margin") as HTMLElement;
+    expect(within(margin).queryAllByRole("button")).toEqual([]);
+    expect(within(row).getByRole("button", { name: "New speaker" })).toBeTruthy();
+    expect(within(row).getByRole("button", { name: /^Flag/ }).textContent).toContain("F");
+    const who = within(row).getByRole("group", { name: "Who said it" });
     const second = within(who).getByRole("button", { name: /Speaker 2/ });
     expect(second.textContent).toContain("2");
     expect(second.getAttribute("aria-keyshortcuts")).toBe("Control+2");
@@ -205,12 +211,13 @@ describe("Review mode on a Mac", () => {
 });
 
 describe("Review mode, fix round 1", () => {
-  it("the flag menu names Ctrl+U beside its flag, and shows a flag taken as checked (critique 7 Oct, P2-8)", async () => {
+  it("the flag menu shows a flag taken as checked (critique 7 Oct, P2-8)", async () => {
     const field = await start();
     key(field, { key: "u", code: "KeyU", ctrlKey: true });
     key(field, { key: "f", code: "KeyF", ctrlKey: true });
     const unclear = await screen.findByRole("menuitemcheckbox", { name: /Can't make it out/ });
-    expect(unclear.textContent).toContain("Ctrl U");
+    // Ctrl+U adds this flag but does not toggle it, so the item names no key (fix round 1 review, M1).
+    expect(unclear.textContent).not.toContain("Ctrl U");
     expect(unclear.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("menuitemcheckbox", { name: /Not speech/ }).getAttribute("aria-checked")).toBe("false");
   });

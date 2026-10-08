@@ -304,6 +304,9 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     const fill = await play.evaluate((element) => getComputedStyle(element).backgroundColor);
     expect(fill).not.toBe("rgb(200, 162, 74)");
     const rail = page.getByRole("region", { name: "Player" });
-    await expect(rail.getByText(/^0:00 \/ 0:0\d$/)).toBeVisible();
+    // The phone shows the time alone, so the waveform keeps its width (fix round 1 review I3).
+    await expect(rail.getByText(/^0:00$/)).toBeVisible();
+    if (viewport.width >= 640) await expect(rail.getByText(/^\s\/ 0:0\d$/)).toBeVisible();
+    else await expect(rail.getByText(/^\s\/ 0:0\d$/)).toBeHidden();
   });
 }

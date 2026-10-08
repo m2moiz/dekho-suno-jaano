@@ -22,6 +22,11 @@
   line-height: 1.7;
   text-align: start;
   hyphens: manual;
+  /* The block, margin and column, centred under the bar on a laptop: it hugged
+     the left, 87 px off centre at 1440 (critique 7 Oct round 2, P2-7). The
+     sum is the turn's grid below. */
+  max-inline-size: calc(9.5rem + 1.75rem + 68ch);
+  margin-inline: auto;
 }
 
 .transcript .turns {
@@ -108,8 +113,10 @@
   height: 3px;
   border-radius: 2px;
   inline-size: max(3px, var(--tick, 0%));
+  /* Full strength: each speaker's ink is 4.5:1 on the ground (palette.test.ts),
+     so the tick is past the 3:1 a mark needs; at 0.55 it was not (critique
+     7 Oct round 2, P2-5). */
   background: var(--speaker, var(--muted-foreground));
-  opacity: 0.55;
 }
 
 /* Review's mark (Task 13 fills it): green only for checked (spec, "green is
@@ -174,13 +181,24 @@
   /* An Urdu line starts at its right edge, a whole measure from the margin on
      the left, and the eye jumped that far on every turn (critique 7 Oct, P1-1).
      The margin stays on the left for every turn (owner's ruling, 8 Oct); a
-     right-to-left turn takes a narrower measure of about 45 Urdu letters, so
+     right-to-left turn takes a narrower measure of about 40 Urdu letters, so
      its start sits near the margin. Nastaliq at this size runs about 9 px a
      letter against 13.6 px for the face's "0" (measured on the Task 16
-     round 1 shots, reader-urdu 1440x900), so that is 30ch here; 42ch held
+     round 1 shots, reader-urdu 1440x900), so that is 27ch here; 42ch held
      about 63 letters. The box keeps to the start of the left-to-right grid,
      so it narrows from the right. */
-  max-inline-size: 30ch;
+  max-inline-size: 27ch;
+  /* A long unbroken token (a link, a path) breaks rather than running out of
+     the narrow measure into the margin (fix round 1 review, M4). */
+  overflow-wrap: anywhere;
+}
+
+/* A right-to-left turn's text is ragged on its left, so the gap there carries
+   no alignment: closed up, its start comes nearer the nameplate (critique 7 Oct
+   round 2, P2-7). Measured nameplate end to Urdu start at 1440: 518 px before
+   this round, tests/e2e/reader.spec.ts prints it after. */
+.transcript .turn:has(p:lang(ur)) {
+  column-gap: 0.5rem;
 }
 
 /* The word being said (#60). A background only: ::highlight() takes colour,

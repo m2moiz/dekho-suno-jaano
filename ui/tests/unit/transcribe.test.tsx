@@ -152,11 +152,16 @@ describe("the Transcribe dialog", () => {
   it("offers every engine that can run as a choice, and one that cannot as one grey line", async () => {
     const posted = await open();
     const group = screen.getByRole("radiogroup", { name: "Engine" });
+    // Each engine says what it is for in a line, and the answer's is named as
+    // recommended for it (critique 7 Oct round 2, P2-2).
     expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent)).toEqual([
-      "parakeet",
-      "whisperfor this answer",
+      "parakeetFast. English and European languages, no Urdu.",
+      "whisperRecommended for mixed Urdu and EnglishReads Urdu and mixed speech. Slower.",
     ]);
-    expect(screen.getByText("sherpa can't run on this Mac.")).toBeTruthy();
+    expect(screen.getByText("sherpa: the portable engine, with parakeet's weights. Can't run on this Mac.")).toBeTruthy();
+    // The estimate sits under the engines, at body size.
+    const status = screen.getByRole("status");
+    expect(group.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText(/sherpa-onnx will not import here/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Why sherpa can't run" }));
     expect(screen.getByText(/sherpa-onnx will not import here/)).toBeTruthy();
@@ -174,7 +179,7 @@ describe("the Transcribe dialog", () => {
     await open([{ ...ENGINES[0], cloud: true, usd_per_hour: 1.2 } as Engine, ...ENGINES.slice(1)]);
     const group = screen.getByRole("radiogroup", { name: "Engine" });
     const parakeet = within(group).getByRole("radio", { name: /^parakeet/ }).closest("label");
-    expect(parakeet?.textContent).toBe("parakeetcloudAbout $0.84 for this recording");
+    expect(parakeet?.textContent).toBe("parakeetcloudFast. English and European languages, no Urdu.About $0.84 for this recording");
     expect(screen.getByText("Runs on this Mac. Nothing leaves it.")).toBeTruthy();
     choose(within(group).getByRole("radio", { name: /^parakeet/ }));
     expect(screen.getByText("Sends the recording's sound to parakeet, off this Mac.")).toBeTruthy();

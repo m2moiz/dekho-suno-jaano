@@ -40,6 +40,7 @@
     --color-correction: var(--correction);
     --color-checked: var(--checked);
     --color-playhead: var(--playhead);
+    --color-unsure-mark: var(--unsure-mark);
     --color-speaker-1: var(--speaker-1);
     --color-speaker-2: var(--speaker-2);
     --color-speaker-3: var(--speaker-3);

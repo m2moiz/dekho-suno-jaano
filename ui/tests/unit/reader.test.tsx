@@ -121,7 +121,9 @@ describe("the reader", () => {
     // The tick is the turn's length to scale: 1.1 s (0.2 to 1.3) against 0.4 s (2.0 to 2.4).
     const tick = (li: HTMLElement) => Number.parseFloat(li.style.getPropertyValue("--tick"));
     expect(tick(turns[0] as HTMLElement) / tick(turns[1] as HTMLElement)).toBeCloseTo(1.1 / 0.4, 5);
-    expect(tick(turns[0] as HTMLElement)).toBeCloseTo((1.1 / 60) * 100, 5);
+    // Scaled to the recording: the longest turn fills the margin, so lengths
+    // can be read on a short call too (critique 7 Oct round 2, P2-5).
+    expect(tick(turns[0] as HTMLElement)).toBeCloseTo(100, 5);
   });
 
   it("shows the tools for a selection only while there is one", async () => {
@@ -411,15 +413,49 @@ describe("the reader", () => {
     expect(named).toEqual([{ SPEAKER_01: "Sara" }]);
   });
 
+  it("saves a name once when Enter is followed by the field's blur", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 1, rename" }));
+    const field = screen.getByRole("textbox", { name: "Name for Speaker 1" });
+    fireEvent.change(field, { target: { value: "Ali" } });
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter" });
+      fireEvent.blur(field);
+    });
+    expect(await screen.findByRole("button", { name: "Ali, rename" })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(named).toEqual([{ SPEAKER_00: "Ali" }]);
+  });
+
+  it("keeps a half-typed name open, unsaved, when the window loses focus (fix round 1 review, I1)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));
+    const field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
+    fireEvent.change(field, { target: { value: "Sa" } });
+    // An app or tab switch blurs the field while the document has lost focus.
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    act(() => fireEvent.blur(field));
+    hasFocus.mockRestore();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(named).toEqual([]);
+    expect(screen.getByRole("textbox", { name: "Name for Speaker 2" })).toBeTruthy();
+  });
+
   it("keeps the old name on Esc, and an emptied name gives the speaker its own label back", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, rename" }));
     let field = screen.getByRole("textbox", { name: "Name for Speaker 2" });
     fireEvent.change(field, { target: { value: "Sara" } });
-    fireEvent.keyDown(field, { key: "Escape" });
-    // A browser that fires blur as the field goes must not save what Esc dropped.
-    fireEvent.blur(field);
+    // A browser that fires blur as the field goes must not save what Esc
+    // dropped. Both in one act, or React removes the field first and the blur
+    // never reaches it (fix round 1 review, I2).
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+      fireEvent.blur(field);
+    });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Speaker 2, rename" }));
+    // A save is a fetch: give one the time to be sent.
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(named).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Speaker 2, rename" }));

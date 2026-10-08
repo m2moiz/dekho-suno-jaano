@@ -27,7 +27,8 @@ test("a retyped word reads as retyped, loses its tint, undoes in one step and is
   await page.goto(readerUrl(seeded));
   const first = page.locator("article p").first();
   await expect(first).toHaveText(" alpha bravo charlie delta");
-  await page.getByRole("button", { name: "1 unsure" }).click();
+  await expect(page.getByRole("group", { name: "Unsure words", exact: true })).toContainText("1");
+  await page.getByRole("switch", { name: "Unsure words" }).click();
   await expect.poll(() => painted(page, "dsj-unsure")).toEqual(["charlie"]);
 
   await selectWord(page, "charlie");
@@ -37,7 +38,7 @@ test("a retyped word reads as retyped, loses its tint, undoes in one step and is
   await field.fill("Charles Darwin");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(first).toHaveText(" alpha bravo Charles Darwin delta");
-  await expect(page.getByRole("button", { name: "0 unsure" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Unsure words", exact: true })).toContainText("0");
   // What the recogniser had, struck through in the margin beside the turn.
   await expect(page.locator("article li").first().locator("[data-margin] del")).toHaveText("charlie");
   await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
