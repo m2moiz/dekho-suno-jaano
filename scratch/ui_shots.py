@@ -120,6 +120,12 @@ def seed(root: Path) -> dict[str, tuple[int, int]]:
             adoption = library.adopt([path])
             if adoption.refused:
                 raise SystemExit(f"the library refused {path}: {adoption.refused}")
+            if kind == "mixed":
+                # As a --roman-urdu run records itself, from the terminal or the
+                # app: language "ur" over Latin letters, which the library tags
+                # mixed. Adopted alone it carried no language and read English
+                # (critique 7 Oct, P2-11).
+                library.record_run(path, engine="whisper", language="ur")
             found = library.transcript(adoption.transcripts[0])
             assert found is not None
             ids[kind] = (found.recording_id, found.id)
