@@ -44,10 +44,20 @@ function undersized(page: Page): Promise<string[]> {
       "a[href], button, textarea, input, select, [role=button], [role=slider], [role=combobox], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [tabindex='0']",
     );
     const out: string[] = [];
+    // Nothing a finger can land on: visually hidden by clipping, as a screen
+    // reader's text is, or as base-ui's focus guards are, the 1x1 spans with
+    // role="button" a menu puts around its popup in WebKit, at (-1,-1) with
+    // clip-path inset(50%) (dumped in Task 16c; Chromium's carry aria-hidden).
+    const unhittable = (el: HTMLElement) => {
+      if (el.closest("[aria-hidden=true], .sr-only, [hidden], [inert]")) return true;
+      if (el.hasAttribute("data-base-ui-focus-guard")) return true;
+      const style = getComputedStyle(el);
+      return style.clipPath === "inset(50%)" || style.clip === "rect(0px, 0px, 0px, 0px)" || style.pointerEvents === "none";
+    };
     for (const el of controls) {
       const box = el.getBoundingClientRect();
-      // Not drawn: hidden, or the screen reader's own.
-      if (box.width === 0 || box.height === 0 || el.closest("[aria-hidden=true], .sr-only, [hidden]")) continue;
+      // Not drawn, or not hittable.
+      if (box.width === 0 || box.height === 0 || unhittable(el)) continue;
       const name = (el.getAttribute("aria-label") ?? el.textContent ?? el.tagName).trim().slice(0, 40);
       // Its laid-out size, not its box: a menu opens from 95 % scale, and a box
       // measured mid-animation is that much smaller.
@@ -70,6 +80,26 @@ async function swipe(cdp: CDPSession, at: { x: number; y: number }, dx: number, 
   await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx, y: y + dy }] });
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
+
+// The checker itself: it skips a clipped 1x1 focus guard and still flags a
+// small button anyone can see and tap (Task 16c).
+test("the target check skips a focus guard but flags a small visible button", async ({ page }, info) => {
+  await page.setViewportSize(PHONE);
+  await openReview(page, `review-phone-checker-${info.project.name}`, 8.8 + info.project.name.length / 1000);
+  expect(await undersized(page)).toEqual([]);
+  await page.evaluate(() => {
+    const guard = document.createElement("span");
+    guard.setAttribute("role", "button");
+    guard.tabIndex = 0;
+    guard.style.cssText = "position: fixed; top: -1px; left: -1px; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%)";
+    document.body.append(guard);
+    const small = document.createElement("button");
+    small.textContent = "Tiny";
+    small.style.cssText = "position: fixed; top: 200px; left: 100px; width: 20px; height: 20px; padding: 0";
+    document.body.append(small);
+  });
+  expect(await undersized(page)).toEqual(["Tiny: 20x20"]);
+});
 
 test.describe("on a phone, 390 px wide, with a keyboard", () => {
   test.use({ viewport: PHONE });
