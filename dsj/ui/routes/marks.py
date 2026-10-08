@@ -149,8 +149,13 @@ def patch_edits(transcript_id: str, change: EditsPatch) -> EditsSaved:
 
 @router.put("/transcripts/{transcript_id}/names")
 def save_names(transcript_id: str, update: NamesUpdate) -> Edits:
-    """Save the speakers' names in the transcript's edit list, the words untouched (#243)."""
-    return _wire(edits.save_names(transcript_number(transcript_id), update.names))
+    """Save the speakers' names in the transcript's edit list, the words untouched (#243).
+
+    Made against the list `list_sha` names, as a patch is (#274): a rename is
+    a change to the list, and the page takes the sha it answers as its own.
+    """
+    found = transcript_number(transcript_id)
+    return _wire(edits.save_names(found, update.names, update.transcript_sha, update.list_sha))
 
 
 @router.get(

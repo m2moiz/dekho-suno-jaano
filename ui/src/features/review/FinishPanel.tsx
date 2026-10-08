@@ -63,6 +63,7 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
         <p role="status">
           Saved {written.files.join(" and ")} beside the transcript
           {written.unchecked > 0 ? `, with ${written.unchecked.toLocaleString("en")} sentences marked not checked` : ""}.
+          {written.kept.length > 0 ? ` The earlier key is kept beside it as ${written.kept.join(" and ")}.` : ""}
         </p>
       )}
       {asking && (

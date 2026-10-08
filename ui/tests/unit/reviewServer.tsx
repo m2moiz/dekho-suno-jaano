@@ -99,6 +99,10 @@ export const server = {
   content: null as Content | null,
   /** The page torn down: from now on no ordinary save reaches the server (the browser cancels it); a keepalive one still does. */
   down: false,
+  /** The earlier answer key's files the server moved aside before writing (#274). */
+  keptKey: [] as string[],
+  /** Whether the edit list's replaced notice is set: a list put aside because the transcript was made again (#249). */
+  replaced: null as string | null,
 };
 
 // The shas the mocked server names its edit list and review by: a count of saves, so a patch made against an older one is refused.
@@ -159,6 +163,8 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
   server.kept = [];
   server.content = null;
   server.down = false;
+  server.keptKey = [];
+  server.replaced = null;
   server.reviewPatches = [];
   server.reviewFault = "none";
   server.reviewPuts = [];
@@ -196,7 +202,7 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
         server.content = content;
         listSaves += 1;
       }
-      return Response.json({ content, names: {}, replaced: null, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1", list_sha: listSha() });
+      return Response.json({ content, names: {}, replaced: server.replaced, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, transcript_sha: "s1", list_sha: listSha() });
     }
     if (path === "/api/transcripts/7/review") {
       const fault = saving ? server.reviewFault : "none";
@@ -239,7 +245,7 @@ export function serveReview(fetchMock: Mock<(request: Request) => Promise<Respon
       server.reviewReads += 1;
       return Response.json({ document: server.saved, transcript_sha: "s1", review_sha: server.saved === null ? null : reviewSha() });
     }
-    if (path === "/api/transcripts/7/reference") return Response.json({ files: ["a.reference.json", "a.reference.txt"], segments: 3, unchecked: 0 });
+    if (path === "/api/transcripts/7/reference") return Response.json({ files: ["a.reference.json", "a.reference.txt"], segments: 3, unchecked: 0, kept: server.keptKey });
     if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
     return Response.json({ detail: "Not Found" }, { status: 404 });
   });
@@ -258,6 +264,12 @@ export const audio = () => document.querySelector("audio") as HTMLAudioElement;
 export function savedElsewhere(document: unknown): void {
   server.saved = document;
   reviewSaves += 1;
+}
+
+/** Another tab or device saves a change to the edit list: this page's next patch is made against a list the server no longer holds. */
+export function listChangedElsewhere(): void {
+  server.content = contentWith("echo", "eko");
+  listSaves += 1;
 }
 
 export async function start(navigate?: (href: string) => void, pass = "Every sentence"): Promise<HTMLTextAreaElement> {

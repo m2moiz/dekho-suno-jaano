@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import replace
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import page, tokens, update
+from conftest import page, rename, tokens, update
 
 from dsj import hatao
 from dsj.ui import edits, review
@@ -123,6 +124,7 @@ def test_an_answer_key_is_refused_while_sentences_are_unchecked_and_says_how_man
     assert partial.status_code == 200, partial.text
     assert partial.json() == {
         "files": ["talk.reference.json", "talk.reference.txt"], "segments": 2, "unchecked": 1,
+        "kept": [],
     }
     key = json.loads((seeded["json"].parent / "talk.reference.json").read_text())
     assert key["complete"] is False
@@ -142,7 +144,7 @@ def test_the_answer_key_holds_the_corrected_words_names_and_flags(
     client = page()
     route = f"/api/transcripts/{seeded['id']}"
     correct_there(seeded)
-    client.put(f"{route}/names", json={"names": {"SPEAKER_00": "Ali"}})
+    assert rename(seeded, {"SPEAKER_00": "Ali"}).status_code == 200
     both = document(sha(seeded), "checked", "checked", flags=([], ["overlap"]))
     client.put(f"{route}/review", json=both)
     assert client.post(f"{route}/reference", json={}).status_code == 200
@@ -196,7 +198,7 @@ def test_transcribed_again_the_speakers_keep_their_names(seeded: dict[str, Any])
     client = page()
     route = f"/api/transcripts/{seeded['id']}"
     correct_there(seeded)
-    client.put(f"{route}/names", json={"names": {"SPEAKER_00": "Ali"}})
+    assert rename(seeded, {"SPEAKER_00": "Ali"}).status_code == 200
 
     transcribe_again(seeded)
 
@@ -324,20 +326,80 @@ def test_a_note_that_does_not_read_leaves_the_list_trusted(seeded: dict[str, Any
         assert " their" in [e.get("text") for e in opened.json()["content"]]
 
 
-def test_a_partial_answer_key_keeps_the_complete_one_before_it(seeded: dict[str, Any]) -> None:
+# Where an earlier answer key is kept: beside it, named for when it was written.
+EARLIER = re.compile(r"talk\.reference\.\d{8}T\d{6}Z(-\d+)?\.json")
+
+
+def test_an_answer_key_is_never_written_over_the_earlier_one_is_kept_beside_it(
+    seeded: dict[str, Any],
+) -> None:
+    """Final review I1: a second complete key went straight over the first, which was lost."""
     client = page()
     route = f"/api/transcripts/{seeded['id']}"
     folder = seeded["json"].parent
     client.put(f"{route}/review", json=document(sha(seeded), "checked", "checked"))
-    assert client.post(f"{route}/reference", json={}).status_code == 200
+    first = client.post(f"{route}/reference", json={})
+    assert first.status_code == 200, first.text
+    assert first.json()["kept"] == []
+    earlier = (folder / "talk.reference.json").read_text()
+    earlier_text = (folder / "talk.reference.txt").read_text()
+
+    correct_there(seeded)
+    second = client.post(f"{route}/reference", json={})
+    assert second.status_code == 200, second.text
+    kept = second.json()["kept"]
+    assert len(kept) == 2 and EARLIER.fullmatch(kept[0]), kept
+    assert kept[1] == kept[0].removesuffix(".json") + ".txt"
+    assert (folder / kept[0]).read_text() == earlier
+    assert (folder / kept[1]).read_text() == earlier_text
+    assert "Hello their." in (folder / "talk.reference.json").read_text()
+
+    # A partial key over a complete one, in the same second: the next free name.
     client.put(f"{route}/review", json=document(sha(seeded), "checked", "unchecked"))
-    assert client.post(f"{route}/reference", json={"allow_partial": True}).status_code == 200
-    assert json.loads((folder / "talk.reference.json").read_text())["complete"] is False
-    assert json.loads((folder / "talk.reference-2.json").read_text())["complete"] is True
-    assert "[not checked]" not in (folder / "talk.reference-2.txt").read_text()
-    # A second partial replaces the first partial; the complete key stays where it was.
-    assert client.post(f"{route}/reference", json={"allow_partial": True}).status_code == 200
-    assert not (folder / "talk.reference-3.json").exists()
+    third = client.post(f"{route}/reference", json={"allow_partial": True})
+    assert third.status_code == 200, third.text
+    assert third.json()["kept"][0] not in kept
+    assert json.loads((folder / third.json()["kept"][0]).read_text())["complete"] is True
+    assert len(list(folder.glob("talk.reference*.json"))) == 3
+    assert len(list(folder.glob("talk.reference*.txt"))) == 3
+
+
+def test_a_checked_sentence_keeps_the_hash_of_its_words(seeded: dict[str, Any]) -> None:
+    """Final review I1 (ruling R7): what the page compares across a re-make.
+
+    A sentence checked against an older transcript stays checked only if its
+    words are what they were when it was checked; the review never holds the
+    words, only this short hash of them, made by the page (model.ts, wordsHash).
+    """
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}/review"
+    saved = document(sha(seeded), "checked", "unchecked")
+    saved["segments"][0]["words_hash"] = "1a2b3c4d"
+    assert client.put(route, json=saved).status_code == 200
+    read = client.get(route).json()
+    assert [s["words_hash"] for s in read["document"]["segments"]] == ["1a2b3c4d", None]
+    checked = {**read["document"]["segments"][1], "state": "checked", "words_hash": "0000beef"}
+    patched = client.patch(route, json={
+        "transcript_sha": sha(seeded), "review_sha": read["review_sha"], "start": 1, "delete": 1,
+        "insert": [checked], "corrections": [], "review_pass": "every", "cursor_s": 1.2,
+    })
+    assert patched.status_code == 200, patched.text
+    again = client.get(route).json()["document"]["segments"]
+    assert [s["words_hash"] for s in again] == ["1a2b3c4d", "0000beef"]
+    # Never words, nor a path: eight hex digits or nothing.
+    for bad in ("Hello there", "1A2B3C4D", "1a2b3c4"):
+        broken = document(sha(seeded), "checked", "unchecked")
+        broken["segments"][0]["words_hash"] = bad
+        assert client.put(route, json=broken).status_code == 422, bad
+
+
+def test_a_review_saved_before_word_hashes_still_reads(seeded: dict[str, Any]) -> None:
+    path = review_path(seeded["json"])
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document(sha(seeded), "checked", "unchecked")))
+    read = page().get(f"/api/transcripts/{seeded['id']}/review")
+    assert read.status_code == 200, read.text
+    assert [s["words_hash"] for s in read.json()["document"]["segments"]] == [None, None]
 
 
 def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
@@ -379,11 +441,22 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
         replace(e, text=" their") if isinstance(e, hatao.Item) and e.text == " there" else e
         for e in opened.doc.content
     )
+    refused: list[edits.ListChanged] = []
+
+    def named() -> None:
+        try:
+            edits.save_names(
+                seeded["id"], {"SPEAKER_00": "Ali"}, opened.transcript_sha,
+                edits.list_sha(opened.doc),
+            )
+        except edits.ListChanged as exc:
+            refused.append(exc)
+
     workers = [
         threading.Thread(
             target=edits.save_edits, args=(seeded["id"], content, opened.transcript_sha)
         ),
-        threading.Thread(target=edits.save_names, args=(seeded["id"], {"SPEAKER_00": "Ali"})),
+        threading.Thread(target=named),
     ]
     for worker in workers:
         worker.start()
@@ -392,7 +465,9 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
     assert most[0] == 1
     assert reads_free and all(reads_free)
     doc = hatao.load(edits_path(seeded["json"]))
-    assert doc.names == {"SPEAKER_00": "Ali"}
+    # A rename names the list it was made against (final review C1): landing
+    # second, it finds the words saved since and is refused, writing nothing.
+    assert doc.names == ({} if refused else {"SPEAKER_00": "Ali"})
     assert " their" in [e.text for e in doc.content if isinstance(e, hatao.Item)]
 
 

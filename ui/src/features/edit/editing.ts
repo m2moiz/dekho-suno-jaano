@@ -105,18 +105,34 @@ export async function loadEditable(transcriptId: number): Promise<Editable | { r
 
 /**
  * Save every speaker's name; the server's answer is what is kept, with the
- * list's new sha, since names are part of the list (#251). Throws ApiError in
- * the server's words. Called through useSave's `rename`, in turn with the
+ * list's new sha, since names are part of the list (#251). Made against the
+ * list `listSha` names and the transcript `sha` names, and refused 409 as a
+ * patch is when either has changed (#274, final review C1). Throws ApiError
+ * in the server's words. Called through useSave's `rename`, in turn with the
  * list's own saves.
  */
-async function saveNames(transcriptId: number, names: Names): Promise<{ names: Names; listSha: string }> {
+async function saveNames(transcriptId: number, names: Names, sha: string, listSha: string): Promise<{ names: Names; listSha: string }> {
   const route = `/api/transcripts/${transcriptId}/names`;
   const { data, error, response } = await api.PUT("/api/transcripts/{transcript_id}/names", {
     params: { path: { transcript_id: String(transcriptId) } },
-    body: { names: { ...names } },
+    body: { names: { ...names }, transcript_sha: sha, list_sha: listSha },
   });
-  if (data === undefined) throw new ApiError(fromBody(error, response, route));
+  if (data === undefined) throw new ApiError(fromBody(error, response, route), response.status);
   return { names: data.names, listSha: data.list_sha };
+}
+
+/** The names as the server keeps them (dsj/ui/edits.py save_names): trimmed, a blank one left out. */
+function keptNames(names: Names): Names {
+  return Object.fromEntries(
+    Object.entries(names)
+      .map(([label, name]) => [label, name.trim()] as const)
+      .filter(([, name]) => name !== ""),
+  );
+}
+
+function sameNames(a: Names, b: Names): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((label) => a[label] === b[label]);
 }
 
 /** The editor's list as it is now, re-rendering on each change. */
@@ -150,6 +166,19 @@ export type Saving = {
    * list the server no longer holds (#251). Resolves to the names kept.
    */
   rename: (names: Names) => Promise<Names>;
+  /**
+   * Why nothing more saves until the page is reloaded (the transcript made
+   * again, #249, or the list changed in another tab, #251), or null. Review
+   * stops its own save on it (#274, final review I2).
+   */
+  outdated: string | null;
+  /**
+   * Resolve once no save or rename of the list is in flight, to `outdated` as
+   * it is then. Never starts a save and never throws: Review waits on it
+   * before each save of its own, so a check is never saved beside a
+   * correction the server is about to refuse (#274, I2).
+   */
+  idle: () => Promise<string | null>;
 };
 
 // The most a page may send with `keepalive` at once: the Fetch standard's
@@ -229,10 +258,12 @@ function sameList(a: readonly Entry[], b: readonly Entry[]): boolean {
  */
 export function useSave(transcriptId: number, { editor, renderable, sha, saved, names }: Editable): Saving {
   const [state, setState] = useState<SaveState>("saved");
+  const [outdatedNow, setOutdatedNow] = useState<string | null>(null);
   const pending = useRef(false);
   const settling = useRef<() => Promise<void>>(() => Promise.resolve());
   const keeping = useRef<() => void>(() => undefined);
   const renaming = useRef<(names: Names) => Promise<Names>>(() => Promise.reject(new NotSaved("The page is not ready yet.")));
+  const idling = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
   useEffect(() => {
     const route = `/api/transcripts/${transcriptId}/edits`;
     let flight: Promise<boolean> | null = null;
@@ -242,6 +273,10 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
     // changed in another tab (#251). Every later save would be refused the
     // same way, so nothing more is sent.
     let outdated: string | null = null;
+    const goOutdated = (reason: string) => {
+      outdated = reason;
+      if (live) setOutdatedNow(reason);
+    };
     // Why the last save failed, in the server's words, until one succeeds.
     let failure: string | null = null;
     // Every request that changes the list on the server, one after another,
@@ -350,14 +385,14 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
             // What was sent is kept aside by the server, so leaving loses none
             // of it. Anything typed while it was in flight was not: that still
             // counts as unsaved, and leaving or reloading asks first.
-            outdated = "The transcript was made again since this page loaded. Reload the page.";
+            goOutdated("The transcript was made again since this page loaded. Reload the page.");
             shown = await keepAside(content, thrown);
             saved.content = content;
           } else if (thrown instanceof ApiError && thrown.detail.error === LIST_CHANGED) {
             // Another tab saved the list since: this change is not saved
             // anywhere, so leaving still asks. Review's box keeps its own
             // copy in the browser (draft.ts) for after the reload.
-            outdated = "This transcript's edits were changed in another tab. Reload the page.";
+            goOutdated("This transcript's edits were changed in another tab. Reload the page.");
           }
           pending.current = editor.content !== saved.content;
           if (live) {
@@ -404,12 +439,72 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
     keeping.current = () => {
       if (outdated === null && !editor.inGesture && editor.content !== saved.content) void start();
     };
-    renaming.current = (next: Names) =>
-      inTurn(async () => {
-        const kept = await saveNames(transcriptId, next);
-        saved.listSha = kept.listSha;
-        return kept.names;
+    // A rename made against the list the server holds, which its answer moves
+    // on (#274, final review C1). Before, a rename was unguarded and the page
+    // took the sha it answered while holding the list from before another
+    // tab's patch, so its next patch was spliced into a list of another shape.
+    const renameOnce = async (next: Names): Promise<Names> => {
+      const kept = await saveNames(transcriptId, next, sha, saved.listSha);
+      saved.listSha = kept.listSha;
+      return kept.names;
+    };
+    // A rename whose fate is in doubt is resolved as a patch's is: the list is
+    // read once. With this page's words and the names asked for, it landed and
+    // its sha is taken; with this page's words and names, it did not and is
+    // sent once more. Anything else was changed elsewhere: only a reload helps.
+    const renameResolved = async (next: Names): Promise<Names> => {
+      try {
+        return await renameOnce(next);
+      } catch (thrown) {
+        if (!inDoubt(thrown, LIST_CHANGED)) throw thrown;
+        const route = `/api/transcripts/${transcriptId}/names`;
+        const read = await api
+          .GET("/api/transcripts/{transcript_id}/edits", { params: { path: { transcript_id: String(transcriptId) } } })
+          .catch(() => null);
+        const data = read?.data;
+        if (data === undefined) throw thrown;
+        if (data.transcript_sha !== sha) {
+          throw new ApiError({ error: TRANSCRIPT_CHANGED, message: "This transcript was made again while it was open. Reload the page.", request: route });
+        }
+        const mine = sameList(data.content, saved.content);
+        if (mine && sameNames(data.names, keptNames(next))) {
+          saved.listSha = data.list_sha;
+          return data.names;
+        }
+        if (!mine || !sameNames(data.names, names.value)) {
+          if (thrown instanceof ApiError && thrown.detail.error === LIST_CHANGED) throw thrown;
+          throw new ApiError({
+            error: LIST_CHANGED,
+            message: "This transcript's edits were changed in another tab or window after this page loaded them, so these names were not saved. Reload the page to load them again.",
+            request: route,
+          });
+        }
+        saved.listSha = data.list_sha;
+        return await renameOnce(next);
+      }
+    };
+    renaming.current = (next: Names) => {
+      if (outdated !== null) return Promise.reject(new Outdated(outdated));
+      return inTurn(async () => {
+        try {
+          const kept = await renameResolved(next);
+          names.set(kept);
+          return kept;
+        } catch (thrown) {
+          if (thrown instanceof ApiError && thrown.detail.error === TRANSCRIPT_CHANGED) {
+            goOutdated("The transcript was made again since this page loaded. Reload the page.");
+          } else if (thrown instanceof ApiError && thrown.detail.error === LIST_CHANGED) {
+            goOutdated("This transcript's edits were changed in another tab. Reload the page.");
+          }
+          throw thrown;
+        }
       });
+    };
+    idling.current = async () => {
+      await flight;
+      await turn;
+      return outdated;
+    };
     // Leaving with a change unsaved asks first, as any editor does, where the
     // browser asks at all (a desktop's; never iOS Safari).
     const leaving = (event: BeforeUnloadEvent) => {
@@ -430,13 +525,7 @@ export function useSave(transcriptId: number, { editor, renderable, sha, saved, 
   }, [transcriptId, editor, renderable, sha, saved, names]);
   const settle = useCallback(() => settling.current(), []);
   const keep = useCallback(() => keeping.current(), []);
-  const rename = useCallback(
-    async (next: Names) => {
-      const kept = await renaming.current(next);
-      names.set(kept);
-      return kept;
-    },
-    [names],
-  );
-  return { state, settle, keep, rename };
+  const rename = useCallback((next: Names) => renaming.current(next), []);
+  const idle = useCallback(() => idling.current(), []);
+  return { state, settle, keep, rename, outdated: outdatedNow, idle };
 }

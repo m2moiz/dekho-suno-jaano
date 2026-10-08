@@ -67,7 +67,25 @@ export function sentenceSpans(content: Content): Span[] {
 }
 
 export function freshSegments(content: Content): Segment[] {
-  return sentenceSpans(content).map(({ start, end }): Segment => ({ start, end, state: "unchecked", flags: [], speaker: null, edited: false }));
+  return sentenceSpans(content).map(({ start, end }): Segment => ({ start, end, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null }));
+}
+
+/**
+ * A short hash of a sentence's words, kept with its check (#274, ruling R7):
+ * 32-bit FNV-1a of the words' UTF-8 bytes, spacing aside, as eight hex
+ * digits. A transcript made again keeps a sentence checked only while its
+ * words still hash the same, without the review holding the words. Not a
+ * guard against anyone: a one-in-four-billion chance that changed words
+ * hash alike is far under any other way a check can be wrong.
+ */
+export function wordsHash(words: string): string {
+  const text = words.trim().split(/\s+/).join(" ");
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 /**
@@ -126,8 +144,12 @@ export type Resumed = { segments: Segment[]; cursor: number; lost: number };
  * The review to pick up: the saved one as it is when the transcript is the
  * one it was made against; else this transcript's sentences, each keeping
  * what a saved one with the same span said (Review Focus 4: a run from the
- * app with the same settings writes the same file). `lost` counts the checked
- * sentences that no longer match, for the page to say.
+ * app with the same settings writes the same file). A check is kept only
+ * when the sentence's words are still the ones it was checked with (#274,
+ * ruling R7): the same span is not the same words, since a re-run can hear
+ * them otherwise, and the edit list holding the corrections was put aside
+ * (#249). A check from before #274 has no hash, so its words are unknown and
+ * it is dropped too. `lost` counts the checks dropped, for the page to say.
  */
 export function resume(saved: ReviewDocument | null, content: Content, sha: string): Resumed {
   if (saved !== null && saved.transcript_sha === sha) {
@@ -135,7 +157,8 @@ export function resume(saved: ReviewDocument | null, content: Content, sha: stri
   }
   const fresh = freshSegments(content);
   if (saved === null) return { segments: fresh, cursor: 0, lost: 0 };
-  const used = new Set<number>();
+  const kept = new Set<number>();
+  const words = wordIndex(content);
   let k = 0;
   const segments = fresh.map((segment) => {
     while (k < saved.segments.length && (saved.segments[k]?.start ?? 0) < segment.start - SAME_SPAN_S) k += 1;
@@ -143,10 +166,13 @@ export function resume(saved: ReviewDocument | null, content: Content, sha: stri
     if (old === undefined || Math.abs(old.start - segment.start) > SAME_SPAN_S || Math.abs(old.end - segment.end) > SAME_SPAN_S) {
       return segment;
     }
-    used.add(k);
-    return { ...segment, state: old.state, flags: [...old.flags], speaker: old.speaker, edited: old.edited };
+    const heard = { ...segment, flags: [...old.flags], speaker: old.speaker };
+    if (old.state !== "checked") return heard;
+    if (old.words_hash === null || old.words_hash !== wordsHash(segmentText(content, words, segment))) return heard;
+    kept.add(k);
+    return { ...heard, state: old.state, edited: old.edited, words_hash: old.words_hash };
   });
-  const lost = saved.segments.filter((s, i) => s.state === "checked" && !used.has(i)).length;
+  const lost = saved.segments.filter((s, i) => s.state === "checked" && !kept.has(i)).length;
   return { segments, cursor: indexAt(segments, saved.cursor_s), lost };
 }
 
@@ -200,8 +226,8 @@ export function splitAt(content: Content, segments: readonly Segment[], index: n
   // The flags, the edit and the speaker stay with the first half only, so the
   // pass's counts do not count one sentence twice (Task 11 review). Both
   // halves are to be checked again, and either can be flagged again.
-  const first: Segment = { ...segment, end: at, state: "unchecked" };
-  const second: Segment = { ...segment, start: at, state: "unchecked", flags: [], edited: false, speaker: null };
+  const first: Segment = { ...segment, end: at, state: "unchecked", words_hash: null };
+  const second: Segment = { ...segment, start: at, state: "unchecked", flags: [], edited: false, speaker: null, words_hash: null };
   return { segments: [...segments.slice(0, index), first, second, ...segments.slice(index + 1)] };
 }
 
@@ -217,6 +243,7 @@ export function mergeWithPrevious(segments: readonly Segment[], index: number): 
     flags: [...new Set([...previous.flags, ...current.flags])],
     speaker: previous.speaker ?? current.speaker,
     edited: previous.edited || current.edited,
+    words_hash: null,
   };
   return [...segments.slice(0, index - 1), merged, ...segments.slice(index + 1)];
 }

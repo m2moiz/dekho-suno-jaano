@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from conftest import page, update
+from conftest import page, rename, update
 from fastapi.testclient import TestClient
 
 from dsj.ui.edits import display_name
@@ -30,7 +30,7 @@ def test_an_export_carries_the_corrections_and_the_names(
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["text"] = " their"
     client.put(f"{route}/edits", json=update(seeded, content))
-    client.put(f"{route}/names", json={"names": {"SPEAKER_00": "Ali"}})
+    assert rename(seeded, {"SPEAKER_00": "Ali"}).status_code == 200
     reply = client.get(f"{route}/export/srt")
     assert reply.status_code == 200, reply.text
     name = f'attachment; filename="transcript-{seeded["id"]}.srt"'

@@ -282,6 +282,77 @@ describe("useSave settle", () => {
   });
 });
 
+describe("a rename names the list it was made against (#274, final review C1)", () => {
+  /** What the server holds after another tab or the phone deleted " Hello": a list of another shape. */
+  const PHONES: Content = [CONTENT[0] as Entry, CONTENT[2] as Entry];
+  const listReply = (content: Content, names: Record<string, string>, listSha: string) =>
+    Response.json({ content, names, pad_s: 0.05, edited_at: null, spans: null, unrenderable: null, replaced: null, transcript_sha: "sha-1", list_sha: listSha });
+
+  it("sends the list's sha and the transcript's with the names", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const server = slowServer();
+    const renamed = result.current.rename({ SPEAKER_00: "Ali" });
+    await vi.waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]).toMatchObject({ method: "PUT", path: "/api/transcripts/7/names", body: { names: { SPEAKER_00: "Ali" }, list_sha: "list-1", transcript_sha: "sha-1" } });
+    server.answers[0]?.(Response.json({ names: { SPEAKER_00: "Ali" }, list_sha: "list-named" }));
+    await renamed;
+    expect(e.saved.listSha).toBe("list-named");
+  });
+
+  it("the reviewer's probe: refused after the phone's patch, the page keeps its own sha, says to reload, and its next correction is never sent", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const changed = { error: "ListChanged", message: "This transcript's edits were changed in another tab or window after this page loaded them, so these names were not saved. Reload the page to load them again.", request: "/api/transcripts/7/names" };
+    fetchMock.mockImplementation(async (request) =>
+      request.method === "GET" ? listReply(PHONES, {}, "list-phone") : Response.json(changed, { status: 409 }),
+    );
+    // The server's own refusal, for the dialog; a second rename is not even sent.
+    await expect(result.current.rename({ SPEAKER_00: "Ali" })).rejects.toMatchObject({ name: "ListChanged" });
+    await expect(result.current.rename({ SPEAKER_00: "Ali" })).rejects.toBeInstanceOf(Outdated);
+    expect(e.saved.listSha).toBe("list-1");
+    expect(e.names.value).toEqual({});
+    await vi.waitFor(() => expect(result.current.outdated).toMatch(/Reload the page/));
+    // The correction the laptop makes next: nothing goes, so nothing lands in the wrong place.
+    e.editor.applyEdit({ kind: "correct", start: 2, stop: 3, entries: [{ ...(CONTENT[2] as Entry), text: " where" } as Entry] });
+    await expect(result.current.settle()).rejects.toBeInstanceOf(Outdated);
+    expect(fetchMock.mock.calls.map(([r]) => r.method)).toEqual(["PUT", "GET"]);
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("a rename whose answer was lost: the list read once holds the names asked for, so its sha is taken", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    let puts = 0;
+    fetchMock.mockImplementation(async (request) => {
+      if (request.method === "GET") return listReply(CONTENT, { SPEAKER_00: "Ali" }, "list-named");
+      puts += 1;
+      throw new TypeError("Failed to fetch");
+    });
+    expect(await result.current.rename({ SPEAKER_00: " Ali " })).toEqual({ SPEAKER_00: "Ali" });
+    expect(puts).toBe(1);
+    expect(e.saved.listSha).toBe("list-named");
+    expect(result.current.outdated).toBeNull();
+  });
+
+  it("a rename lost before it arrived is sent again, once, against the sha read", async () => {
+    const e = editable();
+    const { result } = renderHook(() => useSave(7, e));
+    const bodies: Record<string, unknown>[] = [];
+    fetchMock.mockImplementation(async (request) => {
+      if (request.method === "GET") return listReply(CONTENT, {}, "list-1");
+      bodies.push((await request.json()) as Record<string, unknown>);
+      if (bodies.length === 1) throw new TypeError("Failed to fetch");
+      return Response.json({ names: { SPEAKER_00: "Ali" }, list_sha: "list-named" });
+    });
+    expect(await result.current.rename({ SPEAKER_00: "Ali" })).toEqual({ SPEAKER_00: "Ali" });
+    expect(bodies.map((b) => b.list_sha)).toEqual(["list-1", "list-1"]);
+    expect(e.saved.listSha).toBe("list-named");
+  });
+});
+
 describe("useSave when the page goes away (Task 14 re-review, R1-I1; #251)", () => {
   afterEach(() => {
     Reflect.deleteProperty(document, "visibilityState");

@@ -460,6 +460,18 @@ def update(seeded: dict[str, Any], content: list[dict[str, Any]]) -> dict[str, A
     return {"content": content, "transcript_sha": digest}
 
 
+def rename(seeded: dict[str, Any], names: dict[str, str]) -> Any:
+    """A PUT of `names` as the speakers' names, made against the list as the server holds it now.
+
+    A rename names the list it was made against, as a patch does (final review C1).
+    """
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    held = client.get(f"{route}/edits").json()
+    body = {"names": names, "list_sha": held["list_sha"], "transcript_sha": held["transcript_sha"]}
+    return client.put(f"{route}/names", json=body)
+
+
 def tokens(*words: tuple[float, float, str, float]) -> list[dict[str, Any]]:
     return [{"t": t, "e": e, "w": w, "c": c} for t, e, w, c in words]
 

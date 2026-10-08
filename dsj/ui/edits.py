@@ -577,19 +577,41 @@ def save_edits(
         return _save(transcript_id, row, content, names, payload, digest)
 
 
-def save_names(transcript_id: int, names: Mapping[str, str]) -> Opened:
+def save_names(
+    transcript_id: int, names: Mapping[str, str], transcript_sha: str, against: str
+) -> Opened:
     """Save the names a person gave the speakers (#243), keeping the entries as they are.
 
     Names are trimmed, and a blank one is left out, so that speaker shows its
     own label ("Speaker 2") again.
 
+    Made against the list whose sha is `against`, and refused as a patch is
+    when the server holds another (#274, final review C1). Unguarded, a rename
+    made on a laptop after a phone's patch was saved, and answered the phone's
+    list sha: the laptop took that sha as its own while holding the list from
+    before, so its next correction passed the check and was spliced by index
+    into a list of another shape. It also replaced the phone's names whole.
+
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
+        TranscriptChanged: the transcript was made again since the page loaded the list.
+        ListChanged: the list is not the one the rename was made against.
         dsj.hatao.InvalidDocument: a label is blank; nothing is written.
     """
     kept = {label: name.strip() for label, name in names.items() if name.strip()}
     with _held(transcript_id) as (row, payload, digest):
-        doc, _ = _current(row, payload, _settle(row, payload, digest))
+        path = _settle(row, payload, digest)
+        if transcript_sha != digest:
+            raise TranscriptChanged(
+                "This transcript was made again while it was open, so these names were not "
+                "saved. Reload the page to see the new transcript."
+            )
+        doc, _ = _current(row, payload, path)
+        if list_sha(doc) != against:
+            raise ListChanged(
+                "This transcript's edits were changed in another tab or window after this page "
+                "loaded them, so these names were not saved. Reload the page to load them again."
+            )
         return _save(transcript_id, row, doc.content, kept, payload, digest)
 
 

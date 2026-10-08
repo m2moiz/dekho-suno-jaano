@@ -11,7 +11,8 @@ const fetchMock = vi.hoisted(() => {
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
 import { KeySheet } from "../../src/features/shell/KeySheet";
-import { audio, box, item, items, key, savedElsewhere, serveReview, server, start } from "./reviewServer";
+import { wordsHash } from "../../src/features/review/model";
+import { audio, box, item, items, key, listChangedElsewhere, savedElsewhere, serveReview, server, start } from "./reviewServer";
 
 beforeEach(() => serveReview(fetchMock));
 
@@ -237,14 +238,16 @@ describe("Review mode, fix round 1", () => {
     expect((await box()).value).toBe("alpha bravo charlie");
   });
 
-  it("says Not saved when the edit list's save is refused, though the review saved (I2)", async () => {
+  it("says Not saved when the edit list's save is refused, and saves no check beside it (I2; #274, final review I2)", async () => {
     server.refuseEdits = true;
     const field = await start();
     fireEvent.change(field, { target: { value: "alpha bravo charles" } });
     key(field, { key: "Enter", code: "Enter" });
-    await vi.waitFor(() => expect(server.reviews.length).toBeGreaterThan(0), { timeout: 2000 });
     await vi.waitFor(() => expect(screen.getByText("Not saved")).toBeTruthy());
     expect(screen.queryByText("Saved")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    // Only the review saved whole when the pass was picked: the check is not on the server.
+    expect(server.reviews.flatMap((r) => r.segments.map((s) => s.state))).not.toContain("checked");
   });
 
   it("after a refused save, Esc says to reload, which is what works (Task 13 re-review minor)", async () => {
@@ -368,6 +371,65 @@ describe("Review mode, fix round 1", () => {
     await screen.findByRole("heading", { name: "This pass is done" });
     key(document.body, { key: "Escape", code: "Escape" });
     await vi.waitFor(() => expect(went).toEqual(["/?recording=2&transcript=7"]));
+  });
+});
+
+describe("Review after the final review (#274)", () => {
+  it("a check keeps a hash of the words it was checked with, corrections and all (I1)", async () => {
+    const field = await start();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(server.reviews.at(-1)?.segments[0]).toMatchObject({ state: "checked", words_hash: wordsHash("alpha bravo charles") }), { timeout: 2000 });
+  });
+
+  it("transcribed again: a checked sentence whose words changed is unchecked, and the page says how many (I1, ruling R7)", async () => {
+    server.replaced = "This transcript was made again after it was last edited, so the old edits no longer fit its words. They are kept beside the library as x.json; this list starts again from the new transcript.";
+    server.saved = {
+      version: 1, transcript_sha: "s0", review_pass: "every", cursor_s: 0, started_at: "x", updated_at: "x",
+      segments: [
+        // Checked with a correction the new transcript does not have.
+        { start: 0.2, end: 1.3, state: "checked", flags: [], speaker: null, edited: true, words_hash: wordsHash("alpha bravo charles") },
+        { start: 2.0, end: 2.9, state: "checked", flags: [], speaker: null, edited: false, words_hash: wordsHash("delta echo") },
+        { start: 3.5, end: 3.9, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null },
+      ],
+      corrections: [],
+    };
+    render(<ReviewPage recording={2} transcript={7} />);
+    expect(await screen.findByText(/1 checked sentence no longer matches and is unchecked again/)).toBeTruthy();
+    expect(screen.getByText(/kept beside the library as x\.json/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Every sentence/ }));
+    expect(await screen.findByText("1 of 3 checked")).toBeTruthy();
+  });
+
+  it("the edit list changed in another tab: the review save stops too, and Review says to reload (I2)", async () => {
+    const field = await start();
+    await vi.waitFor(() => expect(server.reviews).toHaveLength(1));
+    listChangedElsewhere();
+    fireEvent.change(field, { target: { value: "alpha bravo charles" } });
+    key(field, { key: "Enter", code: "Enter" });
+    await vi.waitFor(() => expect(currentError()?.error).toBe("ListChanged"));
+    await vi.waitFor(() => expect(screen.getByText(/changed in another tab\. Reload the page/)).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(server.reviews).toHaveLength(1);
+    expect(server.reviewPatches).toEqual([]);
+    // Nothing more acts on the sentence: a check now is not taken, and the notice says why.
+    act(() => dismissError());
+    const now = await box();
+    key(now, { key: "Enter", code: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(server.reviewPatches).toEqual([]);
+    expect(screen.getByText(/changed in another tab\. Reload the page/)).toBeTruthy();
+    // Leaving says the edit list's own reason, not that the transcript was made again (Minor M1).
+    key(now, { key: "Escape", code: "Escape" });
+    await vi.waitFor(() => expect(screen.getByText(/^Still in Review/).textContent).toMatch(/changed in another tab/));
+  });
+
+  it("the answer key names the earlier key it kept beside the new one (I1)", async () => {
+    server.keptKey = ["a.reference.20261008T101500Z.json", "a.reference.20261008T101500Z.txt"];
+    await start();
+    for (let i = 0; i < 3; i += 1) key(await box(), { key: "Enter", code: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Save as answer key" }));
+    expect(await screen.findByText(/The earlier key is kept beside it as a\.reference\.20261008T101500Z\.json and a\.reference\.20261008T101500Z\.txt/)).toBeTruthy();
   });
 });
 

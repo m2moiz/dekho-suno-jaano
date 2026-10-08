@@ -224,7 +224,8 @@ def test_a_rename_changes_the_list_sha_and_its_answer_names_the_new_one(
 ) -> None:
     body = opened(seeded)
     reply = page().put(f"/api/transcripts/{seeded['id']}/names",
-                       json={"names": {"SPEAKER_00": "Ali"}})
+                       json={"names": {"SPEAKER_00": "Ali"}, "list_sha": body["list_sha"],
+                             "transcript_sha": sha(seeded)})
     assert reply.status_code == 200, reply.text
     renamed = reply.json()["list_sha"]
     assert renamed != body["list_sha"]
@@ -236,6 +237,58 @@ def test_a_rename_changes_the_list_sha_and_its_answer_names_the_new_one(
     after = page().patch(route, json={**splice(seeded, body, at, 1, [their]), "list_sha": renamed})
     assert after.status_code == 200, after.text
     assert hatao.load(edits_path(seeded["json"])).names == {"SPEAKER_00": "Ali"}
+
+
+def test_a_rename_made_against_a_list_changed_since_is_refused(seeded: dict[str, Any]) -> None:
+    """Final review C1, the reviewer's probe as two clients on one transcript.
+
+    The phone deletes " Hello"; the laptop, holding the list from before,
+    renames a speaker. Before the fix the rename was saved and answered the
+    phone's list sha, which the laptop took as its own, so its next correction
+    passed the check and was spliced by index into a list of another shape.
+    """
+    route = f"/api/transcripts/{seeded['id']}"
+    laptop = opened(seeded)
+    phone = opened(seeded)
+    at = next(i for i, e in enumerate(phone["content"]) if e.get("text") == " Hello")
+    assert page().patch(f"{route}/edits", json=splice(seeded, phone, at, 1, [])).status_code == 200
+    held = hatao.load(edits_path(seeded["json"]))
+
+    renamed = page().put(f"{route}/names", json={
+        "names": {"SPEAKER_00": "Ali"}, "list_sha": laptop["list_sha"],
+        "transcript_sha": sha(seeded),
+    })
+    assert renamed.status_code == 409, renamed.text
+    assert renamed.json()["error"] == "ListChanged"
+    # No sha for the laptop to take, and nothing written: the names are the phone's list's.
+    assert "list_sha" not in renamed.json()
+    assert hatao.load(edits_path(seeded["json"])) == held
+
+    # The laptop's next correction, made against the list it holds, never lands.
+    at, find = retype(laptop["content"], " Fine", " Find")
+    fixed = page().patch(f"{route}/edits", json=splice(seeded, laptop, at, 1, [find]))
+    assert fixed.status_code == 409, fixed.text
+    now = opened(seeded)
+    words = [e["text"] for e in now["content"] if e["kind"] == "item" and e["text"]]
+    assert words == [" there", ".", " Fine", "."]
+    assert now["names"] == {}
+
+
+def test_a_rename_names_the_list_and_the_transcript_it_was_made_against(
+    seeded: dict[str, Any],
+) -> None:
+    route = f"/api/transcripts/{seeded['id']}/names"
+    body = opened(seeded)
+    # Unguarded is no longer a way in: the list must be named.
+    assert page().put(route, json={"names": {"SPEAKER_00": "Ali"}}).status_code == 422
+    old = sha(seeded)
+    seeded["json"].write_text(seeded["json"].read_text() + "\n")
+    made_again = page().put(route, json={
+        "names": {"SPEAKER_00": "Ali"}, "list_sha": body["list_sha"], "transcript_sha": old,
+    })
+    assert made_again.status_code == 409, made_again.text
+    assert made_again.json()["error"] == "TranscriptChanged"
+    assert not edits_path(seeded["json"]).exists()
 
 
 # -- the review --------------------------------------------------------------------------

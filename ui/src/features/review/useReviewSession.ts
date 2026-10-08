@@ -49,6 +49,7 @@ import {
   toggleFlag,
   wordCorrection,
   wordIndex,
+  wordsHash,
 } from "./model";
 import { clearDraft, readDraft, writeDraft } from "./draft";
 import { useReviewSave } from "./reviewApi";
@@ -123,9 +124,12 @@ const CONTEXT = 2;
 const RESTORED = "Restored words typed before the page closed";
 // Said with the words when the copy's sentence has changed since, so they can be typed again.
 const NOT_RESTORED = "Not restored, the sentence changed since: ";
-// Two spans closer than 1 ms at both ends are the same sentence: a choice, far
-// under any word, there only for the arithmetic a split or merge does.
-const SAME_SPAN_S = 0.001;
+// Two spans closer than 1 ms at both ends are the draft's sentence: a choice,
+// far under any word, there only for the arithmetic a split or merge does. Not
+// model.ts's SAME_SPAN_S, which matches sentences across a re-transcription.
+const DRAFT_SPAN_S = 0.001;
+// What still works once nothing saves: playing, the speed, the key sheet and leaving.
+const LISTENING = new Set<Action["kind"]>(["toggle", "replay", "slower", "faster", "keys", "leave"]);
 // The pass picked last, kept between reviews so the chooser offers it first (F13).
 const PASS_COOKIE = "dsj-review-pass";
 
@@ -171,8 +175,10 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
   // draft not put back is cleared by the effect below, as the box is saved.
   const [reopened] = useState((): { restored: { index: number; shown: string; text: string } } | { dropped: string } | null => {
     const draft = readDraft(transcriptId);
-    if (draft === null || draft.sha !== sha) return null;
-    const at = opening.segments.findIndex((s) => Math.abs(s.start - draft.start) < SAME_SPAN_S && Math.abs(s.end - draft.end) < SAME_SPAN_S);
+    if (draft === null) return null;
+    // Typed before the transcript was made again: quoted, as any other dropped draft (Minor M2).
+    if (draft.sha !== sha) return draft.text.trim() === "" ? null : { dropped: draft.text };
+    const at = opening.segments.findIndex((s) => Math.abs(s.start - draft.start) < DRAFT_SPAN_S && Math.abs(s.end - draft.end) < DRAFT_SPAN_S);
     const segment = opening.segments[at];
     const listed = segment === undefined ? null : segmentText(editor.content, wordIndex(editor.content), segment);
     if (listed === draft.text) return null;
@@ -187,8 +193,14 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
   const [fixes, setFixes] = useState<ReviewCorrection[]>(saved?.corrections ?? []);
   const [startedAt] = useState(() => saved?.started_at ?? new Date().toISOString());
   const [notice, setNotice] = useState<string | null>(() => {
-    if (reopened !== null) return "restored" in reopened ? RESTORED : `${NOT_RESTORED}${reopened.dropped}`;
-    return opening.lost > 0 ? lostNotice(opening.lost) : null;
+    // The list put aside when the transcript was made again (#249) is said here
+    // as the reader says it: Review's own read of the list is the one that took it.
+    const said = [
+      reopened === null ? null : "restored" in reopened ? RESTORED : `${NOT_RESTORED}${reopened.dropped}`,
+      opening.lost > 0 ? lostNotice(opening.lost) : null,
+      editable.replaced,
+    ].filter((part): part is string => part !== null);
+    return said.length === 0 ? null : said.join(" ");
   });
   const [flagging, setFlagging] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -233,7 +245,14 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
     () => documentOf({ sha, pass, cursorS: segments[index]?.start ?? 0, startedAt, segments, corrections: fixes }),
     [sha, pass, segments, index, startedAt, fixes],
   );
-  const { state: reviewSaving, flush, keep } = useReviewSave(transcriptId, document, { document: saved, reviewSha: savedSha }, !choosing);
+  const { state: reviewSaving, flush, keep } = useReviewSave(transcriptId, document, { document: saved, reviewSha: savedSha }, !choosing, edits.idle);
+  // Once the edit list can no longer save, only a reload helps; the review's
+  // save has stopped with it (#274, final review I2), and the page says why.
+  useEffect(() => {
+    const reason = edits.outdated;
+    // Never over a notice already giving this reason: Esc's "Still in Review" quotes it.
+    if (reason !== null) setNotice((now) => (now?.includes(reason) ? now : reason));
+  }, [edits.outdated]);
   // The bar's one word covers both saves: Review's words go to the edit list,
   // its checks to the review, and either can fail alone (Task 13 review, I2).
   const saving: SaveState =
@@ -350,9 +369,11 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
         // The save's own failure is already on screen; this says why the page stayed.
         // Review's own words: the edit list's NotSaved messages speak of exporting.
         // Once the transcript was made again no save can succeed: only a reload helps.
+        // An Outdated says its own reason: the transcript made again, or the
+        // list or the review changed in another tab (Minor M1).
         setNotice(
           thrown instanceof Outdated
-            ? "Still in Review: the transcript was made again since this page opened, so nothing more saves here. Reload the page."
+            ? `Still in Review, and nothing more saves here: ${thrown.message}`
             : "Still in Review: the last changes are not saved yet, for the reason shown. Esc tries again.",
         );
       },
@@ -403,9 +424,20 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
       if (action.kind === "leave") setFlagging(false);
       return;
     }
+    // The edit list can no longer save (#274, final review I2): nothing that
+    // changes the sentence or the review is taken, since neither would be
+    // saved. Listening and leaving still work.
+    if (edits.outdated !== null && !LISTENING.has(action.kind)) {
+      setNotice(edits.outdated);
+      return;
+    }
     switch (action.kind) {
       case "check": {
-        const next = commit(segments).map((s, i) => (i === index ? { ...s, state: "checked" as const } : s));
+        // The hash of the words it is checked with, corrections in: a transcript
+        // made again keeps the check only while they are the same (#274, ruling R7).
+        const committed = commit(segments);
+        const hash = wordsHash(segmentText(editor.content, wordIndex(editor.content), segment));
+        const next = committed.map((s, i) => (i === index ? { ...s, state: "checked" as const, words_hash: hash } : s));
         setSegments(next);
         checkedAt.current.push(Date.now());
         const to = step(order, index, 1);

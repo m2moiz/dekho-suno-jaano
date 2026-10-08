@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import page, update
+from conftest import page, rename, update
 
 from dsj import hatao
 from dsj.ui.edits import edits_path
@@ -301,7 +301,7 @@ def test_a_name_given_to_a_speaker_is_kept_and_sent_back(seeded: dict[str, Any])
     client = page()
     route = f"/api/transcripts/{seeded['id']}"
     assert client.get(f"{route}/edits").json()["names"] == {}
-    reply = client.put(f"{route}/names", json={"names": {"SPEAKER_00": "  Ali  "}})
+    reply = rename(seeded, {"SPEAKER_00": "  Ali  "})
     assert reply.status_code == 200, reply.text
     assert reply.json()["names"] == {"SPEAKER_00": "Ali"}
     assert page().get(f"{route}/edits").json()["names"] == {"SPEAKER_00": "Ali"}
@@ -312,7 +312,7 @@ def test_a_name_given_to_a_speaker_is_kept_and_sent_back(seeded: dict[str, Any])
 def test_saving_the_words_keeps_the_names(seeded: dict[str, Any]) -> None:
     client = page()
     route = f"/api/transcripts/{seeded['id']}"
-    client.put(f"{route}/names", json={"names": {"SPEAKER_01": "Sara"}})
+    rename(seeded, {"SPEAKER_01": "Sara"})
     content = client.get(f"{route}/edits").json()["content"]
     content[2]["muted"] = True
     saved = client.put(f"{route}/edits", json=update(seeded, content)).json()
@@ -320,8 +320,6 @@ def test_saving_the_words_keeps_the_names(seeded: dict[str, Any]) -> None:
 
 
 def test_a_blank_name_gives_the_speaker_its_own_label_back(seeded: dict[str, Any]) -> None:
-    client = page()
-    route = f"/api/transcripts/{seeded['id']}/names"
-    client.put(route, json={"names": {"SPEAKER_00": "Ali", "SPEAKER_01": "Sara"}})
-    cleared = client.put(route, json={"names": {"SPEAKER_00": "", "SPEAKER_01": "Sara"}}).json()
+    rename(seeded, {"SPEAKER_00": "Ali", "SPEAKER_01": "Sara"})
+    cleared = rename(seeded, {"SPEAKER_00": "", "SPEAKER_01": "Sara"}).json()
     assert cleared["names"] == {"SPEAKER_01": "Sara"}

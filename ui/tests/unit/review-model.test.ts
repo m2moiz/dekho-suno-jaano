@@ -22,6 +22,7 @@ import {
   timeLeft,
   wordCorrection,
   wordIndex,
+  wordsHash,
 } from "../../src/features/review/model";
 import type { Content, Entry, Item } from "../../src/lib/editOps";
 
@@ -48,8 +49,10 @@ const CONTENT: Content = [
 ];
 
 const seg = (start: number, end: number, extra: Partial<Segment> = {}): Segment => ({
-  start, end, state: "unchecked", flags: [], speaker: null, edited: false, ...extra,
+  start, end, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null, ...extra,
 });
+/** A sentence checked with `words` in it, as the page checks one (#274). */
+const checkedAs = (words: string, extra: Partial<Segment> = {}): Partial<Segment> => ({ state: "checked", words_hash: wordsHash(words), ...extra });
 
 describe("segments", () => {
   it("are the list's sentences, from first word to last word's end", () => {
@@ -237,7 +240,7 @@ describe("resume (Review Focus 4)", () => {
   });
 
   it("hands the new sha to the document it saves, so the server accepts the next save", () => {
-    const old = [seg(0.2, 1.6, { state: "checked" }), seg(2.0, 2.4), seg(3.0, 3.6)];
+    const old = [seg(0.2, 1.6, checkedAs("alpha bravo charlie delta")), seg(2.0, 2.4), seg(3.0, 3.6)];
     const back = resume(saved("a".repeat(64), old), CONTENT, "b".repeat(64));
     const document = documentOf({ sha: "b".repeat(64) as CurrentSha, pass: "every", cursorS: 0, startedAt: "x", segments: back.segments, corrections: [] });
     expect(document.transcript_sha).toBe("b".repeat(64));
@@ -252,15 +255,53 @@ describe("resume (Review Focus 4)", () => {
 
   it("transcribed again: keeps what still matches by span, and counts the checked ones that do not", () => {
     // The second sentence moved by 0.03 s, inside SAME_SPAN_S: still the same sentence.
-    const old = [seg(0.2, 1.6, { state: "checked", flags: ["overlap"] }), seg(2.0, 2.43, { state: "checked" }), seg(3.0, 3.6, { state: "checked" })];
+    const old = [seg(0.2, 1.6, checkedAs("alpha bravo charlie delta", { flags: ["overlap"] })), seg(2.0, 2.43, checkedAs("echo")), seg(3.0, 3.6, checkedAs("a question"))];
     const back = resume(saved("old", old), CONTENT, "new");
     expect(back.segments.map((s) => s.state)).toEqual(["checked", "checked", "checked"]);
     expect(back.segments[0]?.flags).toEqual(["overlap"]);
-    const moved = [seg(0.2, 1.4, { state: "checked" }), seg(2.0, 2.4, { state: "checked" })];
+    expect(back.lost).toBe(0);
+    const moved = [seg(0.2, 1.4, checkedAs("alpha bravo charlie")), seg(2.0, 2.4, checkedAs("echo"))];
     const again = resume(saved("old", moved), CONTENT, "new");
     expect(again.segments.map((s) => s.state)).toEqual(["unchecked", "checked", "unchecked"]);
     expect(again.lost).toBe(1);
     expect(again.cursor).toBe(1);
+  });
+
+  it("transcribed again: a checked sentence whose words changed is unchecked, and counted (#274, ruling R7)", () => {
+    // The final review's probe: the same spans, other words. "charlie" was corrected to
+    // "charles" when it was checked; the new transcript has the machine's "charlie" again.
+    const old = [
+      seg(0.2, 1.6, checkedAs("alpha bravo charles delta", { edited: true, flags: ["overlap"], speaker: "SPEAKER_01" })),
+      seg(2.0, 2.4, checkedAs("echo")),
+      seg(3.0, 3.6, { state: "checked", edited: true }),
+    ];
+    const back = resume(saved("old", old), CONTENT, "new");
+    expect(back.segments.map((s) => s.state)).toEqual(["unchecked", "checked", "unchecked"]);
+    expect(back.lost).toBe(2);
+    // Its correction was put aside with the old list, so it is not "edited" now; what was heard stays.
+    expect(back.segments[0]).toMatchObject({ edited: false, flags: ["overlap"], speaker: "SPEAKER_01", words_hash: null });
+    // A check from before #274 has no hash: its words are unknown, so it is checked again.
+    expect(back.segments[2]).toMatchObject({ state: "unchecked", edited: false });
+    expect(back.segments[1]?.words_hash).toBe(wordsHash("echo"));
+  });
+
+  it("the same transcript: a check is never dropped, whatever its hash", () => {
+    const segments = [seg(0.2, 1.6, checkedAs("something else")), seg(2.0, 2.4, { state: "checked" }), seg(3.0, 3.6)];
+    expect(resume(saved("s1", segments), CONTENT, "s1").segments).toEqual(segments);
+  });
+});
+
+describe("wordsHash (#274)", () => {
+  it("is 32-bit FNV-1a of the words, as eight hex digits, spacing aside", () => {
+    // The published FNV-1a 32 test vectors.
+    expect(wordsHash("")).toBe("811c9dc5");
+    expect(wordsHash("a")).toBe("e40c292c");
+    expect(wordsHash("foobar")).toBe("bf9cf968");
+    expect(wordsHash("  alpha \n bravo ")).toBe(wordsHash("alpha bravo"));
+    expect(wordsHash("alpha bravo")).not.toBe(wordsHash("alpha brave"));
+    // Of the UTF-8 bytes, so an Urdu sentence hashes as any other.
+    expect(wordsHash("میں نے")).toMatch(/^[0-9a-f]{8}$/);
+    expect(wordsHash("میں نے")).not.toBe(wordsHash("میں تے"));
   });
 });
 

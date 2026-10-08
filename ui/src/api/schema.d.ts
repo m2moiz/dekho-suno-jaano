@@ -348,6 +348,9 @@ export interface paths {
         /**
          * Save Names
          * @description Save the speakers' names in the transcript's edit list, the words untouched (#243).
+         *
+         *     Made against the list `list_sha` names, as a patch is (#274): a rename is
+         *     a change to the list, and the page takes the sha it answers as its own.
          */
         put: operations["save_names_api_transcripts__transcript_id__names_put"];
         post?: never;
@@ -743,6 +746,10 @@ export interface components {
             names: {
                 [key: string]: string;
             };
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
         };
         /**
          * ParagraphEntry
@@ -811,6 +818,8 @@ export interface components {
             segments: number;
             /** Unchecked */
             unchecked: number;
+            /** Kept */
+            kept: string[];
         };
         /**
          * RenderJob
@@ -943,6 +952,8 @@ export interface components {
             speaker: string | null;
             /** Edited */
             edited: boolean;
+            /** Words Hash */
+            words_hash: string | null;
         };
         /** @enum {string} */
         SegmentState: "unchecked" | "checked";

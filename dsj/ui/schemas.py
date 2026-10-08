@@ -56,9 +56,9 @@ __all__ = [
     "WordRequest",
 ]
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # dsj.asr.ENGINES, spelled out because a type cannot be built from a tuple;
 # tests/test_jobs.py holds the two equal.
@@ -296,6 +296,10 @@ class NamesUpdate(BaseModel):
     """Every speaker's name, by label, in place of the ones before; a blank name clears one."""
 
     names: dict[str, str]
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: Sha256
+    # The sha of the list the rename was made to, as EditsPatch.list_sha (#274).
+    list_sha: Sha256
 
 
 class Match(BaseModel):
@@ -364,6 +368,8 @@ type ReviewFlag = Literal["unclear", "not_speech", "overlap", "cut_off"]
 # Every sentence in order (for answer keys), or only the likely errors.
 type ReviewPass = Literal["every", "likely"]
 type SegmentState = Literal["unchecked", "checked"]
+# Eight lowercase hex digits, and nothing else: never the words, never a path.
+WordsHash = Annotated[str, Field(pattern=r"^[0-9a-f]{8}$")]
 
 
 class ReviewSegment(BaseModel):
@@ -377,6 +383,21 @@ class ReviewSegment(BaseModel):
     speaker: str | None
     # Whether a person changed its words in Review.
     edited: bool
+    # A short hash of its words as they were when it was checked, else None
+    # (#274, ruling R7): the page's wordsHash (ui/src/features/review/model.ts),
+    # 32-bit FNV-1a of the words, as eight hex digits. A transcript made again
+    # keeps a sentence checked only while its words still hash the same; the
+    # review never holds the words themselves.
+    words_hash: WordsHash | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _saved_before_hashes(cls, data: object) -> object:
+        """A review saved before #274 has no `words_hash`: its checks vouch for words unknown."""
+        if not isinstance(data, dict):
+            return data
+        fields = cast("dict[str, object]", data)
+        return fields if "words_hash" in fields else {**fields, "words_hash": None}
 
 
 class ReviewCorrection(BaseModel):
@@ -452,3 +473,6 @@ class ReferenceWritten(BaseModel):
     files: list[str]
     segments: int
     unchecked: int
+    # The earlier key's files, moved aside beside it before this one was written
+    # (#274), names only; [] when there was none. A key is never written over.
+    kept: list[str]

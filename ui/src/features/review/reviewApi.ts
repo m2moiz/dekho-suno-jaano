@@ -86,6 +86,7 @@ function sameSegment(a: Segment, b: Segment): boolean {
       a.state === b.state &&
       a.speaker === b.speaker &&
       a.edited === b.edited &&
+      a.words_hash === b.words_hash &&
       a.flags.length === b.flags.length &&
       a.flags.every((flag, i) => flag === b.flags[i]))
   );
@@ -158,12 +159,18 @@ function patchOf(held: Held, next: ReviewDocument): ReviewPatch | null {
  * (#251, measured), better sent then than by the first check, and every
  * later save is a patch against it. Picking nothing saves nothing. The
  * document a saved review opened with is not sent until something changes.
+ *
+ * Each save waits first for the edit list's save in flight (`editsIdle`,
+ * editing.ts useSave's `idle`), and none is sent once that list can no
+ * longer save (#274, final review I2): a check saved while its correction is
+ * refused would store the sentence as checked with words saved nowhere.
  */
 export function useReviewSave(
   transcriptId: number,
   document: ReviewDocument,
   opened: { document: ReviewDocument | null; reviewSha: string | null },
   started: boolean,
+  editsIdle: () => Promise<string | null> = () => Promise.resolve(null),
 ): { state: SaveState; flush: () => Promise<void>; keep: () => void } {
   const [state, setState] = useState<SaveState>("saved");
   const latest = useRef(document);
@@ -176,6 +183,8 @@ export function useReviewSave(
   );
   // Set, to the sentence flush throws, once no save can succeed until the page is reloaded.
   const outdated = useRef<string | null>(null);
+  const idleEdits = useRef(editsIdle);
+  idleEdits.current = editsIdle;
   const flying = useRef<Promise<boolean> | null>(null);
 
   const saveOnce = useCallback(
@@ -237,8 +246,16 @@ export function useReviewSave(
     if (flying.current !== null) return flying.current;
     const run = (async () => {
       while (outdated.current === null && (latest.current !== sent.current || (held.current === null && begun.current))) {
-        const next = latest.current;
         setState("saving");
+        // The edit list's save in flight answers first; refused for good, the
+        // review stops with it, and the edit list's own refusal is the one shown.
+        const blocked = await idleEdits.current();
+        if (blocked !== null) {
+          outdated.current = blocked;
+          setState("failed");
+          return false;
+        }
+        const next = latest.current;
         try {
           await save(next);
           sent.current = next;

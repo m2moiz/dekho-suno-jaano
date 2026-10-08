@@ -12,7 +12,8 @@ the recording, which every edit keeps (a correction keeps its stretch's ends,
 
 A transcript made again keeps its review (#249): the review names the sha of
 the transcript it was made against, and the page, seeing it differ, keeps the
-checked sentences whose span still matches and unchecks the rest.
+checked sentences whose span still matches and whose words still hash as they
+did when checked (`words_hash`, #274), and unchecks the rest.
 
 The answer key is written beside the transcript JSON, as
 `<name>.reference.json` (the sentences with their spans, speakers, final words
@@ -384,37 +385,36 @@ def _plain(segments: list[dict[str, Any]]) -> str:
 _MADE_AGAIN = (
     "The transcript was made again after this review was checked, so its checks are of "
     "words the transcript no longer has. Open Review, which re-checks the sentences by their "
-    "span and says how many need checking again, then save the answer key."
+    "span and words and says how many need checking again, then save the answer key."
 )
 
 
-def _keep_earlier(as_json: Path, as_text: Path) -> None:
-    """Move a complete answer key out of the way of a partial one, under a numbered name.
+def _keep_earlier(as_json: Path, as_text: Path) -> list[str]:
+    """Move the earlier answer key aside, beside it, named for when it was written; its names.
 
-    A partial key written over a complete one would lose the finished pass. A
-    key that cannot be read is kept too: nobody can say it was not complete.
+    A key is never written over (#274, ruling R7): before #274 only a complete
+    key was kept from a partial one, and a later complete key went straight
+    over an earlier one, which a transcript made again could fill with machine
+    words marked checked. The name carries the earlier key's own time, from
+    its JSON's modification time, and the next free number when two share a
+    second, so `<name>.reference.20261008T101500Z.json` sorts by age beside it.
     """
-    if not as_json.is_file():
-        return
-    try:
-        complete = cast("dict[str, Any]", json.loads(as_json.read_text(encoding="utf-8")))[
-            "complete"
-        ]
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        _log.warning("the answer key %s could not be read, so it is kept: %s", as_json, exc)
-        complete = True
-    if complete is not True:
-        return
-    stem = as_json.name.removesuffix(".json")
-    n = 2
-    while (as_json.with_name(f"{stem}-{n}.json")).exists() or (
-        as_text.with_name(f"{stem}-{n}.txt")
-    ).exists():
+    if not (as_json.is_file() or as_text.is_file()):
+        return []
+    held = as_json if as_json.is_file() else as_text
+    stamp = datetime.fromtimestamp(held.stat().st_mtime, UTC).strftime("%Y%m%dT%H%M%SZ")
+    stem = f"{as_json.name.removesuffix('.json')}.{stamp}"
+    aside, n = stem, 1
+    while as_json.with_name(f"{aside}.json").exists() or as_text.with_name(f"{aside}.txt").exists():
         n += 1
-    as_json.replace(as_json.with_name(f"{stem}-{n}.json"))
-    if as_text.is_file():
-        as_text.replace(as_text.with_name(f"{stem}-{n}.txt"))
-    _log.warning("kept the earlier complete answer key as %s-%d.json", stem, n)
+        aside = f"{stem}-{n}"
+    kept: list[str] = []
+    for path, suffix in ((as_json, ".json"), (as_text, ".txt")):
+        if path.is_file():
+            path.replace(path.with_name(f"{aside}{suffix}"))
+            kept.append(f"{aside}{suffix}")
+    _log.warning("kept the earlier answer key as %s", ", ".join(kept))
+    return kept
 
 
 def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWritten:
@@ -422,9 +422,10 @@ def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWr
 
     Refused, before the edit list is opened, when the review was checked
     against a transcript since made again: its checks vouch for other words,
-    and `allow_partial` does not change that. A partial key never writes over
-    a complete one: that is kept under a numbered name. The JSON and the text
-    are written together (dsj.atomic.atomic_write_texts).
+    and `allow_partial` does not change that. A key never writes over an
+    earlier one: that is moved aside beside it, named for when it was written
+    (#274). The JSON and the text are written together
+    (dsj.atomic.atomic_write_texts).
 
     Raises:
         NoSuchTranscript: no such transcript, or its JSON file is gone.
@@ -495,10 +496,9 @@ def _write_key(
     }
     as_json = row.json_path.with_name(f"{row.json_path.stem}.reference.json")
     as_text = row.json_path.with_name(f"{row.json_path.stem}.reference.txt")
-    if unchecked:
-        _keep_earlier(as_json, as_text)
+    kept = _keep_earlier(as_json, as_text)
     text = json.dumps(key, ensure_ascii=False, indent=1)
     atomic_write_texts([(as_json, text), (as_text, _plain(segments))], fsync=True)
     return ReferenceWritten(
-        files=[as_json.name, as_text.name], segments=len(segments), unchecked=unchecked
+        files=[as_json.name, as_text.name], segments=len(segments), unchecked=unchecked, kept=kept
     )
