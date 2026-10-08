@@ -93,17 +93,32 @@ describe("Review mode on a phone", () => {
     expect(items(server.edits[1]).map((e) => e.text)).toContain(" golf");
   });
 
-  it("swipe left is Checked, next; swipe right is Back; a short or steep drag, or one in the text box, is neither", async () => {
+  it("swipe left is Checked, next; swipe right is Back; a short or steep drag, or one in the box being typed in, is neither", async () => {
     await start();
     const article = await card();
     drag(article, -SWIPE_PX - 20);
     expect((await box()).value).toBe("delta echo");
     drag(article, -40);
     drag(article, -120, 90);
-    drag(await box(), -200);
+    const field = await box();
+    act(() => field.focus());
+    drag(field, -200);
+    act(() => field.blur());
     expect((await box()).value).toBe("delta echo");
     expect(screen.getByText("1 of 3 checked")).toBeTruthy();
     drag(article, SWIPE_PX + 20);
+    expect((await box()).value).toBe("alpha bravo charlie");
+  });
+
+  it("a swipe across the sentence's own words counts, where the thumb is (UAT 2)", async () => {
+    await start();
+    drag(await box(), -SWIPE_PX - 20);
+    expect((await box()).value).toBe("delta echo");
+    expect(screen.getByText("1 of 3 checked")).toBeTruthy();
+    drag(await box(), SWIPE_PX + 20);
+    expect((await box()).value).toBe("alpha bravo charlie");
+    // A mouse over the words still only selects them.
+    drag(await box(), -200, 0, 300, 200, "mouse");
     expect((await box()).value).toBe("alpha bravo charlie");
   });
 

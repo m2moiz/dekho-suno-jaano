@@ -4,8 +4,10 @@
 // A swipe is a mostly sideways drag of at least SWIPE_PX. 80 px is about a
 // fifth of a 390 px phone's width: past any wobble of a tap, short of a
 // thumb's full reach. A drag steeper than 0.6 (about 31 degrees) is a scroll.
-// Both are choices, not measurements. A drag that starts in the text box or
-// on a button is theirs: selecting words, or pressing.
+// Both are choices, not measurements. A drag that starts on a button is its
+// own: pressing. A drag across the sentence's words is a swipe, since that is
+// where the thumb is (UAT 8 Oct, finding 2), unless the box has the focus for
+// typing, where a drag moves the caret or selects.
 //
 // Only a finger or a pen swipes. A mouse drag across the card is someone
 // selecting words of the second opinion, and in a narrow Mac window (the way
@@ -30,8 +32,9 @@ export function useSwipe(onSwipe: (way: "left" | "right") => void) {
       const target = event.target as Element;
       const finger = event.pointerType === "touch" || event.pointerType === "pen";
       // A second pointer while one is down drops the gesture.
+      const typing = target.closest("textarea") !== null && target.closest("textarea") === document.activeElement;
       from.current =
-        from.current !== null || !finger || target.closest("textarea, button, a, [role=menu]")
+        from.current !== null || !finger || typing || target.closest("button, a, [role=menu]")
           ? null
           : { id: event.pointerId, x: event.clientX, y: event.clientY };
     },

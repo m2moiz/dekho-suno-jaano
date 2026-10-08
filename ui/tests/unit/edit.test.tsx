@@ -16,6 +16,7 @@ import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { type Content, Editor, type Entry, type Item, muteRange } from "../../src/lib/editOps";
 import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
+import { stubMatchMedia } from "./media";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted: false, confidence: 0.9, ...extra };
@@ -346,6 +347,37 @@ describe("TranscriptPage, editing", () => {
     fireEvent.click(within(tools).getByRole("button", { name: "Unmute" }));
     expect(painted(registry, "dsj-muted")).toEqual([]);
     await vi.waitFor(() => expect(saved).toHaveLength(2));
+  });
+
+  it("on a phone the word toolbar goes once playback starts, so it never sits over the line being read (UAT 8)", async () => {
+    const before = window.matchMedia;
+    const play = HTMLMediaElement.prototype.play;
+    const rect = Range.prototype.getBoundingClientRect;
+    stubMatchMedia((query) => query.includes("coarse"));
+    // Playback runs the playhead, which measures the word it paints.
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+    try {
+      render(<TranscriptPage recording={2} transcript={7} />);
+      await screen.findByRole("toolbar", { name: "Edit" });
+      await selectReady("there");
+      // Play, from the rail: the selection and its toolbar go.
+      act(() => {
+        document.querySelector("audio")?.dispatchEvent(new Event("play"));
+      });
+      await vi.waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull());
+      // Hear, from the toolbar itself, keeps it: the words are being listened to before a fix.
+      fireEvent.click(await selectReady("there", "Hear"));
+      act(() => {
+        document.querySelector("audio")?.dispatchEvent(new Event("play"));
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole("toolbar", { name: "Selection" })).not.toBeNull();
+    } finally {
+      window.matchMedia = before;
+      HTMLMediaElement.prototype.play = play;
+      Range.prototype.getBoundingClientRect = rect;
+    }
   });
 
   it("keeps Undo, Redo and whether it is saved in the Edit toolbar, and nothing for the selection there", async () => {

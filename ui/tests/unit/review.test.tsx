@@ -290,11 +290,27 @@ describe("Review mode, fix round 1", () => {
     expect((await box()).value).toBe("delta echo golf");
   });
 
-  it("Tab plays again from 1.5 s before where it stopped (I4)", async () => {
-    const field = await start();
-    audio().currentTime = 3.2;
-    key(field, { key: "Tab", code: "Tab" });
-    expect(audio().currentTime).toBeCloseTo(1.7, 5);
+  it("Tab plays again from 1.5 s before where it stopped, never before the sentence's start, and stops after its end (I4; UAT 3)", async () => {
+    const pause = vi.fn();
+    HTMLMediaElement.prototype.pause = pause;
+    key(await start(), { key: "Enter", code: "Enter" });
+    // "delta echo", 2.0 to 2.9 s, played on arrival and stopped at 3.1 s.
+    audio().currentTime = 3.1;
+    key(await box(), { key: "Tab", code: "Tab" });
+    // 1.5 s back is 1.6 s, inside the sentence before: it starts at its own start.
+    expect(audio().currentTime).toBeCloseTo(2.0, 5);
+    // And stops 0.2 s after its end, as arrival does, not at the recording's end.
+    pause.mockClear();
+    audio().currentTime = 3.05;
+    audio().dispatchEvent(new Event("seeked"));
+    expect(pause).not.toHaveBeenCalled();
+    audio().currentTime = 3.12;
+    audio().dispatchEvent(new Event("seeked"));
+    expect(pause).toHaveBeenCalled();
+    // Paused far past it (a click on the waveform): Tab comes back into the sentence.
+    audio().currentTime = 51;
+    key(await box(), { key: "Tab", code: "Tab" });
+    expect(audio().currentTime).toBeCloseTo(2.0, 5);
   });
 
   it("plays a sentence on arrival up to 0.2 s after its end, then stops (I4)", async () => {
@@ -350,6 +366,41 @@ describe("Review mode, fix round 1", () => {
     const sheet = await screen.findByRole("dialog", { name: "Keys in Review" });
     // A tablet focuses the box only on a tap, so its keyboard needs one first (Task 14 review, Minor 4).
     expect(sheet.textContent).toContain("On a tablet, tap the sentence once");
+    // Ctrl+G's way back is on the sheet (UAT 5).
+    expect(sheet.textContent).toMatch(/Ctrl\+G again/);
+  });
+
+  it("Ctrl+/ takes focus out of the box at once, and Esc closes the sheet and puts it back (UAT 4)", async () => {
+    render(<KeySheet />);
+    const went: string[] = [];
+    const field = await start((href) => went.push(href));
+    key(field, { key: "/", code: "Slash", ctrlKey: true });
+    // Before the sheet has drawn: no key can reach the box behind it.
+    expect(document.activeElement).not.toBe(field);
+    await screen.findByRole("dialog", { name: "Keys in Review" });
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
+    });
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Keys in Review" })).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+    expect(went).toEqual([]);
+  });
+
+  it("Ctrl+G again, or Cmd+Z in the box, puts back the words it replaced (UAT 5)", async () => {
+    server.withOther = true;
+    const field = await start();
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /Likely errors \(1\)/ })).toBeTruthy());
+    key(field, { key: "j", code: "KeyJ", ctrlKey: true });
+    fireEvent.change(await box(), { target: { value: "foxtrot golf" } });
+    key(await box(), { key: "g", code: "KeyG", ctrlKey: true });
+    expect((await box()).value).toBe("hotel");
+    key(await box(), { key: "g", code: "KeyG", ctrlKey: true });
+    expect((await box()).value).toBe("foxtrot golf");
+    expect(screen.getByText(/Your words are back/)).toBeTruthy();
+    key(await box(), { key: "g", code: "KeyG", ctrlKey: true });
+    expect((await box()).value).toBe("hotel");
+    key(await box(), { key: "z", code: "KeyZ", metaKey: true });
+    expect((await box()).value).toBe("foxtrot golf");
   });
 
   it("asks before the browser leaves with words in the box not yet in the list (Minor 2)", async () => {
@@ -371,6 +422,40 @@ describe("Review mode, fix round 1", () => {
     await screen.findByRole("heading", { name: "This pass is done" });
     key(document.body, { key: "Escape", code: "Escape" });
     await vi.waitFor(() => expect(went).toEqual(["/?recording=2&transcript=7"]));
+  });
+});
+
+describe("the end of a pass with sentences left (UAT 1)", () => {
+  it("says how many are left, and Enter goes to the first unchecked; the key stays partial until all are checked", async () => {
+    server.saved = {
+      version: 1, transcript_sha: "s1", review_pass: "every", cursor_s: 2.0, started_at: "x", updated_at: "x",
+      segments: [
+        { start: 0.2, end: 1.3, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null },
+        { start: 2.0, end: 2.9, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null },
+        { start: 3.5, end: 3.9, state: "unchecked", flags: [], speaker: null, edited: false, words_hash: null },
+      ],
+      corrections: [],
+    };
+    render(<ReviewPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Every sentence/ }));
+    expect((await box()).value).toBe("delta echo");
+    key(await box(), { key: "Enter", code: "Enter" });
+    key(await box(), { key: "Enter", code: "Enter" });
+    expect(await screen.findByRole("heading", { name: "1 sentence left in this pass" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "This pass is done" })).toBeNull();
+    const go = screen.getByRole("button", { name: /Go to the first unchecked/ });
+    expect(document.activeElement).toBe(go);
+    // Saving now is still only a partial key: it asks first.
+    fireEvent.click(screen.getByRole("button", { name: "Save as answer key" }));
+    expect(await screen.findByRole("group", { name: "Partial answer key" })).toBeTruthy();
+    act(() => {
+      fireEvent.keyDown(go, { key: "Enter", code: "Enter" });
+      fireEvent.click(go);
+    });
+    expect((await box()).value).toBe("alpha bravo charlie");
+    // On through the pass, now with every sentence checked.
+    for (let i = 0; i < 3; i += 1) key(await box(), { key: "Enter", code: "Enter" });
+    expect(await screen.findByRole("heading", { name: "This pass is done" })).toBeTruthy();
   });
 });
 

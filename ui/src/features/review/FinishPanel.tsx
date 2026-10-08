@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { FINE, useMediaQuery } from "@/lib/media";
 import { fromThrown, showError } from "@/features/errors/appError";
 import { cn } from "@/lib/utils";
 import type { Counts } from "./model";
@@ -9,6 +11,10 @@ import { type ReferenceWritten, saveAnswerKey } from "./reviewApi";
 type Props = {
   transcriptId: number;
   progress: Counts;
+  /** Sentences of this pass still not checked: skipped, or unchecked again by a split or merge. */
+  left: number;
+  /** Go to the first of them. */
+  toFirstUnchecked: () => void;
   /** The transcript's address, for the link's own sake (a new tab, a copied link). */
   back: string;
   /** Save, then go back to the transcript, as Esc does. */
@@ -24,10 +30,11 @@ type Props = {
  * brought up to date first; with sentences still unchecked it asks first, and
  * the key says it is partial.
  */
-export function FinishPanel({ transcriptId, progress, back, leave, settle }: Props) {
+export function FinishPanel({ transcriptId, progress, left, toFirstUnchecked, back, leave, settle }: Props) {
   const [written, setWritten] = useState<ReferenceWritten | null>(null);
   const [asking, setAsking] = useState(false);
   const unchecked = progress.total - progress.checked;
+  const fine = useMediaQuery(FINE);
   // Esc leaves Review here too (spec key table; Task 13 review, Minor 7).
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -50,7 +57,17 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
   ];
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-6 px-3 py-12 sm:px-6">
-      <h2 className="font-reading text-3xl font-semibold text-balance">This pass is done</h2>
+      {/* The pass is not done while sentences in it are unchecked, and the way to them is the
+          screen's one primary, focused, so Enter goes on (UAT 8 Oct, finding 1). */}
+      <h2 className="font-reading text-3xl font-semibold text-balance">
+        {left === 0 ? "This pass is done" : `${left.toLocaleString("en")} ${left === 1 ? "sentence" : "sentences"} left in this pass`}
+      </h2>
+      {left > 0 && (
+        <p className="text-muted-foreground">
+          The end of the pass, with {left === 1 ? "one sentence" : "sentences"} before it not checked yet. An answer key is partial
+          until every sentence is checked.
+        </p>
+      )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2 text-lg tabular-nums">
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
@@ -83,6 +100,14 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
         </div>
       )}
       <div className="flex flex-wrap gap-3">
+        {/* The screen's one gold primary (F23): the default variant is gold. */}
+        {left > 0 && (
+          <Button autoFocus className="h-11 px-4 font-semibold" onClick={toFirstUnchecked}>
+            Go to the first unchecked
+            {/* Where a keyboard is likely; a phone has no Enter to press here. */}
+            {fine && <Kbd className="ml-1">Enter</Kbd>}
+          </Button>
+        )}
         <a
           href={back}
           className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
@@ -94,8 +119,11 @@ export function FinishPanel({ transcriptId, progress, back, leave, settle }: Pro
         >
           Back to the transcript
         </a>
-        {/* The screen's one gold primary (F23): the default variant is gold. */}
-        <Button className="h-11 px-4 font-semibold" onClick={() => (unchecked > 0 ? setAsking(true) : save(false))}>
+        <Button
+          variant={left > 0 ? "outline" : "default"}
+          className={cn("h-11 px-4", left > 0 ? undefined : "font-semibold")}
+          onClick={() => (unchecked > 0 ? setAsking(true) : save(false))}
+        >
           Save as answer key
         </Button>
       </div>

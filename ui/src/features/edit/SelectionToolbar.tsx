@@ -211,6 +211,24 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
     };
   }, [selected]);
   useKeyboardReach(bar, selected !== null && box !== null, selected);
+  // On a phone the toolbar is docked above the rail, over the lines the
+  // playhead reads next: playback started from anywhere but its own Hear lets
+  // go of the selection, and the toolbar goes with it (UAT 8 Oct, finding 8).
+  const hearing = useRef(false);
+  useEffect(() => {
+    if (!touch) return;
+    const started = (event: Event) => {
+      if (!(event.target instanceof HTMLMediaElement)) return;
+      if (hearing.current) {
+        hearing.current = false;
+        return;
+      }
+      window.getSelection()?.removeAllRanges();
+    };
+    // Media events do not bubble: caught on the way down.
+    document.addEventListener("play", started, true);
+    return () => document.removeEventListener("play", started, true);
+  }, [touch]);
   if (selected === null || box === null) return null;
 
   const range = { start: edit.first[selected.first] ?? 0, stop: edit.stop[selected.last] ?? 0 };
@@ -270,7 +288,10 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
         variant="ghost"
         className={tool}
         onMouseDown={keepSelection}
-        onClick={() => controls.current?.hear(Math.max(0, from - 0.3), to + 0.3)}
+        onClick={() => {
+          hearing.current = true;
+          controls.current?.hear(Math.max(0, from - 0.3), to + 0.3);
+        }}
       >
         Hear
       </Button>

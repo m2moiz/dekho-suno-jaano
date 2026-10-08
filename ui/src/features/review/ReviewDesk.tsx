@@ -194,6 +194,12 @@ export function onBoxKey(session: Session, event: KeyboardEvent<HTMLTextAreaElem
     if (event.key === "Escape") session.setFlagging(false);
     return;
   }
+  // Cmd+Z (Ctrl+Z off the Mac) right after Ctrl+G puts back the words it
+  // replaced: the box's own undo cannot, since the page set its text.
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.code === "KeyZ" && session.undoSecond()) {
+    event.preventDefault();
+    return;
+  }
   const action = actionFor(event.nativeEvent);
   if (action === null) return;
   event.preventDefault();
@@ -311,7 +317,15 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
     return (
       <>
         {bar}
-        <FinishPanel transcriptId={transcriptId} progress={session.progress} back={back} leave={session.leave} settle={session.settle} />
+        <FinishPanel
+          transcriptId={transcriptId}
+          progress={session.progress}
+          left={session.left}
+          toFirstUnchecked={session.toFirstUnchecked}
+          back={back}
+          leave={session.leave}
+          settle={session.settle}
+        />
       </>
     );
   }

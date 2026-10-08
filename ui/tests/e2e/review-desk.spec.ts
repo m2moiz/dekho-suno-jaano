@@ -66,6 +66,24 @@ test("enters by R, picks the pass with Enter, and the flag menu works by keyboar
   await expect(page.getByRole("heading", { name: /^Review/ })).toBeVisible();
 });
 
+test("Ctrl+/ then an Esc at once closes only the key sheet, ten times over (UAT 8 Oct, finding 4)", async ({ page }, info) => {
+  await openReview(page, `review-sheet-${info.project.name}`, 9);
+  await page.keyboard.press("Enter");
+  const box = page.getByRole("textbox", { name: "What was said" });
+  await expect(box).toBeFocused();
+  const sheet = page.getByRole("dialog", { name: "Keys in Review" });
+  // The UAT saw it after a key that changes the page first (Ctrl+G, Ctrl+J, Tab): 1 in 3 in Chromium.
+  for (let i = 0; i < 10; i += 1) {
+    await page.keyboard.press(["Control+g", "Control+j", "Tab"][i % 3] ?? "Control+g");
+    await page.keyboard.press("Control+/");
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(page.getByRole("heading", { name: /^Review/ })).toBeVisible();
+    await expect(box).toBeFocused();
+  }
+  expect(new URL(page.url()).searchParams.get("review")).toBe("1");
+});
+
 test("Option+Tab reaches the bar's pass switch, and the switch works by keyboard (F13)", async ({ page }, info) => {
   await openReview(page, `review-pass-${info.project.name}`);
   await page.keyboard.press("Enter");

@@ -11,13 +11,26 @@ import type { Sheet } from "./keys";
 // The sheet on show, if any: module state, as the error dialog's is, so the
 // `?` key, Ctrl+/ in Review and the settings menu all open the one sheet.
 let shown: Sheet | null = null;
+// Where the focus was when the sheet opened, to go back to when it closes.
+let returnTo: HTMLElement | null = null;
 const listeners = new Set<() => void>();
 
 function emit(): void {
   for (const listener of listeners) listener();
 }
 
+/**
+ * Open `sheet`. The focus leaves where it was at once, before the sheet has
+ * drawn and taken it: in Chromium a key pressed in that moment (Esc, say)
+ * still reached Review's box behind the sheet, and left Review (UAT 8 Oct,
+ * finding 4, about 1 in 3). Closing the sheet puts the focus back.
+ */
 export function showKeys(sheet: Sheet): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active !== document.body && active.closest("[role=dialog]") === null) {
+    returnTo = active;
+    active.blur();
+  }
   shown = sheet;
   emit();
 }
@@ -43,7 +56,16 @@ export function KeySheet() {
         if (!open) hideKeys();
       }}
     >
-      <DialogContent className="sm:max-w-lg" aria-label="Keys" showCloseButton={false}>
+      <DialogContent
+        className="sm:max-w-lg"
+        aria-label="Keys"
+        showCloseButton={false}
+        finalFocus={() => {
+          const back = returnTo;
+          returnTo = null;
+          return back?.isConnected ? back : true;
+        }}
+      >
         {/* The primitive's own close is 28 px; this one is 44 on a phone (F15). */}
         <DialogClose render={<Button variant="ghost" size="icon" className="absolute top-2 right-2 size-11 sm:size-7" />}>
           <XIcon aria-hidden />

@@ -63,8 +63,13 @@ const MEDIA_ERRORS: Record<number, string> = {
 export type PlayerControls = {
   /** Play from `from` and stop at `to`, both in seconds: audition one span (#84). */
   hear: (from: number, to: number) => void;
-  /** Play, or pause; playing again starts `backS` seconds before where it stopped (Review's Tab). */
-  toggle: (backS?: number) => void;
+  /**
+   * Play, or pause; playing again starts `backS` seconds before where it
+   * stopped (Review's Tab). With `within`, playing again stays inside that
+   * span: it starts no earlier than its start, from no later than its end,
+   * and stops at its end, as `hear` does (UAT 8 Oct, finding 3).
+   */
+  toggle: (backS?: number, within?: { start: number; end: number }) => void;
   pause: () => void;
   isPlaying: () => boolean;
   /** Play at `speed` and keep it for later launches (#81). */
@@ -143,7 +148,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
   const scrubRef = useRef(scrub);
   scrubRef.current = scrub;
   /** Play, or pause; resuming starts `backS` seconds earlier. The rail's button and Review's Tab both. */
-  const toggle = (backS = 0) => {
+  const toggle = (backS = 0, within?: { start: number; end: number }) => {
     const element = media.current;
     if (element === null) return;
     if (!element.paused) {
@@ -151,8 +156,15 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       return;
     }
     stopAt.current = null;
-    if (backS > 0) element.currentTime = Math.max(0, element.currentTime - backS);
+    if (within !== undefined) {
+      // Back from where it stopped, or from the span's end when it stopped
+      // past it, and never into what comes before the span.
+      element.currentTime = Math.max(within.start, Math.min(element.currentTime, within.end) - backS);
+    } else if (backS > 0) {
+      element.currentTime = Math.max(0, element.currentTime - backS);
+    }
     play(element);
+    if (within !== undefined) stopAt.current = within.end;
   };
   const toggleRef = useRef(toggle);
   toggleRef.current = toggle;
@@ -172,7 +184,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
         seekRef.current(from);
         stopAt.current = to;
       },
-      toggle: (backS = 0) => toggleRef.current(backS),
+      toggle: (backS = 0, within) => toggleRef.current(backS, within),
       pause: () => media.current?.pause(),
       isPlaying: () => media.current !== null && !media.current.paused,
       setSpeed: changeSpeed,

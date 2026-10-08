@@ -106,7 +106,15 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
     return (
       <>
         {bar}
-        <FinishPanel transcriptId={transcriptId} progress={session.progress} back={back} leave={session.leave} settle={session.settle} />
+        <FinishPanel
+          transcriptId={transcriptId}
+          progress={session.progress}
+          left={session.left}
+          toFirstUnchecked={session.toFirstUnchecked}
+          back={back}
+          leave={session.leave}
+          settle={session.settle}
+        />
       </>
     );
   }

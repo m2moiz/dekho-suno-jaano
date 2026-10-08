@@ -91,11 +91,20 @@ export type Session = {
   flagging: boolean;
   setFlagging: (open: boolean) => void;
   finished: boolean;
+  /** The sentences of this pass not checked yet: at its end, how many it skipped (UAT 8 Oct, finding 1). */
+  left: number;
+  /** Leave the end of the pass for its first sentence not checked yet. */
+  toFirstUnchecked: () => void;
   saving: SaveState;
   speakers: { label: string; name: string; colour: string | undefined }[];
   act: (action: Action, caret?: Caret) => void;
   /** Save everything and go back to the transcript (Esc, the bar's back arrow, the finish panel). */
   leave: () => void;
+  /**
+   * Put back the words Ctrl+G replaced, while the box still holds the second
+   * opinion's; false when there is nothing to put back (Cmd+Z in the box).
+   */
+  undoSecond: () => boolean;
   /** Resolve once the review and the edit list are both saved; throws NotSaved when either is not. */
   settle: () => Promise<void>;
 };
@@ -206,6 +215,8 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
   const [finished, setFinished] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const checkedAt = useRef<number[]>([]);
+  // The words Ctrl+G replaced, and what it put in their place (UAT 8 Oct, finding 5).
+  const tookSecond = useRef<{ index: number; mine: string; theirs: string } | null>(null);
 
   const labels = useMemo(() => speakerLabels(content, doc.speakers) ?? [], [content, doc.speakers]);
   const spans = useSpans(segments);
@@ -416,6 +427,16 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
     setLeaving(true);
   };
 
+  /** Ctrl+G's way back: the words it replaced, while the box still holds what it put there. */
+  const undoSecond = (): boolean => {
+    const took = tookSecond.current;
+    if (took === null || took.index !== index || text !== took.theirs) return false;
+    tookSecond.current = null;
+    setText(took.mine);
+    setNotice("Your words are back in the box.");
+    return true;
+  };
+
   const act = (action: Action, caret?: Caret) => {
     if (segment === undefined || choosing) return;
     // While the flag menu is open its keys are its own: a key that reaches the
@@ -458,7 +479,9 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
         return;
       }
       case "toggle":
-        controls.current?.toggle(RESUME_BACK_S);
+        // Within this sentence, as arrival plays it: never back into the one
+        // before, and stopping 0.2 s after its end (UAT 8 Oct, finding 3).
+        controls.current?.toggle(RESUME_BACK_S, { start: segment.start, end: segment.end + AFTER_S });
         return;
       case "replay":
         hear(segment);
@@ -495,11 +518,13 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
         return;
       }
       case "second": {
+        if (undoSecond()) return;
         const theirs = opinions.words[index] ?? [];
         if (other === null || theirs.length === 0) setNotice("There is no second opinion for this sentence.");
         else {
+          tookSecond.current = { index, mine: text, theirs: theirs.join(" ") };
           setText(theirs.join(" "));
-          setNotice("The second opinion's reading is in the box. Enter checks it.");
+          setNotice("The second opinion's reading is in the box. Enter checks it; Ctrl+G again puts your words back.");
         }
         return;
       }
@@ -584,6 +609,12 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
   };
 
   const remaining = order.filter((i) => segments[i]?.state !== "checked").length;
+  const toFirstUnchecked = () => {
+    const to = order.find((i) => segments[i]?.state !== "checked");
+    if (to === undefined) return;
+    setFinished(false);
+    go(to, segments);
+  };
   const views = (from: number, to: number) =>
     Array.from({ length: Math.max(0, to - from) }, (_, k) => view(from + k)).filter((v): v is SentenceView => v !== null);
   return {
@@ -606,10 +637,13 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
     flagging,
     setFlagging,
     finished,
+    left: remaining,
+    toFirstUnchecked,
     saving,
     speakers: labels.map((label, i) => ({ label, name: displayName(labels, names, i) ?? label, colour: speakerColour(i) })),
     act,
     leave,
     settle,
+    undoSecond,
   };
 }
