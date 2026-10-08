@@ -712,6 +712,7 @@ five keys used most. Every key, as the key sheet lists them:
 | Ctrl+S | Split the sentence at the cursor |
 | Ctrl+M | Merge with the previous sentence |
 | Ctrl+J and Ctrl+Shift+J | Next and previous likely error |
+| F6 and Shift+F6 | Next and previous region: the box, the controls under it, the top bar, the player |
 | Ctrl+/ | The key sheet |
 | Esc | Leave Review (progress is saved) |
 
@@ -719,8 +720,9 @@ Three trades sit behind those keys. Ctrl+F moves the cursor one character
 forward in a Mac text field; here it opens the flag menu, and the arrow key
 still moves the cursor. Ctrl+1 to Ctrl+9 reach the page unless macOS's "Switch
 to Desktop n" shortcuts are on. Ctrl+Space is left alone, because it switches
-input sources, which typing Urdu needs. Tab stays in the box, so Option+Tab
-moves to the page's other controls, such as the pass switch.
+input sources, which typing Urdu needs. Tab stays in the box, so F6 and
+Shift+F6 step between the box, the row of controls under it, the top bar and
+the player, and Option+Tab also moves out where the browser allows it.
 
 On a phone or tablet (below 768 px wide, or a touch screen), each sentence is a
 card: the margin line on top, the words below (tap to edit), the second opinion

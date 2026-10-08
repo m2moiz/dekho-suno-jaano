@@ -1,6 +1,6 @@
 {
  "schemaVersion": 2,
- "generatedAt": "2026-10-07T23:58:18+00:00",
+ "generatedAt": "2026-10-08T00:31:38+00:00",
  "title": "Design System: dsj",
  "extensions": {
   "colorMeta": {
@@ -49,6 +49,11 @@
     "role": "neutral",
     "displayName": "Muted Word Wash",
     "canonical": "oklch(0.93 0.01 260)"
+   },
+   "unsure-mark": {
+    "role": "secondary",
+    "displayName": "Unsure Mark",
+    "canonical": "oklch(0.78 0.09 25)"
    }
   },
   "shadows": [
@@ -149,7 +154,7 @@
    },
    {
     "name": "The One Gold Rule",
-    "body": "One gold primary action per screen (Add recording, Review, Checked next). Every other button is outline, secondary or ghost, the rail's play button included: it is a control, outlined on the field, so it never stands beside the screen's gold action as a second one. Gold as a fill elsewhere is a place, not an action: the played part of the waveform, the playhead wash, the focus ring.",
+    "body": "One gold primary action per screen (Add recording, Review, Start, Save as answer key, and Checked, next on the phone card). Every other button is outline, secondary or ghost, the rail's play button included: it is a control, outlined on the field, so it never stands beside the screen's gold action as a second one. The Review desk on a laptop has no gold button: its one gold is the sentence box's edge, and its Checked, next is outlined. Gold as a fill elsewhere is a place, not an action: the played part of the waveform, the playhead wash, the timing strip's word edges, the focus ring. A count is never gold (the Bleep badge is the secondary wash).",
     "section": "colors"
    },
    {

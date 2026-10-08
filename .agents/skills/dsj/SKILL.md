@@ -370,6 +370,7 @@ The keys, for answering the owner's questions about them:
 | Ctrl+U / Ctrl+F | flag can't make it out / flag menu |
 | Ctrl+S / Ctrl+M | split at the cursor / merge with the previous |
 | Ctrl+J / Ctrl+Shift+J | next / previous likely error |
+| F6 / Shift+F6 | next / previous region (box, controls, bar, player) |
 | Ctrl+/ / Esc | key sheet / leave (progress is saved) |
 
 With `--tailnet` (for a phone or tablet, #250) it still listens on `127.0.0.1`, and
