@@ -42,6 +42,10 @@ colors:
   speaker-5-dark: "#a9b3ea"
   speaker-6-light: "#6b5e2e"
   speaker-6-dark: "#cdbb85"
+  unsure-wash-light: "oklch(0.92 0.06 25)"
+  unsure-wash-dark: "oklch(0.38 0.09 25)"
+  muted-word-wash-light: "oklch(0.93 0.01 260)"
+  muted-word-wash-dark: "oklch(0.3 0.01 260)"
 typography:
   wordmark:
     fontFamily: "Literata Variable, Georgia, serif"
@@ -76,6 +80,16 @@ typography:
     fontSize: "1.95rem"
     fontWeight: 400
     lineHeight: 2.1
+  review-context:
+    fontFamily: "Literata Variable, Georgia, serif"
+    fontSize: "1.0625rem"
+    fontWeight: 400
+    lineHeight: 1.65
+  review-context-urdu:
+    fontFamily: "Literata Variable, Noto Nastaliq Urdu Variable, serif"
+    fontSize: "1.38rem"
+    fontWeight: 400
+    lineHeight: 2.1
   label:
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif"
     fontSize: "0.8125rem"
@@ -87,6 +101,7 @@ typography:
     fontSize: "0.875rem"
     fontWeight: 500
 rounded:
+  nameplate: "4px"
   sm: "4.8px"
   md: "6.4px"
   lg: "8px"
@@ -99,6 +114,8 @@ spacing:
   margin-gap: "1.75rem"
   turn-gap: "1.4em"
   measure: "68ch"
+  measure-urdu: "30ch"
+  measure-urdu-desk: "34rem"
   bar-height: "56px"
   touch-target: "44px"
 components:
@@ -167,6 +184,8 @@ A cool blue world with one warm accent: the shell is navy, the words sit on a pa
 ### Primary
 - **Manuscript Gold** (`gold`): the playhead's fill on the waveform, the one primary action per screen (Add recording, Review, Checked next), the focus ring on the blue field, and the selection wash. As text or as a ring on the pale ground it is too light (2.21:1), so there it becomes **Gold Ink** (`gold-ink-light`); on the dark ground the plain gold reads and is used as is.
 - **Playhead Wash** (`playhead-light`, `playhead-dark`): the background behind the word being said. Pale in light and deep in dark, so the word on it keeps 4.5:1.
+- **Unsure Rose** (`unsure-wash-light`, `unsure-wash-dark`): behind a word the recogniser was unsure of, when the unsure count is switched on (off by default, #62). Rose, so it never reads as the playhead's amber; body text on it measures 14.9:1 light and 7.8:1 dark (`ui/tests/unit/confidence.test.tsx`).
+- **Muted Word Wash** (`muted-word-wash-light`, `muted-word-wash-dark`): behind a word muted for bleeping, with the muted ink and a 2px strike, so it reads as gone while staying in the text to undo.
 
 ### Secondary
 - **Correction Red** (`correction-light`, `correction-dark`): the struck-through original of a corrected word in the margin, and destructive actions. Nothing else is red.
@@ -188,7 +207,7 @@ A cool blue world with one warm accent: the shell is navy, the words sit on a pa
 ### Named Rules
 **The One Meaning Rule.** Red is a correction, green is checked, gold is "here". A colour that already means something is never borrowed for emphasis, a badge or a speaker.
 
-**The One Gold Rule.** One gold primary action per screen. Every other button is outline, secondary or ghost.
+**The One Gold Rule.** One gold primary action per screen (Add recording, Review, Checked next). Every other button is outline, secondary or ghost, the rail's play button included: it is a control, outlined on the field, so it never stands beside the screen's gold action as a second one. Gold as a fill elsewhere is a place, not an action: the played part of the waveform, the playhead wash, the focus ring.
 
 **The Measured Pair Rule.** Every text and non-text pair is held to WCAG AA by `ui/tests/unit/palette.test.ts` (4.5:1 for text, 3:1 for a focus ring, a field's edge and the waveform). A new colour enters through `ui/src/styles/theme.css` and that test, not as a literal in a component.
 
@@ -205,12 +224,15 @@ A cool blue world with one warm accent: the shell is navy, the words sit on a pa
 - **Headline** (Literata, 600, 1.875rem, balanced): the finish panel and the pass chooser's question.
 - **Title** (Literata, 600, 1.125rem): the page title in the top bar, recording titles in the library.
 - **Body** (Literata, 400, 1.125rem, 1.7 leading): transcript turns, at a 68 character measure, ragged and never justified.
-- **Body, Urdu** (Nastaliq, 1.3x the English size, 2.1 leading): Urdu turns, right to left.
-- **Review sentence** (Literata, 400, 1.5rem, 1.6 leading; Urdu 1.95rem at 2.1): the sentence in hand.
+- **Body, Urdu** (Nastaliq, 1.3x the English size, 2.1 leading): Urdu turns, right to left, at a narrower measure of about 45 Urdu letters (30ch of its face), so the line's start, on the right, sits near the margin on the left.
+- **Review sentence** (Literata, 400, 1.5rem, 1.6 leading; Urdu 1.95rem at 2.1, at most 34rem wide): the sentence in hand.
+- **Review context** (Literata, 400, 1.0625rem, 1.65 leading; Urdu 1.38rem at 2.1, its start lined up with the box text's): the dimmed sentences around it and the second opinion.
 - **Label** (system, 500, 0.8125rem, 1.35 leading, tabular figures): the margin's nameplate, time and state.
 - **Interface** (system, 500, 0.875rem): buttons, menus, dialogs.
 
 ### Named Rules
+**The Near Start Rule.** The margin stays on the left for every turn (owner's ruling, 8 Oct 2026). A right-to-left turn takes the narrower measure instead, so the eye goes from who spoke to the first word without crossing the page.
+
 **The Script Follows the Line Rule.** Each paragraph sets its own direction (`dir="auto"`, `unicode-bidi: plaintext`) and an Urdu line carries `lang="ur"`; the grid around it stays left to right, so the margin never swaps sides.
 
 **The Tabular Time Rule.** Every time, length and count is in tabular figures, so columns of times line up and a ticking clock does not jitter.
@@ -237,7 +259,7 @@ Flat by default, with tonal layering doing the work: the blue field, the ground 
 
 ## Shapes
 
-Gently rounded and consistent: 8px (`lg`) for buttons, inputs and menus; 11.2px (`xl`) for the library list and the selection toolbar; 12px for the review box; 14.4px for the phone's review card. Pills (`rounded-full`) only for the language tag, speaker chips and the round play button on the rail. The duration tick is a 3 px bar with 2 px ends, drawn to scale: a minute fills the reader's margin, 15 s fills Review's.
+Gently rounded and consistent: 8px (`lg`) for buttons, inputs and menus; 11.2px (`xl`) for the library list and the selection toolbar; 12px for the review box; 14.4px for the phone's review card. The nameplate's hover wash has 4px corners. Pills (`rounded-full`) only for the language tag, speaker chips and the round play button on the rail. The duration tick is a 3 px bar with 2 px ends, drawn to scale: a minute fills the reader's margin, 15 s fills Review's.
 
 ## Components
 
@@ -261,14 +283,15 @@ Gently rounded and consistent: 8px (`lg`) for buttons, inputs and menus; 11.2px 
 - **Selection, caret, scrollbars, form accents:** themed from the palette (gold selection wash, Gold Ink caret and accent colour, Field Edge scrollbar).
 
 ### Navigation
+- **Unsure count:** in the reader's bar, an outlined switch with a swatch of Unsure Rose, hollow while off and filled while on.
 - **Top bar:** the blue field, 56px, holding back, title, the one gold action, and icon buttons for the menu and settings. Focus on the field is full gold. On the phone it wraps to two rows.
-- **Player rail:** the blue field at the bottom: a round gold play button, the time in tabular figures, the waveform as the only scrubber (played part gold, unplayed `field-wave`), and the speed select.
+- **Player rail:** the blue field at the bottom: a round play button outlined in `field-muted` (not gold: see The One Gold Rule), the time in tabular figures (smaller on a phone, never hidden), the waveform as the only scrubber (played part gold, unplayed `field-wave`), and the speed select. In phone Review the card's actions stand 12px clear of it.
 
 ### The Margin (signature component)
 The narrow column on the left of every turn and every Review sentence: the speaker's nameplate in their ink (click to rename), the start time, the duration tick drawn to scale, the review mark (checked in green, flags in words), and any correction with the original struck through in Correction Red at 1.5px.
 
 ### The Review Box (signature component)
-The sentence in hand, already in an edit box: card fill, a 2px Gold Ink edge that doubles as its focus mark, 12px corners, the Review sentence type. Its neighbours and the second opinion sit in Dim Ink; where the second opinion's words differ, they are underlined.
+The sentence in hand, already in an edit box: card fill, a 2px Gold Ink edge that doubles as its focus mark, 12px corners, the Review sentence type. Its neighbours and the second opinion sit in Dim Ink; where the second opinion's words differ, they are underlined. Beneath it, a quiet ghost "Checked, next" gives Enter a pointer path; in the margin beside it, each speaker is a small ghost button carrying its Ctrl number, so the keys stay readable once speakers have names. Neither takes the focus from the box. The box says, to a screen reader and once in the footer, that Tab plays and Option+Tab moves on.
 
 ## Do's and Don'ts
 

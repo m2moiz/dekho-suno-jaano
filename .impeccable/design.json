@@ -1,6 +1,6 @@
 {
  "schemaVersion": 2,
- "generatedAt": "2026-10-07T23:12:26+00:00",
+ "generatedAt": "2026-10-07T23:58:18+00:00",
  "title": "Design System: dsj",
  "extensions": {
   "colorMeta": {
@@ -39,6 +39,16 @@
    "checked-light": {
     "role": "secondary",
     "displayName": "Checked Green"
+   },
+   "unsure-wash-light": {
+    "role": "secondary",
+    "displayName": "Unsure Rose",
+    "canonical": "oklch(0.92 0.06 25)"
+   },
+   "muted-word-wash-light": {
+    "role": "neutral",
+    "displayName": "Muted Word Wash",
+    "canonical": "oklch(0.93 0.01 260)"
    }
   },
   "shadows": [
@@ -139,13 +149,18 @@
    },
    {
     "name": "The One Gold Rule",
-    "body": "One gold primary action per screen. Every other button is outline, secondary or ghost.",
+    "body": "One gold primary action per screen (Add recording, Review, Checked next). Every other button is outline, secondary or ghost, the rail's play button included: it is a control, outlined on the field, so it never stands beside the screen's gold action as a second one. Gold as a fill elsewhere is a place, not an action: the played part of the waveform, the playhead wash, the focus ring.",
     "section": "colors"
    },
    {
     "name": "The Measured Pair Rule",
     "body": "Every text and non-text pair is held to WCAG AA by `ui/tests/unit/palette.test.ts` (4.5:1 for text, 3:1 for a focus ring, a field's edge and the waveform). A new colour enters through `ui/src/styles/theme.css` and that test, not as a literal in a component.",
     "section": "colors"
+   },
+   {
+    "name": "The Near Start Rule",
+    "body": "The margin stays on the left for every turn (owner's ruling, 8 Oct 2026). A right-to-left turn takes the narrower measure instead, so the eye goes from who spoke to the first word without crossing the page.",
+    "section": "typography"
    },
    {
     "name": "The Script Follows the Line Rule",
