@@ -17,7 +17,7 @@ import { newSpeakerLabel, speakerAt, speakerChange } from "@/features/edit/speak
 import type { PlayerControls } from "@/features/player/Player";
 import { speedLabel, stepSpeed } from "@/features/player/speed";
 import { showKeys } from "@/features/shell/KeySheet";
-import { REVIEW_SHEET } from "@/features/shell/keys";
+import { REVIEW_SHEET, type Sheet } from "@/features/shell/keys";
 import { cutoffFor } from "@/features/transcript/confidence";
 import type { Reading, TranscriptDoc } from "@/features/transcript/document";
 import { displayName, speakerColour } from "@/features/transcript/speakers";
@@ -113,6 +113,8 @@ type Args = {
   controls: RefObject<PlayerControls | null>;
   /** Where leaving goes, once everything is saved. */
   onLeave: () => void;
+  /** The key sheet Ctrl+/ opens: the desk's, or the card's, which has no F6. */
+  sheet?: Sheet;
 };
 
 // Two sentences before and after the one in hand (spec).
@@ -155,7 +157,7 @@ function useSpans(segments: readonly Segment[]): readonly Span[] {
   }, [segments]);
 }
 
-export function useReviewSession({ transcriptId, doc, editable, edits, saved, savedSha, sha, other, controls, onLeave }: Args): Session {
+export function useReviewSession({ transcriptId, doc, editable, edits, saved, savedSha, sha, other, controls, onLeave, sheet = REVIEW_SHEET }: Args): Session {
   const { editor } = editable;
   const content = useContent(editor);
   const names = useLatest(editable.names);
@@ -541,7 +543,7 @@ export function useReviewSession({ transcriptId, doc, editable, edits, saved, sa
         return;
       }
       case "keys":
-        showKeys(REVIEW_SHEET);
+        showKeys(sheet);
         return;
       case "leave":
         leave();

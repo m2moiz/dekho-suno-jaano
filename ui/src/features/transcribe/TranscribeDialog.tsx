@@ -36,6 +36,17 @@ const PURPOSE: Record<string, string> = {
   sherpa: "The portable engine, with parakeet's weights.",
 };
 
+/**
+ * Whether an engine is only missing from this install, by dsj's own words for
+ * it: whisper and parakeet say "is not installed" (dsj/whisper.py,
+ * dsj/parakeet.py), sherpa "will not import here", its ImportError
+ * (dsj/sherpa.py). sherpa runs on a Mac; the `mac` extra leaves it out, so
+ * "can't run on this Mac" was untrue of it (fix round 1 re-review 2, I1).
+ */
+export function notInstalled(reason: string | null): boolean {
+  return reason !== null && /is not installed|will not import here/.test(reason);
+}
+
 // The answer, as the engine it picks is recommended for it.
 const RECOMMENDED: Record<ChoiceId, string> = {
   mixed: "Recommended for mixed Urdu and English",
@@ -227,7 +238,7 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             <Collapsible key={e.name} className="px-2 text-sm text-muted-foreground" data-unavailable={e.name}>
               <span>
                 {e.name}: {PURPOSE[e.name] === undefined ? "" : `${PURPOSE[e.name]?.charAt(0).toLowerCase()}${PURPOSE[e.name]?.slice(1)} `}
-                {/not installed/.test(e.reason ?? "") ? "Not installed on this Mac." : "Can't run on this Mac."}{" "}
+                {notInstalled(e.reason) ? "Not installed with this install of dsj." : "Can't run here."}{" "}
               </span>
               <CollapsibleTrigger
                 aria-label={`Why ${e.name} can't run`}
@@ -335,7 +346,9 @@ function Blocked({ name, reason, others }: { name: string; reason: string | null
   const around = others.length > 0 ? `, or pick ${others.join(" or ")} below` : "";
   return (
     <>
-      <p className="font-semibold">{name} can't run on this Mac, so this can't start.</p>
+      <p className="font-semibold">
+        {notInstalled(reason) ? `${name} is not installed with this install of dsj` : `${name} can't run here`}, so this can't start.
+      </p>
       <p className="text-sm whitespace-pre-wrap select-text">{why}</p>
       <p className="text-sm text-muted-foreground">
         Fix that, then open this again{around}.

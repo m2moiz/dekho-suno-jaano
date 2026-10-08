@@ -63,6 +63,21 @@ export const REVIEW_SHEET: Sheet = {
   ],
 };
 
+/**
+ * Review's keys on the phone or tablet card, where a keyboard may be attached:
+ * the desk's, less F6, which only the desk's regions answer (fix round 1
+ * re-review 2, Minor 1).
+ */
+export const REVIEW_CARD_SHEET: Sheet = {
+  ...REVIEW_SHEET,
+  keys: REVIEW_SHEET.keys.filter((key) => key.keys[0] !== "F6"),
+  notes: REVIEW_SHEET.notes.map((note) =>
+    note.startsWith("Tab plays and pauses")
+      ? "Tab plays and pauses inside the sentence's box. Option+Tab and Option+Shift+Tab move out of it, where the browser moves focus with them."
+      : note,
+  ),
+};
+
 /** The five keys the review footer always shows (spec: "a footer line always shows the five most used keys"). */
 export const FOOTER_KEYS: readonly Key[] = [
   { keys: ["Enter"], does: "checked" },

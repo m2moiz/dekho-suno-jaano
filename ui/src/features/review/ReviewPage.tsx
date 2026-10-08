@@ -7,6 +7,7 @@ import { Player, type PlayerControls } from "@/features/player/Player";
 import { AppBar } from "@/features/shell/AppBar";
 import { read, type Reading } from "@/features/transcript/document";
 import { type Opened, openTranscript } from "@/features/transcript/TranscriptPage";
+import { REVIEW_CARD_SHEET, REVIEW_SHEET } from "@/features/shell/keys";
 import { TOUCH, useMediaQuery } from "@/lib/media";
 import { transcriptHref } from "@/lib/route";
 import type { CurrentSha, ReviewDocument } from "./model";
@@ -132,6 +133,7 @@ function InSession({ opened, editable, transcriptId, review, other, back, naviga
     other,
     controls,
     onLeave: () => navigate(back),
+    sheet: touch ? REVIEW_CARD_SHEET : REVIEW_SHEET,
   });
   const reading = useMemo(() => read(opened.doc), [opened.doc]);
   const title = displayTitle(opened.recording);

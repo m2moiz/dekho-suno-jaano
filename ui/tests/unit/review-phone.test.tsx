@@ -13,6 +13,7 @@ const fetchMock = vi.hoisted(() => {
 
 import { dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
+import { KeySheet } from "../../src/features/shell/KeySheet";
 import { SWIPE_PX } from "../../src/features/review/swipe";
 import { stubMatchMedia } from "./media";
 import { box, contentWith, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
@@ -63,6 +64,13 @@ describe("Review mode on a phone", () => {
     await vi.waitFor(() => expect(server.edits).toHaveLength(1));
     expect(server.edits[0]?.[0]).toEqual({ kind: "paragraph", speaker: "SPEAKER_01", language: null });
     expect(screen.getByRole("button", { name: "Speaker 2" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("the card's key sheet lists no F6, which only the desk answers (fix round 1 re-review 2, Minor 1)", async () => {
+    render(<KeySheet />);
+    key(await start(), { key: "/", code: "Slash", ctrlKey: true });
+    const sheet = await screen.findByRole("dialog", { name: "Keys in Review" });
+    expect(sheet.textContent).not.toContain("F6");
   });
 
   it("goes back with Back", async () => {

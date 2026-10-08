@@ -9,7 +9,7 @@ import { titleFace } from "@/features/library/title";
 import { AppBar } from "@/features/shell/AppBar";
 import { FIELD_BUTTON, FIELD_EDGE } from "@/features/shell/field";
 import { KeysItem } from "@/features/shell/KeySheet";
-import { REVIEW_SHEET } from "@/features/shell/keys";
+import { REVIEW_CARD_SHEET } from "@/features/shell/keys";
 import { FINE, useMediaQuery } from "@/lib/media";
 import { langOf } from "@/lib/script";
 import { FinishPanel } from "./FinishPanel";
@@ -59,7 +59,7 @@ export function ReviewCard({ session, title, back, transcriptId }: Props) {
           session.leave();
         },
       }}
-      settings={<KeysItem sheet={REVIEW_SHEET} shortcut="Ctrl /" />}
+      settings={<KeysItem sheet={REVIEW_CARD_SHEET} shortcut="Ctrl /" />}
     >
       <h1 dir="auto" lang={face.lang} className={session.choosing ? `min-w-0 flex-1 truncate font-semibold ${face.className}` : "sr-only"}>
         <span className="font-reading">Review · </span>

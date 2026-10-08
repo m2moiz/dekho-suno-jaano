@@ -37,7 +37,13 @@ const ENGINES: Engine[] = [
   { name: "whisper", reason: null, default_model: "mlx-community/whisper-large-v3-turbo", cloud: false, usd_per_hour: null },
   {
     name: "sherpa",
-    reason: "the sherpa engine cannot run here: sherpa-onnx will not import here",
+    // dsj's own words when the sherpa extra is absent (dsj/asr.py get_engine around
+    // dsj/sherpa.py available()): an ImportError, said as "will not import".
+    reason:
+      "the sherpa engine cannot run here: sherpa-onnx will not import here: No module named 'sherpa_onnx'. Install it with " +
+      '`uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano"`, or from a clone add `--extra sherpa` ' +
+      "to the `uv sync` line you already use (`uv sync` uninstalls every extra it is not given). On Android that install " +
+      "goes inside a proot glibc container, not Termux itself, which is bionic.",
     default_model: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
     cloud: false,
     usd_per_hour: null,
@@ -158,7 +164,8 @@ describe("the Transcribe dialog", () => {
       "parakeetFast. English and European languages, no Urdu.",
       "whisperRecommended for mixed Urdu and EnglishReads Urdu and mixed speech. Slower.",
     ]);
-    expect(screen.getByText("sherpa: the portable engine, with parakeet's weights. Can't run on this Mac.")).toBeTruthy();
+    // sherpa runs on a Mac; it is only not in this install (fix round 1 re-review 2, I1).
+    expect(screen.getByText("sherpa: the portable engine, with parakeet's weights. Not installed with this install of dsj.")).toBeTruthy();
     // The estimate sits under the engines, at body size.
     const status = screen.getByRole("status");
     expect(group.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -199,7 +206,7 @@ describe("the Transcribe dialog", () => {
     const posted = await open(ENGINES.map((e) => (e.name === "whisper" ? { ...e, reason } : e)));
     const status = screen.getByRole("status");
     expect(status.textContent).toBe(
-      "whisper can't run on this Mac, so this can't start." +
+      "whisper is not installed with this install of dsj, so this can't start." +
         "mlx-whisper is not installed. Install it with uv sync --extra whisper." +
         "Fix that, then open this again, or pick parakeet below.",
     );
