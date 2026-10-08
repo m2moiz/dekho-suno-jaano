@@ -1,7 +1,7 @@
 import { type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -147,6 +147,7 @@ export function FlagMenu({
   children,
   finalFocus,
   roomy = false,
+  side = "bottom",
 }: {
   session: Session;
   trigger: ReactElement;
@@ -154,22 +155,29 @@ export function FlagMenu({
   finalFocus?: RefObject<HTMLElement | null>;
   /** Items 44 px tall, for a finger (F15). */
   roomy?: boolean;
+  /** Where it opens: beside the desk's margin, so it covers no other sentence's nameplate. */
+  side?: "bottom" | "inline-end";
 }) {
   const current = session.current;
   if (current === null) return null;
   return (
     <DropdownMenu open={session.flagging} onOpenChange={session.setFlagging}>
       <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-auto" finalFocus={finalFocus}>
+      {/* The menu's edge and shadow from DESIGN.md (Menu), which read on the
+          pale ground where the primitive's own hardly did; each flag taken shows
+          its check, and Ctrl+U its key (critique 7 Oct, P2-8). */}
+      <DropdownMenuContent align="start" side={side} className="w-auto shadow-lg shadow-black/15 ring-input/70" finalFocus={finalFocus}>
         {FLAGS.map(([flag, label]) => (
           <DropdownMenuCheckboxItem
             key={flag}
             checked={current.segment.flags.includes(flag)}
             closeOnClick
             className={roomy ? "min-h-11" : undefined}
+            {...(flag === "unclear" ? { "aria-keyshortcuts": "Control+U" } : {})}
             onCheckedChange={() => session.act({ kind: "flag", flag })}
           >
             {label}
+            {flag === "unclear" && <DropdownMenuShortcut aria-hidden>Ctrl U</DropdownMenuShortcut>}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
@@ -299,11 +307,35 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
               {/* Focus goes back to the box when the menu closes, not to its trigger (F12). */}
               <FlagMenu
                 session={session}
+                side="inline-end"
                 finalFocus={box}
                 trigger={<Button variant="ghost" size="sm" className="-ml-2.5 h-8 text-muted-foreground max-md:h-11" />}
               >
                 Flag
               </FlagMenu>
+              {/* Who said it, by pointer too, each speaker with the key that sets
+                  it, so Ctrl+n stays readable once speakers have names (critique
+                  7 Oct, P2-5). A press keeps the focus in the box. */}
+              <div role="group" aria-label="Who said it" className="-ml-2.5 flex flex-col items-start">
+                {session.speakers.slice(0, 9).map((speaker, i) => (
+                  <Button
+                    key={speaker.label}
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={current.label === speaker.label}
+                    aria-keyshortcuts={`Control+${i + 1}`}
+                    className="h-7 max-w-full gap-1.5 px-2.5 font-medium aria-pressed:bg-muted"
+                    style={{ "--speaker": speaker.colour } as CSSProperties}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => session.act({ kind: "speaker", n: i + 1 })}
+                  >
+                    <Kbd aria-hidden>{i + 1}</Kbd>
+                    <span dir="auto" lang={langOf(speaker.name)} className="nameplate truncate">
+                      {speaker.name}
+                    </span>
+                  </Button>
+                ))}
+              </div>
             </div>
             <div className="flex min-w-0 flex-col gap-3">
               <span id={BOX_HINT_ID} className="sr-only">
@@ -323,6 +355,17 @@ export function ReviewDesk({ session, title, back, transcriptId }: Props) {
                 onKeyDown={(event) => onBoxKey(session, event)}
               />
               {session.second !== null && <SecondOpinion second={session.second} />}
+              {/* Enter's pointer path, quiet: the gold stays the box's edge (critique 7 Oct, P2-5). */}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-keyshortcuts="Enter"
+                className="h-8 self-start text-muted-foreground"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => session.act({ kind: "check" })}
+              >
+                Checked, next
+              </Button>
             </div>
           </section>
         )}

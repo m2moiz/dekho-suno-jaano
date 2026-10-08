@@ -1,5 +1,5 @@
 // Review mode by keyboard, in jsdom against a mocked server (Hashiya spec, Review mode).
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -75,6 +75,19 @@ describe("Review mode on a Mac", () => {
     await vi.waitFor(() => expect(server.edits).toHaveLength(1));
     expect(server.edits[0]?.[0]).toEqual({ kind: "paragraph", speaker: "SPEAKER_01", language: null });
     expect(screen.getByText("Said by Speaker 2")).toBeTruthy();
+  });
+
+  it("on the desk a pointer can check a sentence and say who said it, each speaker shown with its key (critique 7 Oct, P2-5)", async () => {
+    await start();
+    const who = screen.getByRole("group", { name: "Who said it" });
+    const second = within(who).getByRole("button", { name: /Speaker 2/ });
+    expect(second.textContent).toContain("2");
+    expect(second.getAttribute("aria-keyshortcuts")).toBe("Control+2");
+    fireEvent.click(second);
+    await vi.waitFor(() => expect(server.edits).toHaveLength(1));
+    expect(screen.getByText("Said by Speaker 2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Checked, next" }));
+    expect(await screen.findByText("1 of 3 checked")).toBeTruthy();
   });
 
   it("splits at the cursor with Ctrl+S and merges back with Ctrl+M", async () => {
@@ -192,6 +205,16 @@ describe("Review mode on a Mac", () => {
 });
 
 describe("Review mode, fix round 1", () => {
+  it("the flag menu names Ctrl+U beside its flag, and shows a flag taken as checked (critique 7 Oct, P2-8)", async () => {
+    const field = await start();
+    key(field, { key: "u", code: "KeyU", ctrlKey: true });
+    key(field, { key: "f", code: "KeyF", ctrlKey: true });
+    const unclear = await screen.findByRole("menuitemcheckbox", { name: /Can't make it out/ });
+    expect(unclear.textContent).toContain("Ctrl U");
+    expect(unclear.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("menuitemcheckbox", { name: /Not speech/ }).getAttribute("aria-checked")).toBe("false");
+  });
+
   it("while the flag menu is open, Esc in the box closes the menu and stays, and no other key acts (I1)", async () => {
     const went: string[] = [];
     const field = await start((href) => went.push(href));

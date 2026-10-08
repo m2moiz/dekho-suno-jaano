@@ -348,7 +348,7 @@ describe("the words to bleep, on the transcript page", () => {
         return listReply(saves(request) ? held : CONTENT);
       }
       if (path === "/api/transcripts/7/matches") {
-        return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: x" });
+        return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: how often whisper leaves a swear word out of its transcript is unmeasured (#152)" });
       }
       if (path === "/api/words") {
         const { word } = (await request.json()) as { word: string };
@@ -470,12 +470,26 @@ describe("the words to bleep, on the transcript page", () => {
     expect(currentError()).toBeNull();
   });
 
-  it("says in words that nothing matched", async () => {
+  it("says in words that nothing matched, names the lists in words, and says what to do next", async () => {
     listed = [];
     render(<TranscriptPage recording={2} transcript={7} />);
     const section = await openBleepPanel();
     expect((await within(section).findByRole("status")).textContent).toBe(
-      "No word matched: 3 words searched against the en, ur, hi, pa lists.",
+      "No word matched: 3 words searched against the English, Urdu, Hindi and Punjabi lists. Add a word below to look for it too.",
     );
+  });
+
+  it("puts what it found first and the actions after, with no issue numbers in its words (critique 7 Oct, P2-7)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const section = await openBleepPanel();
+    const list = await within(section).findByRole("list", { name: "Matches" });
+    const muteAll = within(section).getByRole("button", { name: /^Mute all/ });
+    // The list comes before Mute all in the drawer's order.
+    expect(list.compareDocumentPosition(muteAll) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(section.textContent).not.toMatch(/#\d+/);
+    // Render, with nothing muted yet, does not look like the drawer's main action.
+    const renderButton = within(section).getByRole("button", { name: "Render" });
+    expect(renderButton.hasAttribute("disabled")).toBe(true);
+    expect(renderButton.className).not.toContain("bg-foreground");
   });
 });

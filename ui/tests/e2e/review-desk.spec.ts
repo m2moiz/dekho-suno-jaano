@@ -192,6 +192,8 @@ test("an Urdu sentence on the desk takes the narrow measure, its context lined u
     dir,
   );
   await page.goto(readerUrl(seeded));
+  // R reaches the page once the reader is up, as openReview waits for.
+  await expect(page.getByRole("link", { name: "Review", exact: true })).toBeVisible();
   await page.locator("body").press("r");
   await page.getByRole("button", { name: /^Every sentence/ }).click();
   const box = page.getByRole("textbox", { name: "What was said" });

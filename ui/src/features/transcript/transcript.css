@@ -174,10 +174,13 @@
   /* An Urdu line starts at its right edge, a whole measure from the margin on
      the left, and the eye jumped that far on every turn (critique 7 Oct, P1-1).
      The margin stays on the left for every turn (owner's ruling, 8 Oct); a
-     right-to-left turn takes a narrower measure, 42 characters of its own
-     face, so its start sits near the margin. The box keeps to the start of
-     the left-to-right grid, so it narrows from the right. */
-  max-inline-size: 42ch;
+     right-to-left turn takes a narrower measure of about 45 Urdu letters, so
+     its start sits near the margin. Nastaliq at this size runs about 9 px a
+     letter against 13.6 px for the face's "0" (measured on the Task 16
+     round 1 shots, reader-urdu 1440x900), so that is 30ch here; 42ch held
+     about 63 letters. The box keeps to the start of the left-to-right grid,
+     so it narrows from the right. */
+  max-inline-size: 30ch;
 }
 
 /* The word being said (#60). A background only: ::highlight() takes colour,

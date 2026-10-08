@@ -12,6 +12,25 @@ import { alone, type RenderJob, startRender, useRender } from "./render";
 import { RenderStatus } from "./RenderStatus";
 import type { MatchesState } from "./useMatches";
 
+// The word lists by name, as the drawer says them (critique 7 Oct, P2-7):
+// the codes are the lists' file names, which the owner never sees.
+const LIST_NAMES: Record<string, string> = { en: "English", ur: "Urdu", hi: "Hindi", pa: "Punjabi" };
+
+/**
+ * The recall line hatao prints, as a sentence for the page: its issue number
+ * left to the terminal, where it is a reference to follow.
+ */
+function recallSentence(line: string): string {
+  const said = line.replace(/^recall: /, "").replace(/\s*\(#\d+\)/g, "").trim();
+  return said === "" ? "" : `${said.charAt(0).toUpperCase()}${said.slice(1)}${said.endsWith(".") ? "" : "."}`;
+}
+
+/** "English, Urdu and Hindi", from the lists' codes. */
+export function listNames(codes: readonly string[]): string {
+  const names = codes.map((code) => LIST_NAMES[code] ?? code);
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 // How much of the recording an audition plays either side of a match, in
 // seconds: enough to hear the words around the cut, which is what a clipped
 // neighbour sounds like (#44).
@@ -78,25 +97,28 @@ export function BleepPanel({ transcriptId, editor, content, renderable, padS, co
     );
   };
 
+  const muteAll = (
+    <Button
+      variant="outline"
+      size="sm"
+      className={tall}
+      disabled={unmuted.length === 0}
+      onClick={() => editor.applyEdit({ kind: "flag", entries: entriesOf(unmuted) })}
+    >
+      {unmuted.length > 0 ? `Mute all ${unmuted.length}` : "Mute all"}
+    </Button>
+  );
+  const renderable_ = renderable.spans !== null && renderable.spans.length > 0;
+  // Status, then the matches, then what to do with them, then the box that
+  // adds a word, and the fine print folded behind "?" (critique 7 Oct, P2-7).
   return (
     <section aria-label="Words to bleep" className="flex flex-col gap-4 text-sm">
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          className={tall}
-          disabled={unmuted.length === 0}
-          onClick={() => editor.applyEdit({ kind: "flag", entries: entriesOf(unmuted) })}
-        >
-          {unmuted.length > 0 ? `Mute all ${unmuted.length}` : "Mute all"}
-        </Button>
-      </div>
       {found === null ? (
         <p className="text-muted-foreground">Looking through the word lists…</p>
       ) : matched.length === 0 ? (
         <p className="text-muted-foreground" role="status">
-          No word matched: {found.words_searched.toLocaleString("en")} words searched against the{" "}
-          {found.lists.join(", ")} lists.
+          No word matched: {found.words_searched.toLocaleString("en")} words searched against the {listNames(found.lists)} lists. Add a
+          word below to look for it too.
         </p>
       ) : (
         <ul aria-label="Matches" className="flex flex-col divide-y">
@@ -152,13 +174,16 @@ export function BleepPanel({ transcriptId, editor, content, renderable, padS, co
         </ul>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        {/* The drawer's main action, filled with the text colour (navy on the light card,
-            pale on the dark one): the strongest fill here short of gold, which the
-            rail's Play keeps (F23). */}
+        {matched.length > 0 && muteAll}
+        {/* The drawer's main action once something is muted, filled with the
+            text colour (navy on the light card, pale on the dark one), the
+            strongest fill here short of gold (F23). With nothing to render it
+            is a plain outline, so a dead button does not look like the main one. */}
         <Button
           size="sm"
-          className={`bg-foreground text-background hover:bg-foreground/85 ${touch ? "h-11 px-4" : "h-8 px-4"}`}
-          disabled={busy || renderable.spans === null || renderable.spans.length === 0}
+          variant={renderable_ ? "default" : "outline"}
+          className={`${renderable_ ? "bg-foreground text-background hover:bg-foreground/85" : ""} ${touch ? "h-11 px-4" : "h-8 px-4"}`}
+          disabled={busy || !renderable_}
           onClick={() => void render(content)}
         >
           Render
@@ -188,11 +213,16 @@ export function BleepPanel({ transcriptId, editor, content, renderable, padS, co
           </span>
         )}
       </form>
-      <p className="text-xs text-muted-foreground">
-        Playing mutes what a render would mute, each word from {padS} s before it to {padS} s after.
-        {renderable.unrenderable !== null && ` This list cannot be rendered: ${renderable.unrenderable}.`}
-        {found !== null && ` Recall: ${found.recall.replace(/^recall: /, "")}.`}
-      </p>
+      <details className="text-xs text-muted-foreground">
+        <summary className={`w-fit cursor-pointer select-none ${touch ? "py-3" : ""}`} aria-label="How playing and rendering mute">
+          ?
+        </summary>
+        <p className="mt-2">
+          Playing mutes what a render would mute, each word from {padS} s before it to {padS} s after.
+          {renderable.unrenderable !== null && ` This list cannot be rendered: ${renderable.unrenderable}.`}
+          {found !== null && ` ${recallSentence(found.recall)}`}
+        </p>
+      </details>
     </section>
   );
 }

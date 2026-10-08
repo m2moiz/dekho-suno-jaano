@@ -38,8 +38,9 @@ export function BleepDrawer({ open, onOpenChange, returnFocus, children }: Props
       >
         <SheetHeader className="shrink-0 pr-14">
           <SheetTitle>Bleep</SheetTitle>
+          {/* No Cmd+Z where there is no keyboard to press it (critique 7 Oct, P2-7). */}
           <SheetDescription>
-            Words your lists match, muted as a render would mute them. Muting is an edit: Cmd+Z takes it back, and the recording is never changed.
+            Words your lists match. Muting is an edit, so {touch ? "Undo" : "Cmd+Z"} takes it back; the recording is never changed.
           </SheetDescription>
         </SheetHeader>
         {/* The sheet's own close button is 28 px; this one is the 44 px a thumb needs (F15). */}

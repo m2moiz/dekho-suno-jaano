@@ -96,12 +96,21 @@ export function UnsureNav({ reading, model, article }: Props) {
   const quiet = FIELD_ICON_BUTTON;
   return (
     <div role="group" aria-label="Unsure words" className="flex items-center">
+      {/* A switch, so it looks like one: an edge, and a swatch of the tint it
+          paints, hollow while off and filled while on (critique 7 Oct, P2-4).
+          Off by default, as #62 decided. */}
       <Toggle
         pressed={on}
         onPressedChange={setOn}
-        className={`h-11 px-3 ${FIELD_BUTTON}`}
+        className={`h-11 gap-2 border border-field-muted/60 px-3 ${FIELD_BUTTON}`}
       >
-        <span className="tabular-nums">{words.length}</span> unsure
+        <span
+          aria-hidden
+          className={`size-2.5 rounded-full border-2 border-[oklch(0.78_0.09_25)] ${on ? "bg-[oklch(0.78_0.09_25)]" : "bg-transparent"}`}
+        />
+        <span>
+          <span className="tabular-nums">{words.length}</span> unsure
+        </span>
       </Toggle>
       <Button variant="ghost" size="icon" aria-label="Previous unsure word" disabled={words.length === 0} className={quiet} onClick={() => go(-1)}>
         <ChevronLeft aria-hidden />

@@ -192,10 +192,11 @@ test("an Urdu turn is set right to left in Nastaliq, and a mixed line keeps its 
     // Set from the right edge, as Urdu is.
     expect(turn?.rightGap).toBeLessThan(2);
   }
-  // An Urdu turn starts at its right edge, so it gets a narrower measure, 40 to
-  // 45 characters, to bring that start near the margin on the left (owner's
+  // An Urdu turn starts at its right edge, so it gets a narrower measure, about
+  // 45 letters, to bring that start near the margin on the left (owner's
   // ruling, 8 Oct; critique 7 Oct P1-1). An English turn keeps the full one.
-  for (const turn of [urdu, mixed]) expect(turn?.measure).toBeLessThanOrEqual(46);
+  // 30ch of the face's "0" is about 45 Nastaliq letters (transcript.css).
+  for (const turn of [urdu, mixed]) expect(turn?.measure).toBeLessThanOrEqual(31);
   expect(english?.measure ?? 0).toBeGreaterThan(60);
     // The margin sits on the left of every turn, Urdu ones included (Hashiya spec, "The margin").
   for (const turn of shape.turns) expect(turn.marginRight).toBeLessThan(turn.textLeft);
