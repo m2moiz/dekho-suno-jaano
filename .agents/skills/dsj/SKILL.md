@@ -319,6 +319,12 @@ dsj ui --tailnet --print-url
 | `--print-url` | print the URL and serve, without opening a browser |
 | `--tailnet` | also serve it to the owner's own Tailscale devices, and print the phone URL |
 
+dsj 0.5.0 upgrades the library (`library.db`) from version 3 to 5 on first open, keeping
+the old file once as `library.db.v3.bak` beside it and saying so on stderr. dsj 0.4.2
+cannot open a version 5 library: its `dsj ui` will not start and its `dsj suno` runs
+stop being listed. Install 0.5.0 globally (`uv tool install --reinstall` with the bundle
+line from the README) before opening the app from a 0.5.0 checkout.
+
 It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
 on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` request needs
 that token as `Authorization: Bearer <token>`, and a request whose `Host` is not that
@@ -347,8 +353,10 @@ name, `engine`, `model`, `reviewed_against` (the transcript's sha), `made_at`,
 speech, cut off)") and ` [not checked]` on a sentence not checked. They are a person's checked reading of
 the recording: prefer them to the transcript where they exist, and read `complete`
 first, since a key saved part way through marks its unchecked sentences
-`checked: false`; saving a partial key moves a complete one already there to a
-numbered name. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
+`checked: false`. A key already there is never written over: it is moved aside beside
+the new one, named for when it was written (`<name>.reference.20261008T101500Z.json`).
+A sentence checked before the transcript was made again stays checked only if its
+words are unchanged. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
 review itself, and each transcript's edit list (`dsj hatao`'s file, with an optional
 `names` map from speaker label to the name a person gave it), live beside the library in
 `reviews/` and `edits/`.

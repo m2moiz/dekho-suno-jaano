@@ -676,7 +676,9 @@ the transcript JSON are never written to. Edits are saved as you make them, and
 Cmd+Z and Cmd+Shift+Z step through them, up to 1,000, while the page is open.
 If a transcript is made again with the same settings, its old edits no longer
 fit its words: they are kept aside in `edits/`, not applied, and the page says
-so.
+so. A sentence checked in Review stays checked only if its words are still the
+ones it was checked with; the rest are unchecked again, and Review says how
+many.
 
 **Review** (or R) checks a transcript sentence by sentence against its audio.
 Each sentence plays as you arrive on it and sits in an edit box: type what was
@@ -732,7 +734,8 @@ right, or **Back**, to go back. Only a finger or a pen swipes: a mouse drag
 selects words. With a keyboard attached the keys above work on the card too,
 after one tap in the sentence. What is typed in the box is kept in the browser
 until it is saved, so a page the phone closes in the background gives it back
-on reopening.
+on reopening, while the same `dsj ui` is still serving: the browser keeps it
+under the page's address, and each new `dsj ui` serves on another port.
 
 The answer key is a person's checked reading of the recording, to score
 transcription models against. `<name>.reference.json` holds `format:
@@ -744,8 +747,9 @@ and when it was made (`made_at`). `<name>.reference.txt` is one `[m:ss]
 Speaker: words` line a sentence, with its flags after it in words ("(not
 speech, cut off)"). Saving before every sentence is checked asks first; the key
 then marks the sentences that were not checked (` [not checked]` in the text),
-`complete` is false, and a complete key already there is moved to a numbered
-name rather than written over.
+`complete` is false. A key already there, complete or not, is never written
+over: it is moved aside beside the new one, named for when it was written
+(`<name>.reference.20261008T101500Z.json` and `.txt`), and the page names it.
 
 The menu (**⋯**) holds **Bleep**, a drawer listing every word the word lists
 match (the same lists and matcher `dsj hatao` uses) with **Mute all**,
@@ -858,7 +862,15 @@ finishes adds its recording and its transcript to it, in the terminal as in the
 app, so a transcript made with `dsj suno` is listed the next time the app opens.
 That needs no `ui` extra. If the library cannot be written (a newer dsj made
 it, say), the run says so in one line on stderr, keeps the transcript and still
-exits 0. The file is:
+exits 0.
+
+dsj 0.5.0 upgrades the library from version 3 to version 5 the first time it
+opens it, and dsj 0.4.2 cannot open a version 5 library: its `dsj ui` will not
+start, and its `dsj suno` runs are no longer added to the list. So install 0.5.0
+as your global `dsj` (the install line above, with `--reinstall`) before opening
+the app from a 0.5.0 checkout. The upgrade keeps the file as 0.4.2 left it,
+once, beside it as `library.db.v3.bak`, and says so in one line on stderr. The
+file is:
 
 - on a Mac, `~/Library/Application Support/dsj/library.db`
 - elsewhere, `$XDG_DATA_HOME/dsj/library.db` (`~/.local/share/dsj/library.db`)
