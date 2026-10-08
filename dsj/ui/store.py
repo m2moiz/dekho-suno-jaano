@@ -38,6 +38,7 @@ __all__ = [
     "urdu_share_of",
 ]
 
+import contextlib
 import json
 import os
 import re
@@ -394,6 +395,37 @@ def _migrate(db: sqlite3.Connection, version: int) -> int:
     return now
 
 
+def _keep_before_upgrade(db: sqlite3.Connection, path: Path, version: int) -> None:
+    """Copy a library about to be upgraded to `<name>.v<version>.bak` beside it, once; say so.
+
+    An upgrade is one way (#274, final review I3): dsj 0.4.2 reads only
+    version 3, and refuses the library once it is version 5, so `dsj ui` 0.4.2
+    no longer starts and its `dsj suno` runs are not added to the library. The
+    copy is the file as the older dsj left it. Taken through SQLite's own
+    backup, so it is whole even while another process has the file open,
+    written under a temporary name and renamed into place, and never written
+    over: a copy already there is the older one, from the first upgrade tried.
+    """
+    backup = path.with_name(f"{path.name}.v{version}.bak")
+    if not backup.exists():
+        partial = backup.with_name(f".{backup.name}.tmp")
+        with contextlib.closing(sqlite3.connect(partial)) as copy:
+            # Not under BEGIN IMMEDIATE: SQLite refuses a backup from a
+            # connection that is writing, and Python retries it for ever.
+            db.backup(copy)
+            copied = int(copy.execute("PRAGMA user_version").fetchone()[0])
+        if copied != version:
+            # Another process upgraded it in between: this is not the old file.
+            partial.unlink()
+            return
+        partial.replace(backup)
+    print(
+        f"dsj: upgrading the library from version {version} to {SCHEMA_VERSION}, which dsj 0.4 "
+        f"and older cannot open; the version {version} file is kept at {backup}",
+        file=sys.stderr,
+    )
+
+
 def _recording(row: tuple[Any, ...]) -> Recording:
     return Recording(
         id=row[0],
@@ -452,6 +484,8 @@ class Library:
             if version == 0:
                 db.executescript(_SCHEMA)
                 version = SCHEMA_VERSION
+            if version in _MIGRATIONS:
+                _keep_before_upgrade(db, path, version)
             while version in _MIGRATIONS:
                 version = _migrate(db, version)
             if version != SCHEMA_VERSION:

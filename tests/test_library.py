@@ -457,6 +457,58 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
         assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
 
 
+def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Final review I3: dsj 0.4.2 reads only version 3, and refuses the library once it is 5.
+
+    So the file as 0.4.2 left it is kept beside it, once, and the upgrade says so.
+    """
+    media = _wav(tmp_path / "old.wav")
+    with Library.open() as library:
+        rid = library.add_recording(media).id
+    path = store.library_path()
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    capsys.readouterr()
+    with Library.open() as library:
+        assert library.recording(rid) is not None
+    backup = path.with_name(f"{path.name}.v3.bak")
+    with sqlite3.connect(backup) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("SELECT id FROM recordings").fetchall() == [(rid,)]
+    said = capsys.readouterr().err.splitlines()
+    assert len(said) == 1, said
+    assert str(backup) in said[0] and "0.4" in said[0]
+    # Opened again it is version 5: nothing is copied, nothing said.
+    with Library.open():
+        pass
+    assert capsys.readouterr().err == ""
+    assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(path.name)) == [
+        path.name, backup.name,
+    ]
+
+
+def test_a_library_backup_already_there_is_never_written_over(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with Library.open() as library:
+        library.add_recording(_wav(tmp_path / "old.wav"))
+    path = store.library_path()
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    backup = path.with_name(f"{path.name}.v3.bak")
+    backup.write_bytes(b"the first backup")
+    with Library.open():
+        pass
+    assert backup.read_bytes() == b"the first backup"
+    assert str(backup) in capsys.readouterr().err
+
+
 def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
     tmp_path: Path,
 ) -> None:
