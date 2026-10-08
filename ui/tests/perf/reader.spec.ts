@@ -162,9 +162,10 @@ test("switching the unsure-word tint on keeps scroll p95 under 20 ms", async ({ 
   );
   await page.goto(readerUrl(seeded));
   await expect(page.locator("article p")).toHaveCount(SHAPE.turns);
-  const toggle = page.getByRole("button", { name: / unsure$/ });
-  await expect(toggle).toHaveText(`${expected} unsure`);
-  await toggle.click();
+  // The tint's control is a switch named "Unsure words", its count beside it
+  // (fix round 2, critique P2-4); it was a button named "N unsure".
+  await expect(page.getByRole("group", { name: "Unsure words", exact: true })).toHaveText(`Unsure words${expected}`);
+  await page.getByRole("switch", { name: "Unsure words" }).click();
   const tinted = await page.evaluate(async () => {
     await document.fonts.ready;
     return {
