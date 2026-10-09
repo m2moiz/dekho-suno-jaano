@@ -11,10 +11,22 @@ from __future__ import annotations
 
 __all__ = [
     "atomic_write_text",
+    "atomic_write_texts",
 ]
 
 import os
+import uuid
 from pathlib import Path
+
+
+def _temp(path: Path) -> Path:
+    """A temp file beside `path` that no other write, in this process or another, will name.
+
+    The pid alone is not enough: two threads of one server writing the same
+    file at once (a double click on a route the thread pool runs) would share
+    it, and one would rename away the file the other was still writing.
+    """
+    return path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:12]}.tmp")
 
 
 def atomic_write_text(path: Path, text: str, *, fsync: bool = False) -> None:
@@ -32,11 +44,12 @@ def atomic_write_text(path: Path, text: str, *, fsync: bool = False) -> None:
     # is a sibling rather than something under /tmp -- on this machine those
     # are different volumes and the rename would fail with EXDEV.
     #
-    # The pid is in the name so two processes writing the same status path
-    # cannot hand each other a half-built temp file to rename into place.
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # The name is unique to this write (_temp), and "x" refuses to open one
+    # that exists, so two writers can never hand each other a half-built temp
+    # file to rename into place.
+    tmp = _temp(path)
     try:
-        with tmp.open("w", encoding="utf-8") as f:
+        with tmp.open("x", encoding="utf-8") as f:
             f.write(text)
             if fsync:
                 f.flush()
@@ -50,4 +63,31 @@ def atomic_write_text(path: Path, text: str, *, fsync: bool = False) -> None:
         # exactly the case that would otherwise strand a temp file next to the
         # output, where the next run would find it and wonder.
         tmp.unlink(missing_ok=True)
+        raise
+
+
+def atomic_write_texts(files: list[tuple[Path, str]], *, fsync: bool = False) -> None:
+    """Make each path contain its text, writing every one before replacing any.
+
+    For files that are one document in two shapes (an answer key as JSON and
+    as text, dsj/ui/review.py): every temp file is written, and synced with
+    `fsync`, before the first rename, so a failure while writing leaves all of
+    them as they were, and only a crash between the renames, a window of a
+    few system calls, can leave one new beside one old. Two callers writing
+    the same files at once can still interleave their renames: a caller that
+    can be called twice at once holds a lock of its own around this.
+    """
+    temps = [(_temp(path), path) for path, _ in files]
+    try:
+        for (tmp, _), (_, text) in zip(temps, files, strict=True):
+            with tmp.open("x", encoding="utf-8") as f:
+                f.write(text)
+                if fsync:
+                    f.flush()
+                    os.fsync(f.fileno())
+        for tmp, path in temps:
+            os.replace(tmp, path)  # noqa: PTH105  (see atomic_write_text)
+    except BaseException:
+        for tmp, _ in temps:
+            tmp.unlink(missing_ok=True)
         raise

@@ -1,0 +1,504 @@
+"""A transcript's review (Hashiya spec, Review mode, #248), and the answer key it becomes.
+
+A review says which of a transcript's sentences a person has checked against
+the audio, what they flagged, which speaker they set, and where they were. It
+is a document of its own, beside the library in `reviews/`, under the same
+key as the transcript's edit list (dsj/ui/edits.py, edits_path): the
+transcript JSON's path, so a rebuilt library finds it again, and never beside
+the recording. It never holds words: the words are the edit list's, where
+Review's corrections go, so the reader shows them too. A sentence is a span of
+the recording, which every edit keeps (a correction keeps its stretch's ends,
+#83), so the review survives later corrections.
+
+A transcript made again keeps its review (#249): the review names the sha of
+the transcript it was made against, and the page, seeing it differ, keeps the
+checked sentences whose span still matches and whose words still hash as they
+did when checked (`words_hash`, #274), and unchecks the rest.
+
+The answer key is written beside the transcript JSON, as
+`<name>.reference.json` (the sentences with their spans, speakers, final words
+and flags, and the transcript and model they were checked against) and a plain
+`<name>.reference.txt`. Scoring against it is sub-project E.
+
+Plain Python, no fastapi: the routes are dsj/ui/routes/review.py.
+"""
+
+from __future__ import annotations
+
+__all__ = [
+    "NO_REVIEW",
+    "InvalidReview",
+    "ReviewChanged",
+    "ReviewIncomplete",
+    "patch_review",
+    "progress",
+    "read_review",
+    "reference",
+    "review_path",
+    "review_sha",
+    "save_review",
+]
+
+import hashlib
+import json
+import logging
+import math
+import threading
+from bisect import bisect_right
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
+
+from dsj import hatao
+from dsj.atomic import atomic_write_text, atomic_write_texts
+from dsj.suno import clock
+from dsj.ui import edits
+from dsj.ui.edits import NoSuchTranscript, TranscriptChanged, edits_path, transcript_sha
+from dsj.ui.schemas import (
+    ReferenceWritten,
+    ReviewCorrection,
+    ReviewDocument,
+    ReviewPass,
+    ReviewSegment,
+)
+from dsj.ui.store import Library, Transcript, library_path
+
+_log = logging.getLogger(__name__)
+
+# Half a millisecond: dsj/hatao.py rounds times to the millisecond.
+EPS = 0.0005
+
+# How the plain answer key says each flag.
+_FLAG_WORDS = {
+    "unclear": "can't make it out",
+    "not_speech": "not speech",
+    "overlap": "overlapping talk",
+    "cut_off": "cut off",
+}
+
+
+# One lock per transcript, held while its answer key is written: two writes at
+# once (a double click; the routes run on a thread pool) would interleave their
+# renames into a JSON from one and a text from the other, or both move the
+# same earlier key aside. Per transcript, so a slow write to one Google Drive
+# folder does not hold up another transcript's.
+_KEY_LOCKS: dict[int, threading.Lock] = {}
+_KEY_LOCKS_GUARD = threading.Lock()
+
+
+def _key_lock(transcript_id: int) -> threading.Lock:
+    with _KEY_LOCKS_GUARD:
+        return _KEY_LOCKS.setdefault(transcript_id, threading.Lock())
+
+
+class InvalidReview(ValueError):
+    """A review document that is broken. The message names the segment and what is wrong."""
+
+
+class ReviewIncomplete(ValueError):
+    """An answer key asked for while sentences are unchecked, without allow_partial."""
+
+
+class ReviewChanged(RuntimeError):
+    """A patch was made against a review the server no longer holds: it changed elsewhere (#251)."""
+
+
+def review_sha(document: ReviewDocument) -> str:
+    """The sha256 of a review as the server holds it: of its JSON, as it is written (#251).
+
+    The file is `model_dump_json()`'s text, and a review read back dumps to
+    the same text, so a patch can name the review it was made against.
+    """
+    return hashlib.sha256(document.model_dump_json().encode()).hexdigest()
+
+
+def review_path(json_path: Path) -> Path:
+    """Where the review of the transcript at `json_path` is kept."""
+    return library_path().parent / "reviews" / edits_path(json_path).name
+
+
+def progress(json_path: Path) -> tuple[int, int] | None:
+    """How many of the review's sentences are checked, and how many it has; None with no review.
+
+    A review file that cannot be read is logged and left out of the list: the
+    library still lists every recording, and opening the review says what is
+    wrong with it.
+    """
+    path = review_path(json_path)
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        segments = cast("list[dict[str, Any]]", raw["segments"])
+        checked = sum(1 for s in segments if s.get("state") == "checked")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        _log.warning("the review at %s could not be read for the library list: %s", path, exc)
+        return None
+    return checked, len(segments)
+
+
+def _transcript(transcript_id: int) -> Transcript:
+    """The library's row for the transcript, whose JSON file is where the row says."""
+    with Library.open() as library:
+        found = library.transcript(transcript_id)
+    if found is None:
+        raise NoSuchTranscript(f"There is no transcript {transcript_id} in the library.")
+    if not found.json_path.is_file():
+        raise NoSuchTranscript(
+            f"Transcript {transcript_id} was last seen at {found.json_path}, and that file is "
+            f"gone. The library is only an index; the JSON file is the transcript."
+        )
+    return found
+
+
+def read_review(transcript_id: int) -> tuple[ReviewDocument | None, str]:
+    """The transcript's review, or None, and the sha of the transcript as it is now.
+
+    The transcript is hashed before WRITING is taken (it may be a Google Drive
+    download); the review, a small file beside the library, is read under it,
+    where the library says the transcript is now.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        InvalidReview: the saved review cannot be read, named.
+    """
+    digest = transcript_sha(_transcript(transcript_id).json_path)
+    with edits.WRITING:
+        path = review_path(_transcript(transcript_id).json_path)
+        raw = path.read_text(encoding="utf-8") if path.is_file() else None
+    if raw is None:
+        return None, digest
+    try:
+        return ReviewDocument.model_validate_json(raw), digest
+    except ValueError as exc:
+        raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
+
+
+def _check(document: ReviewDocument) -> None:
+    """Raise naming the first segment that is not a span after the one before it."""
+    if not math.isfinite(document.cursor_s):
+        raise InvalidReview(f"cursor_s is {document.cursor_s}; it must be a number of seconds")
+    reached = 0.0
+    for index, segment in enumerate(document.segments):
+        finite = math.isfinite(segment.start) and math.isfinite(segment.end)
+        if not (finite and 0 <= segment.start < segment.end):
+            raise InvalidReview(
+                f"segment {index} runs from {segment.start} to {segment.end} s; it must "
+                f"start at 0 or later and end after it starts"
+            )
+        if segment.start < reached - EPS:
+            raise InvalidReview(
+                f"segment {index} starts at {segment.start} s, inside the segment before it, which "
+                f"ends at {reached} s"
+            )
+        reached = segment.end
+
+
+# What `save_review`'s `replacing` says when the page saw no review at all.
+NO_REVIEW = "none"
+
+
+def save_review(
+    transcript_id: int, document: ReviewDocument, *, replacing: str | None = None
+) -> ReviewDocument:
+    """Save the page's review in place of the last one, whole or not at all.
+
+    Under the lock edit-list saves take, so it is never written under a
+    transcript's name while a run is moving that transcript's files to another
+    (dsj/ui/jobs.py, keep_earlier_roman_run).
+
+    `replacing` names the review this one replaces: its sha, or NO_REVIEW
+    when the page saw none. A tab that opened Review before any review
+    existed must not write over one another tab or device made since, with
+    its checks (#251 fix round 1, I2). None replaces whatever is there, for
+    callers other than the page.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        InvalidReview: a segment is broken, named, or the saved review cannot
+            be read to compare; nothing is written.
+        ReviewChanged: the review on disk is not the one `replacing` names.
+    """
+    _check(document)
+    with edits.WRITING:
+        path = review_path(_transcript(transcript_id).json_path)
+        if replacing is not None:
+            held = _held_sha(path)
+            if (held or NO_REVIEW) != replacing:
+                raise ReviewChanged(
+                    "This review was changed in another tab or window after this page loaded "
+                    "it, so this page's review was not saved over it. Reload the page to "
+                    "load it again."
+                )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, document.model_dump_json(), fsync=True)
+    return document
+
+
+def _held_sha(path: Path) -> str | None:
+    """The sha of the review saved at `path`, or None when there is none. Under WRITING."""
+    if not path.is_file():
+        return None
+    try:
+        return review_sha(ReviewDocument.model_validate_json(path.read_text(encoding="utf-8")))
+    except ValueError as exc:
+        raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
+
+
+def patch_review(
+    transcript_id: int,
+    *,
+    sha: str,
+    against: str,
+    start: int,
+    delete: int,
+    insert: Sequence[ReviewSegment],
+    corrections: Sequence[ReviewCorrection],
+    review_pass: ReviewPass,
+    cursor_s: float,
+) -> ReviewDocument:
+    """Put `insert` in place of `delete` segments at `start` of the review whose sha is `against`.
+
+    One change, not the whole review (#251): the segments spliced, the
+    corrections appended, the pass and the cursor set, `updated_at` now, and
+    `transcript_sha` the page's `sha`, which must be the transcript's as it is.
+    Checked as `save_review` checks a review and written as it writes one,
+    under the same lock, so two patches made against the same review cannot
+    both apply: the second finds it changed and is refused. The transcript is
+    hashed before the lock is taken, as `read_review` hashes it.
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        TranscriptChanged: the transcript was made again since the page loaded the review.
+        ReviewChanged: there is no saved review, or it is not the one the patch was made against.
+        InvalidReview: `start` and `delete` reach outside the segments, the
+            saved review cannot be read, or the result is broken, named;
+            nothing is written.
+    """
+    if transcript_sha(_transcript(transcript_id).json_path) != sha:
+        raise TranscriptChanged(
+            "This transcript was made again while its review was open, so this change is to "
+            "sentences it may no longer have. Reload the page to review the new transcript."
+        )
+    with edits.WRITING:
+        path = review_path(_transcript(transcript_id).json_path)
+        raw = path.read_text(encoding="utf-8") if path.is_file() else None
+        if raw is None:
+            raise ReviewChanged(
+                "There is no saved review for this change to go into, so it was not saved. "
+                "Reload the page to load the review again."
+            )
+        try:
+            held = ReviewDocument.model_validate_json(raw)
+        except ValueError as exc:
+            raise InvalidReview(f"The review at {path} cannot be read: {exc}") from exc
+        if review_sha(held) != against:
+            raise ReviewChanged(
+                "This review was changed in another tab or window after this page loaded it, "
+                "so this change was not saved. Reload the page to load it again."
+            )
+        size = len(held.segments)
+        if not (0 <= start <= size and 0 <= delete <= size - start):
+            raise InvalidReview(
+                f"the change replaces segments from start {start}, delete {delete}, of {size}; "
+                f"it must lie inside the review"
+            )
+        document = ReviewDocument(
+            version=1,
+            transcript_sha=sha,
+            review_pass=review_pass,
+            cursor_s=cursor_s,
+            started_at=held.started_at,
+            updated_at=datetime.now(UTC).isoformat(timespec="milliseconds"),
+            segments=[*held.segments[:start], *insert, *held.segments[start + delete :]],
+            corrections=[*held.corrections, *corrections],
+        )
+        _check(document)
+        atomic_write_text(path, document.model_dump_json(), fsync=True)
+    return document
+
+
+def _segment_of(entry: hatao.Item, segments: Sequence[ReviewSegment], ends: list[float]) -> int:
+    """The segment a word belongs to: the one it overlaps most, else the nearest one.
+
+    So every word lands in exactly one segment, whatever its times: a word that
+    starts a little before its sentence's span still belongs to that sentence.
+    """
+    a, b = entry.source_start, entry.source_end
+    first = bisect_right(ends, a + EPS)  # the first segment ending after the word starts
+    best, most = -1, 0.0
+    k = first
+    while k < len(segments) and segments[k].start < b - EPS:
+        overlap = min(b, segments[k].end) - max(a, segments[k].start)
+        if overlap > most:
+            best, most = k, overlap
+        k += 1
+    if best >= 0:
+        return best
+
+    def gap(k: int) -> float:
+        return max(segments[k].start - b, a - segments[k].end, 0.0)
+
+    return min((k for k in (first - 1, first) if 0 <= k < len(segments)), key=gap)
+
+
+def _texts(
+    content: Sequence[hatao.Entry], segments: Sequence[ReviewSegment]
+) -> list[tuple[str, str | None]]:
+    """Each segment's words, in the list's order, and the label of who says its first word.
+
+    Each word is placed by a binary search over the segments' ends, so a 2.5 h
+    call's 1,500 sentences cost a few comparisons a word.
+    """
+    out: list[tuple[str, str | None]] = [("", None) for _ in segments]
+    if not segments:
+        return out
+    started = [False] * len(segments)
+    ends = [s.end for s in segments]
+    speaker: str | None = None
+    for entry in content:
+        if isinstance(entry, hatao.Paragraph):
+            speaker = entry.speaker
+            continue
+        if not entry.text:
+            continue
+        k = _segment_of(entry, segments, ends)
+        text, who = out[k]
+        out[k] = (text + entry.text, who if started[k] else speaker)
+        started[k] = True
+    return out
+
+
+def _plain(segments: list[dict[str, Any]]) -> str:
+    """The answer key as text: one line a sentence, `[m:ss] Name: words (flags)`."""
+    lines: list[str] = []
+    for s in segments:
+        who = f"{s['speaker']}: " if s["speaker"] else ""
+        flags = cast("list[str]", s["flags"])
+        said = f" ({', '.join(_FLAG_WORDS[f] for f in flags)})" if flags else ""
+        unchecked = "" if s["checked"] else " [not checked]"
+        lines.append(f"[{clock(float(s['start']))}] {who}{s['text']}{said}{unchecked}")
+    return "\n".join(lines) + "\n"
+
+
+_MADE_AGAIN = (
+    "The transcript was made again after this review was checked, so its checks are of "
+    "words the transcript no longer has. Open Review, which re-checks the sentences by their "
+    "span and words and says how many need checking again, then save the answer key."
+)
+
+
+def _keep_earlier(as_json: Path, as_text: Path) -> list[str]:
+    """Move the earlier answer key aside, beside it, named for when it was written; its names.
+
+    A key is never written over (#274, ruling R7): before #274 only a complete
+    key was kept from a partial one, and a later complete key went straight
+    over an earlier one, which a transcript made again could fill with machine
+    words marked checked. The name carries the earlier key's own time, from
+    its JSON's modification time, and the next free number when two share a
+    second, so `<name>.reference.20261008T101500Z.json` sorts by age beside it.
+    """
+    if not (as_json.is_file() or as_text.is_file()):
+        return []
+    held = as_json if as_json.is_file() else as_text
+    stamp = datetime.fromtimestamp(held.stat().st_mtime, UTC).strftime("%Y%m%dT%H%M%SZ")
+    stem = f"{as_json.name.removesuffix('.json')}.{stamp}"
+    aside, n = stem, 1
+    while as_json.with_name(f"{aside}.json").exists() or as_text.with_name(f"{aside}.txt").exists():
+        n += 1
+        aside = f"{stem}-{n}"
+    kept: list[str] = []
+    for path, suffix in ((as_json, ".json"), (as_text, ".txt")):
+        if path.is_file():
+            path.replace(path.with_name(f"{aside}{suffix}"))
+            kept.append(f"{aside}{suffix}")
+    _log.warning("kept the earlier answer key as %s", ", ".join(kept))
+    return kept
+
+
+def reference(transcript_id: int, *, allow_partial: bool = False) -> ReferenceWritten:
+    """Write the review as the transcript's answer key, beside the transcript JSON.
+
+    Refused, before the edit list is opened, when the review was checked
+    against a transcript since made again: its checks vouch for other words,
+    and `allow_partial` does not change that. A key never writes over an
+    earlier one: that is moved aside beside it, named for when it was written
+    (#274). The JSON and the text are written together
+    (dsj.atomic.atomic_write_texts).
+
+    Raises:
+        NoSuchTranscript: no such transcript, or its JSON file is gone.
+        InvalidReview: the saved review cannot be read, named.
+        dsj.ui.edits.TranscriptChanged: the review was checked against an
+            earlier version of the transcript.
+        ReviewIncomplete: there is no review, or sentences are unchecked and
+            `allow_partial` is not set; it says how many.
+    """
+    document, digest = read_review(transcript_id)
+    if document is None:
+        raise ReviewIncomplete(
+            "This transcript has no review yet. Open Review, check its sentences, then save "
+            "the answer key."
+        )
+    if document.transcript_sha != digest:
+        raise TranscriptChanged(_MADE_AGAIN)
+    total = len(document.segments)
+    unchecked = sum(1 for s in document.segments if s.state != "checked")
+    if unchecked and not allow_partial:
+        raise ReviewIncomplete(
+            f"{unchecked} of {total} sentences are not checked yet. Finish the pass, or save "
+            f"a partial answer key, which says it is partial."
+        )
+    opened = edits.open_edits(transcript_id)
+    if opened.transcript_sha != document.transcript_sha:
+        # Made again in the moment between the two reads.
+        raise TranscriptChanged(_MADE_AGAIN)
+    labels = edits.labels_of(opened)
+    segments = [
+        {
+            "start": s.start,
+            "end": s.end,
+            "speaker": edits.display_name(who, labels, opened.doc.names),
+            "label": who,
+            "text": text.strip(),
+            "flags": list(s.flags),
+            "checked": s.state == "checked",
+        }
+        for s, (text, who) in zip(
+            document.segments, _texts(opened.doc.content, document.segments), strict=True
+        )
+    ]
+    with _key_lock(transcript_id):
+        return _write_key(transcript_id, document, segments, unchecked)
+
+
+def _write_key(
+    transcript_id: int, document: ReviewDocument, segments: list[dict[str, Any]], unchecked: int
+) -> ReferenceWritten:
+    """Write the answer key beside the transcript, where the library says it is now.
+
+    Held under the transcript's key lock. The row is read again here, so a key
+    lands beside the transcript even when a run moved it while the key was
+    being made.
+    """
+    row = _transcript(transcript_id)
+    key = {
+        "format": "dsj-reference",
+        "version": 1,
+        "transcript": row.json_path.name,
+        "engine": row.engine,
+        "model": row.model,
+        "reviewed_against": document.transcript_sha,
+        "made_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "complete": unchecked == 0,
+        "segments": segments,
+    }
+    as_json = row.json_path.with_name(f"{row.json_path.stem}.reference.json")
+    as_text = row.json_path.with_name(f"{row.json_path.stem}.reference.txt")
+    kept = _keep_earlier(as_json, as_text)
+    text = json.dumps(key, ensure_ascii=False, indent=1)
+    atomic_write_texts([(as_json, text), (as_text, _plain(segments))], fsync=True)
+    return ReferenceWritten(
+        files=[as_json.name, as_text.name], segments=len(segments), unchecked=unchecked, kept=kept
+    )

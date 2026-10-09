@@ -324,7 +324,9 @@ def test_a_run_started_from_the_app_fills_every_column(tmp_path: Path, library: 
     assert None not in (vars(transcript) | {"last_edited_at": "never"}).values()
     # `unreadable` is the one column whose None is the good answer: ffprobe read it.
     assert recording.unreadable is None
-    assert None not in (vars(recording) | {"unreadable": "read"}).values()
+    # `title` is None until a person types one in the app (#245).
+    assert recording.title is None
+    assert None not in (vars(recording) | {"unreadable": "read", "title": "set"}).values()
 
 
 def test_adopting_again_keeps_what_the_run_recorded_and_reads_new_marks(
@@ -434,3 +436,126 @@ def test_a_library_written_by_a_newer_dsj_is_refused(private_library: Path) -> N
         con.execute(f"PRAGMA user_version = {store.SCHEMA_VERSION + 1}")
     with pytest.raises(LibraryError, match="Upgrade dsj"):
         Library.open()
+
+
+def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
+    tmp_path: Path,
+) -> None:
+    """Schema 4 adds recordings.title, 5 transcripts.urdu_share (#245)."""
+    media = _wav(tmp_path / "old.wav")
+    with Library.open() as library:
+        rid = library.add_recording(media).id
+    with sqlite3.connect(store.library_path()) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    with Library.open() as library:
+        found = library.recording(rid)
+        assert found is not None and found.title is None
+        assert library.set_title(rid, "Kept").title == "Kept"
+    with sqlite3.connect(store.library_path()) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+
+
+def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Final review I3: dsj 0.4.2 reads only version 3, and refuses the library once it is 5.
+
+    So the file as 0.4.2 left it is kept beside it, once, and the upgrade says so.
+    """
+    media = _wav(tmp_path / "old.wav")
+    with Library.open() as library:
+        rid = library.add_recording(media).id
+    path = store.library_path()
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    capsys.readouterr()
+    with Library.open() as library:
+        assert library.recording(rid) is not None
+    backup = path.with_name(f"{path.name}.v3.bak")
+    with sqlite3.connect(backup) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("SELECT id FROM recordings").fetchall() == [(rid,)]
+    said = capsys.readouterr().err.splitlines()
+    assert len(said) == 1, said
+    assert str(backup) in said[0] and "0.4" in said[0]
+    # Opened again it is version 5: nothing is copied, nothing said.
+    with Library.open():
+        pass
+    assert capsys.readouterr().err == ""
+    assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(path.name)) == [
+        path.name, backup.name,
+    ]
+
+
+def test_a_library_backup_already_there_is_never_written_over(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with Library.open() as library:
+        library.add_recording(_wav(tmp_path / "old.wav"))
+    path = store.library_path()
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    backup = path.with_name(f"{path.name}.v3.bak")
+    backup.write_bytes(b"the first backup")
+    with Library.open():
+        pass
+    assert backup.read_bytes() == b"the first backup"
+    assert str(backup) in capsys.readouterr().err
+
+
+def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
+    tmp_path: Path,
+) -> None:
+    """A library the first step of this change wrote: it has titles, not script shares (#245)."""
+    audio = _wav(tmp_path / "old.wav")
+    arabic = _transcript(
+        tmp_path / "old.json", audio,
+        sentences=[{"start": 0.0, "end": 1.0, "tokens": [], "text": " آج صبح ہم نے دیکھا"}],
+    )
+    with Library.open() as library:
+        assert not library.adopt([arabic]).refused
+        rid = library.recordings()[0].id
+        library.set_title(rid, "Kept")
+    before = _rows(store.library_path())
+    with sqlite3.connect(store.library_path()) as con:
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 4")
+    with Library.open() as library:
+        found = library.recording(rid)
+        assert found is not None and found.title == "Kept"
+        (row,) = library.transcripts(rid)
+        assert row.urdu_share is None
+        assert library.backfill_urdu_share() == 1
+        assert library.backfill_urdu_share() == 0
+        (row,) = library.transcripts(rid)
+        assert row.urdu_share == 1.0
+    after = _rows(store.library_path())
+    # Every row survives, and the one new column is the only difference.
+    assert after["recordings"] == before["recordings"]
+    assert [r[:-1] for r in after["transcripts"]] == [r[:-1] for r in before["transcripts"]]
+    with sqlite3.connect(store.library_path()) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+
+
+def test_a_new_transcript_row_carries_its_script_share(tmp_path: Path) -> None:
+    audio = _wav(tmp_path / "mix.wav")
+    mixed = _transcript(
+        tmp_path / "mix.json", audio,
+        sentences=[{"start": 0.0, "end": 1.0, "tokens": [], "text": " آج ab"}],
+    )
+    with Library.open() as library:
+        assert not library.adopt([mixed]).refused
+        rid = library.recordings()[0].id
+        (row,) = library.transcripts(rid)
+    assert row.urdu_share == 0.5
+
+
+def test_a_title_for_a_recording_the_library_lacks_is_refused(library: Library) -> None:
+    with pytest.raises(LibraryError, match="no recording with id 7"):
+        library.set_title(7, "x")

@@ -1,43 +1,215 @@
-/* The transcript as something to read for forty minutes (#58, #57 section 11.1).
+/* The transcript as something to read for forty minutes (#58, #57 section 11.1),
+ * in the Hashiya world (spec, Type).
  *
- * Literata for the words and the system face for everything else, a 68
- * character measure, 1.7 leading, 1.25em between speaker turns, ragged right
- * and never justified. Only the normal-width weight axis is imported: 7 files,
- * 176 KB, and the browser fetches just the scripts on the page.
+ * Literata for English, Noto Nastaliq Urdu for Urdu at 1.3x and 2.1 leading
+ * (Nastaliq's stacked joins need the room), the system face for everything
+ * else. A 68 character measure, ragged and never justified. Both faces are
+ * bundled: only their weight axis, and the browser fetches just the scripts
+ * on the page (Nastaliq's Arabic file is 239.06 kB as `uv run just ui-build`
+ * lists it, fetched only when a word in Urdu script is drawn).
+ *
+ * Each paragraph takes its direction from its own first letter (`dir="auto"`
+ * and `unicode-bidi: plaintext`), so an Urdu turn reads right to left with
+ * the English words and numbers inside it in their own order, and aligns to
+ * its start: the right edge for Urdu, the left for English.
  */
 @import "@fontsource-variable/literata/wght.css";
+@import "@fontsource-variable/noto-nastaliq-urdu/wght.css";
 
 .transcript {
-  max-width: 68ch;
-  font-family: "Literata Variable", Georgia, serif;
+  font-family: var(--font-reading);
   font-size: 1.125rem;
   line-height: 1.7;
-  text-align: left;
+  text-align: start;
   hyphens: manual;
+  /* The block, margin and column, centred under the bar on a laptop: it hugged
+     the left, 87 px off centre at 1440 (critique 7 Oct round 2, P2-7). The
+     sum is the turn's grid below. */
+  max-inline-size: calc(9.5rem + 1.75rem + 68ch);
+  margin-inline: auto;
 }
 
-.transcript section + section {
-  margin-top: 1.25em;
-}
-
-.transcript h2 {
-  font: 500 0.8125rem/1.4 system-ui, sans-serif;
-  color: var(--muted-foreground);
+.transcript .turns {
+  list-style: none;
   margin: 0;
+  padding: 0;
+}
+
+/* The margin (Hashiya spec, "Signature move: the margin"): who and when, on
+   the left for Urdu and English turns alike, so the eye finds them in one
+   place. The grid runs left to right whatever the paragraph's direction; the
+   paragraph sets its own. The text column is the 68 character measure. */
+.transcript .turn {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 68ch);
+  column-gap: 1.75rem;
+  direction: ltr;
+}
+
+.transcript .turn + .turn {
+  margin-top: 1.4em;
+}
+
+.transcript .margin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.45em;
+  font: 500 0.8125rem/1.35 var(--font-sans);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript .nameplate {
+  max-width: 100%;
+  color: var(--speaker, var(--muted-foreground));
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* The nameplate a person can rename (Nameplate.tsx, #243): the Button and
+   Input primitives with their box taken off, so it reads as the speaker's
+   name in their colour, and only the hover wash and the focus ring say it
+   can be pressed. Unlayered, so it outranks the primitives' utilities. */
+.transcript .margin .nameplate {
+  height: auto;
+  margin-inline: -0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  font: inherit;
+  font-weight: 650;
+}
+
+/* No border: the focus ring is an outline (index.css), and the primitive's
+   transparent 1 px edge pushed every turn 2 px apart and the name 1 px in. */
+.transcript .margin button.nameplate {
+  border-width: 0;
+  justify-content: flex-start;
+  text-align: start;
+  white-space: normal;
+  cursor: text;
+}
+
+/* A wash of the speaker's own colour: the primitive's grey hover hardly showed
+   on the page (t5 screenshots, light). */
+.transcript .margin button.nameplate:hover {
+  background: color-mix(in oklch, var(--speaker, var(--muted-foreground)) 20%, transparent);
+}
+
+/* A 44 px target where the touch layouts take over (lib/media.ts TOUCH), in
+   both directions: a short name such as "Al" is a narrow word (Task 5 review). */
+@media (pointer: coarse), (max-width: 767px) {
+  .transcript .margin .nameplate {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* How long the turn lasted, to scale: a minute fills the margin. */
+.transcript .tick {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  inline-size: max(3px, var(--tick, 0%));
+  /* Full strength: each speaker's ink is 4.5:1 on the ground (palette.test.ts),
+     so the tick is past the 3:1 a mark needs; at 0.55 it was not (critique
+     7 Oct round 2, P2-5). */
+  background: var(--speaker, var(--muted-foreground));
+}
+
+/* Review's mark (Task 13 fills it): green only for checked (spec, "green is
+   checked"), the margin's own grey for flagged. */
+.transcript .review {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+}
+
+.transcript .review > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.transcript .review .checked {
+  color: var(--checked);
+}
+
+.transcript .correction {
+  max-width: 100%;
+  font: 400 0.875rem/1.4 var(--font-reading);
+  overflow-wrap: anywhere;
+}
+
+.transcript .correction del {
+  color: var(--correction);
+  text-decoration-thickness: 1.5px;
+}
+
+/* The phone: the margin folds into one slim line above the turn. */
+@media (max-width: 767px) {
+  .transcript .turn {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .transcript .margin {
+    flex-flow: row wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    padding: 0 0 0.2rem;
+  }
+
+  .transcript .tick {
+    inline-size: calc(max(3px, var(--tick, 0%)) * 0.6);
+  }
 }
 
 .transcript p {
   margin: 0;
+  unicode-bidi: plaintext;
+  text-align: start;
   /* Every word is a seek target (#60). */
   cursor: pointer;
 }
 
+.transcript p:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.3em;
+  line-height: 2.1;
+  /* An Urdu line starts at its right edge, a whole measure from the margin on
+     the left, and the eye jumped that far on every turn (critique 7 Oct, P1-1).
+     The margin stays on the left for every turn (owner's ruling, 8 Oct); a
+     right-to-left turn takes a narrower measure of about 40 Urdu letters, so
+     its start sits near the margin. Nastaliq at this size runs about 9 px a
+     letter against 13.6 px for the face's "0" (measured on the Task 16
+     round 1 shots, reader-urdu 1440x900), so that is 27ch here; 42ch held
+     about 63 letters. The box keeps to the start of the left-to-right grid,
+     so it narrows from the right. */
+  max-inline-size: 27ch;
+  /* A long unbroken token (a link, a path) breaks rather than running out of
+     the narrow measure into the margin (fix round 1 review, M4). */
+  overflow-wrap: anywhere;
+}
+
+/* A right-to-left turn's text is ragged on its left, so the gap there carries
+   no alignment: closed up, its start comes nearer the nameplate (critique 7 Oct
+   round 2, P2-7). Measured nameplate end to Urdu start at 1440: 518 px before
+   this round, tests/e2e/reader.spec.ts prints it after. */
+.transcript .turn:has(p:lang(ur)) {
+  column-gap: 0.5rem;
+}
+
 /* The word being said (#60). A background only: ::highlight() takes colour,
  * background and decoration, never border-radius or padding (#57 section 7).
- * Amber, light enough in light mode and dark enough in dark mode that the
- * body text on it keeps its contrast. */
+ * Hashiya gold, light enough in light mode and dark enough in dark mode that
+ * the body text on it keeps 4.5:1 (confidence.test.tsx measures it). Literal
+ * values, not var(--playhead): custom properties inside ::highlight() are
+ * not resolved in every engine this app supports. palette.test.ts holds these
+ * two literals equal to --playhead. */
 ::highlight(dsj-playhead) {
-  background-color: light-dark(oklch(0.9 0.12 85), oklch(0.42 0.09 75));
+  background-color: light-dark(#ebd9a6, #5c4a1c);
   color: var(--foreground);
 }
 
@@ -57,4 +229,12 @@
   color: var(--muted-foreground);
   text-decoration: line-through 2px;
   background-color: light-dark(oklch(0.93 0.01 260), oklch(0.3 0.01 260));
+}
+
+/* Words a person corrected (#83): a thin red underline, the margin's red. */
+::highlight(dsj-corrected) {
+  text-decoration-line: underline;
+  text-decoration-color: light-dark(#b8402a, #e5806a);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.3em;
 }

@@ -55,12 +55,27 @@ export function copyText(e: AppError): string {
 /** A failed API reply, thrown, so a caller's catch hands the dialog the server's words. */
 export class ApiError extends Error {
   readonly detail: AppError;
+  /** The reply's HTTP status, where the caller passed it: a save tells a 500 from a refusal by it. */
+  readonly status: number | null;
 
-  constructor(detail: AppError) {
+  constructor(detail: AppError, status: number | null = null) {
     super(detail.message);
     this.name = detail.error;
     this.detail = detail;
+    this.status = status;
   }
+}
+
+/**
+ * Whether a save that threw may have been applied all the same (#251 fix
+ * round 1, I1): its answer never came (the network dropped it), or the server
+ * failed after writing (a 5xx), or it was refused as made against a document
+ * changed since, which is what a save applied with its answer lost looks like
+ * to the next one. `changed` is that refusal's name.
+ */
+export function inDoubt(thrown: unknown, changed: string): boolean {
+  if (!(thrown instanceof ApiError)) return true;
+  return thrown.detail.error === changed || (thrown.status ?? 0) >= 500;
 }
 
 // The error the dialog is showing, if any: module state, not React state, so

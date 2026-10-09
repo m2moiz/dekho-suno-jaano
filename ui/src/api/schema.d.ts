@@ -50,6 +50,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recordings/{recording_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Retitle
+         * @description Give a recording a title of its own, or take it away with an empty one (#245).
+         */
+        patch: operations["retitle_api_recordings__recording_id__patch"];
+        trace?: never;
+    };
     "/api/recordings/{recording_id}/relink": {
         parameters: {
             query?: never;
@@ -292,6 +312,10 @@ export interface paths {
          *     A transcript without word end times (before v0.2.0, or a `dsj parho`
          *     import) has none, and is answered 422 with the reason: it still reads,
          *     but cannot be edited without guessing where each word stops.
+         *
+         *     This is the page's own read of the list, so it is the one that hands on,
+         *     and clears, the sentence saying a list was put aside because the
+         *     transcript was made again (#249), whichever route put it aside.
          */
         get: operations["read_edits_api_transcripts__transcript_id__edits_get"];
         /**
@@ -299,6 +323,59 @@ export interface paths {
          * @description Save the page's edit list in place of the last one, or refuse it whole, naming the entry.
          */
         put: operations["save_edits_api_transcripts__transcript_id__edits_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Edits
+         * @description Save one change to the edit list, made against the list `list_sha` names (#251).
+         *
+         *     The answer is the new list's sha and what a render would mute, never the
+         *     entries: on a 2.5 h transcript those were 3.5 MB each way per correction.
+         */
+        patch: operations["patch_edits_api_transcripts__transcript_id__edits_patch"];
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Names
+         * @description Save the speakers' names in the transcript's edit list, the words untouched (#243).
+         *
+         *     Made against the list `list_sha` names, as a patch is (#274): a rename is
+         *     a change to the list, and the page takes the sha it answers as its own.
+         */
+        put: operations["save_names_api_transcripts__transcript_id__names_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/export/{fmt}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export
+         * @description The transcript as edited, as SRT, WebVTT or plain text, by dsj likho's own writers (#244).
+         *
+         *     A download, by the transcript's id: nothing is written on this machine,
+         *     and no path reaches the page (#112 rule 5).
+         */
+        get: operations["export_api_transcripts__transcript_id__export__fmt__get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -345,6 +422,59 @@ export interface paths {
          *     A spelling some list already has is not written again; its entry is the answer.
          */
         post: operations["add_word_api_words_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Review
+         * @description The transcript's review, or none, and the sha of the transcript as it is now.
+         */
+        get: operations["read_review_api_transcripts__transcript_id__review_get"];
+        /**
+         * Save Review
+         * @description Save the page's review in place of the last one, or refuse it whole, naming the segment.
+         *
+         *     `review_sha` is the sha of the review this replaces, or "none" when the
+         *     page saw no review: anything else on disk is refused 409 ReviewChanged
+         *     (#251 fix round 1). Left out, the review is saved over whatever is there.
+         *     The answer is its sha, not the review sent back: the page already has it (#251).
+         */
+        put: operations["save_review_api_transcripts__transcript_id__review_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Review
+         * @description Save one change to the review, made against the review `review_sha` names (#251).
+         */
+        patch: operations["patch_review_api_transcripts__transcript_id__review_patch"];
+        trace?: never;
+    };
+    "/api/transcripts/{transcript_id}/reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write Reference
+         * @description Write the answer key beside the transcript; refused while unchecked, unless allow_partial.
+         */
+        post: operations["write_reference_api_transcripts__transcript_id__reference_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -406,10 +536,57 @@ export interface components {
         Edits: {
             /** Content */
             content: components["schemas"]["EditEntry"][];
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
             /** Pad S */
             pad_s: number;
             /** Edited At */
             edited_at: string | null;
+            /** Spans */
+            spans: [
+                number,
+                number
+            ][] | null;
+            /** Unrenderable */
+            unrenderable: string | null;
+            /** Replaced */
+            replaced: string | null;
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
+        };
+        /**
+         * EditsPatch
+         * @description One change to the edit list (#251): `delete` entries at `start` replaced by `insert`.
+         *
+         *     Made against the list whose sha is `list_sha`, so two patches made against
+         *     the same list never both apply. A 2.5 h transcript's whole list is about
+         *     3.5 MB; one correction's patch is a few entries.
+         */
+        EditsPatch: {
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
+            /** Start */
+            start: number;
+            /** Delete */
+            delete: number;
+            /** Insert */
+            insert: components["schemas"]["EditEntry"][];
+        };
+        /**
+         * EditsSaved
+         * @description What a patch answers: the list's new sha and what a render would mute, never the entries.
+         */
+        EditsSaved: {
+            /** List Sha */
+            list_sha: string;
+            /** Edited At */
+            edited_at: string;
             /** Spans */
             spans: [
                 number,
@@ -425,6 +602,8 @@ export interface components {
         EditsUpdate: {
             /** Content */
             content: components["schemas"]["EditEntry"][];
+            /** Transcript Sha */
+            transcript_sha: string;
         };
         /**
          * Engine
@@ -436,6 +615,10 @@ export interface components {
             reason: string | null;
             /** Default Model */
             default_model: string;
+            /** Cloud */
+            cloud: boolean;
+            /** Usd Per Hour */
+            usd_per_hour: number | null;
         };
         /** @enum {string} */
         EngineName: "parakeet" | "whisper" | "sherpa";
@@ -512,6 +695,16 @@ export interface components {
         };
         /** @enum {string} */
         JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
+        /** @enum {string} */
+        LanguageTag: "urdu" | "mixed" | "english";
+        /**
+         * ListContent
+         * @description The page's whole edit list as it is now, for a route that reads it and saves nothing.
+         */
+        ListContent: {
+            /** Content */
+            content: components["schemas"]["EditEntry"][];
+        };
         /**
          * Match
          * @description One word, or phrase, a word list matched (dsj.hatao.Match).
@@ -543,6 +736,20 @@ export interface components {
             lists: string[];
             /** Recall */
             recall: string;
+        };
+        /**
+         * NamesUpdate
+         * @description Every speaker's name, by label, in place of the ones before; a blank name clears one.
+         */
+        NamesUpdate: {
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** List Sha */
+            list_sha: string;
         };
         /**
          * ParagraphEntry
@@ -584,8 +791,35 @@ export interface components {
             missing: boolean;
             /** Unreadable */
             unreadable: string | null;
+            /** Title */
+            title: string | null;
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
+        };
+        /**
+         * ReferenceRequest
+         * @description Save the answer key; with `allow_partial`, even while sentences are unchecked.
+         */
+        ReferenceRequest: {
+            /**
+             * Allow Partial
+             * @default false
+             */
+            allow_partial: boolean;
+        };
+        /**
+         * ReferenceWritten
+         * @description The answer key's files (names only, beside the transcript), and how much of it is checked.
+         */
+        ReferenceWritten: {
+            /** Files */
+            files: string[];
+            /** Segments */
+            segments: number;
+            /** Unchecked */
+            unchecked: number;
+            /** Kept */
+            kept: string[];
         };
         /**
          * RenderJob
@@ -614,6 +848,123 @@ export interface components {
         };
         /** @enum {string} */
         RenderState: "starting" | "rendering" | "done" | "failed";
+        /**
+         * Review
+         * @description A transcript's review, or None, and the sha of the transcript as it is now.
+         */
+        Review: {
+            document: components["schemas"]["ReviewDocument"] | null;
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** Review Sha */
+            review_sha: string | null;
+        };
+        /**
+         * ReviewCorrection
+         * @description One change of words made in Review, before and after: sub-project C's learning data.
+         */
+        ReviewCorrection: {
+            /** At */
+            at: string;
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            /** Before */
+            before: string;
+            /** After */
+            after: string;
+        };
+        /**
+         * ReviewDocument
+         * @description A transcript's review: its sentences and their state, the pass, and where the person was.
+         */
+        ReviewDocument: {
+            /**
+             * Version
+             * @constant
+             */
+            version: 1;
+            /** Transcript Sha */
+            transcript_sha: string;
+            review_pass: components["schemas"]["ReviewPass"];
+            /** Cursor S */
+            cursor_s: number;
+            /** Started At */
+            started_at: string;
+            /** Updated At */
+            updated_at: string;
+            /** Segments */
+            segments: components["schemas"]["ReviewSegment"][];
+            /** Corrections */
+            corrections: components["schemas"]["ReviewCorrection"][];
+        };
+        /** @enum {string} */
+        ReviewFlag: "unclear" | "not_speech" | "overlap" | "cut_off";
+        /** @enum {string} */
+        ReviewPass: "every" | "likely";
+        /**
+         * ReviewPatch
+         * @description One change to the review (#251): segments spliced, corrections appended, pass and cursor set.
+         *
+         *     Made against the review whose sha is `review_sha`, as EditsPatch is.
+         */
+        ReviewPatch: {
+            /** Transcript Sha */
+            transcript_sha: string;
+            /** Review Sha */
+            review_sha: string;
+            /** Start */
+            start: number;
+            /** Delete */
+            delete: number;
+            /** Insert */
+            insert: components["schemas"]["ReviewSegment"][];
+            /** Corrections */
+            corrections: components["schemas"]["ReviewCorrection"][];
+            review_pass: components["schemas"]["ReviewPass"];
+            /** Cursor S */
+            cursor_s: number;
+        };
+        /**
+         * ReviewSaved
+         * @description What a save of the review answers: its new sha and when, never the review itself.
+         */
+        ReviewSaved: {
+            /** Review Sha */
+            review_sha: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * ReviewSegment
+         * @description One sentence of a review, by its span of the recording, which every edit keeps.
+         */
+        ReviewSegment: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            state: components["schemas"]["SegmentState"];
+            /** Flags */
+            flags: components["schemas"]["ReviewFlag"][];
+            /** Speaker */
+            speaker: string | null;
+            /** Edited */
+            edited: boolean;
+            /** Words Hash */
+            words_hash: string | null;
+        };
+        /** @enum {string} */
+        SegmentState: "unchecked" | "checked";
+        /**
+         * TitleUpdate
+         * @description A recording's title; empty or None takes it away, so the page derives one again.
+         */
+        TitleUpdate: {
+            /** Title */
+            title?: string | null;
+        };
         /**
          * TranscribeRequest
          * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
@@ -671,6 +1022,11 @@ export interface components {
             language: string | null;
             /** Last Edited At */
             last_edited_at: string | null;
+            language_tag: components["schemas"]["LanguageTag"] | null;
+            /** Review Checked */
+            review_checked: number | null;
+            /** Review Total */
+            review_total: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -748,6 +1104,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Recording"] | null;
+                };
+            };
+        };
+    };
+    retitle_api_recordings__recording_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TitleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recording"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -972,7 +1363,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["EditsUpdate"];
+                "application/json": components["schemas"]["ListContent"];
             };
         };
         responses: {
@@ -1121,6 +1512,109 @@ export interface operations {
             };
         };
     };
+    patch_edits_api_transcripts__transcript_id__edits_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditsPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditsSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_names_api_transcripts__transcript_id__names_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NamesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Edits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_api_transcripts__transcript_id__export__fmt__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+                fmt: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": unknown;
+                    "text/vtt": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     find_matches_api_transcripts__transcript_id__matches_post: {
         parameters: {
             query?: never;
@@ -1132,7 +1626,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["EditsUpdate"];
+                "application/json": components["schemas"]["ListContent"];
             };
         };
         responses: {
@@ -1176,6 +1670,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WordAdded"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_review_api_transcripts__transcript_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Review"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_review_api_transcripts__transcript_id__review_put: {
+        parameters: {
+            query?: {
+                review_sha?: string | null;
+            };
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDocument"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_review_api_transcripts__transcript_id__review_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_reference_api_transcripts__transcript_id__reference_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transcript_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceWritten"];
                 };
             };
             /** @description Validation Error */

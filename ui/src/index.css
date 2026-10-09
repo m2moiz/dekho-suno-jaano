@@ -24,7 +24,29 @@
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: system-ui, sans-serif;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-reading: "Literata Variable", Georgia, serif;
+    /* Literata first: Latin letters inside an Urdu line keep the reading face,
+       and the Arabic-script letters, which Literata has none of, fall through
+       to Nastaliq. */
+    --font-urdu: "Literata Variable", "Noto Nastaliq Urdu Variable", serif;
+    --color-field: var(--field);
+    --color-field-foreground: var(--field-foreground);
+    --color-field-muted: var(--field-muted);
+    --color-field-wave: var(--field-wave);
+    --color-dim: var(--dim);
+    --color-gold: var(--gold);
+    --color-gold-ink: var(--gold-ink);
+    --color-correction: var(--correction);
+    --color-checked: var(--checked);
+    --color-playhead: var(--playhead);
+    --color-unsure-mark: var(--unsure-mark);
+    --color-speaker-1: var(--speaker-1);
+    --color-speaker-2: var(--speaker-2);
+    --color-speaker-3: var(--speaker-3);
+    --color-speaker-4: var(--speaker-4);
+    --color-speaker-5: var(--speaker-5);
+    --color-speaker-6: var(--speaker-6);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -80,5 +102,60 @@
        into view (a Cmd+F match, #230) centres above it. The player writes its
        own height here while it is on the page (PLAYER_HEIGHT in playhead.ts). */
     scroll-padding-bottom: var(--dsj-player-height, 0px);
+    /* And the bar at the top, which writes its own height (AppBar.tsx). */
+    scroll-padding-top: var(--dsj-bar-height, 0px);
     }
+}
+
+/* The browser's own surfaces in the palette (craft floor, "Browser surfaces"):
+   selection, caret, focus, scrollbars, form accents. Unlayered on purpose: a
+   rule outside every @layer outranks Tailwind's utilities, so a primitive's
+   `outline-none` cannot take the gold ring away, and the shadcn half-alpha
+   ring shadow is dropped so a focused control shows one ring, not two. */
+::selection {
+  background-color: color-mix(in srgb, var(--gold) 40%, transparent);
+  color: inherit;
+}
+
+:root {
+  caret-color: var(--gold-ink);
+  accent-color: var(--gold-ink);
+  scrollbar-color: var(--input) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+[data-slot]:focus-visible {
+  box-shadow: none;
+}
+
+/* On the blue field the ring is the full gold, which reads there. */
+.bg-field :focus-visible {
+  outline-color: var(--gold);
+}
+
+/* A menu takes focus onto its own box when it opens; its items show their own
+   focus, so the ring would only frame the whole menu. */
+[data-slot="dropdown-menu-content"]:focus-visible {
+  outline: none;
+}
+
+/* The primitives also turn their border to the ring colour on focus, which
+   inside the field is a second, dim ring within the gold one. */
+.bg-field [data-slot]:focus-visible {
+  border-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

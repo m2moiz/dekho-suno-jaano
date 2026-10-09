@@ -9,60 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import page, rename, update
 
 from dsj import hatao
 from dsj.ui.edits import edits_path
-from dsj.ui.server import create_app
 from dsj.ui.store import Library, library_path
-
-
-def page() -> TestClient:
-    app, token = create_app(port=8721)
-    return TestClient(
-        app, base_url="http://127.0.0.1:8721", headers={"Authorization": f"Bearer {token}"}
-    )
-
-
-def tokens(*words: tuple[float, float, str, float]) -> list[dict[str, Any]]:
-    return [{"t": t, "e": e, "w": w, "c": c} for t, e, w, c in words]
-
-
-@pytest.fixture
-def seeded(tmp_path: Path) -> dict[str, Any]:
-    """One recording, one transcript of two sentences, in the library."""
-    audio = tmp_path / "talk.wav"
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-         "sine=frequency=440:duration=2", str(audio)],
-        check=True,
-    )
-    payload = {
-        "audio": str(audio),
-        "engine": "parakeet",
-        "model": "mlx-community/parakeet-tdt-0.6b-v3",
-        "speakers": ["SPEAKER_00", "SPEAKER_01"],
-        "diarization": "senko",
-        "text": " Hello there. Fine.",
-        "unclear": [],
-        "sentences": [
-            {"start": 0.2, "end": 0.9, "speaker": 0, "text": " Hello there.",
-             "tokens": tokens((0.2, 0.5, " Hello", 0.99), (0.56, 0.8, " there", 0.4),
-                              (0.8, 0.88, ".", 0.97))},
-            {"start": 1.2, "end": 1.6, "speaker": 1, "text": " Fine.",
-             "tokens": tokens((1.2, 1.5, " Fine", 0.9), (1.5, 1.6, ".", 0.95))},
-        ],
-    }
-    json_path = tmp_path / "talk.json"
-    json_path.write_text(json.dumps(payload))
-    with Library.open() as library:
-        row = library.record_run(json_path, engine="parakeet")
-    return {"id": row.id, "audio": audio, "json": json_path, "payload": payload}
 
 
 def test_an_untouched_list_is_built_from_the_transcripts_own_word_ends(
@@ -95,7 +50,7 @@ def test_a_saved_list_comes_back_as_it_was_saved_and_the_recording_is_untouched(
     content = client.get(route).json()["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["muted"] = True
-    saved = client.put(route, json={"content": content})
+    saved = client.put(route, json=update(seeded, content))
     assert saved.status_code == 200, saved.text
     assert saved.json()["edited_at"] is not None
     again = page().get(route).json()
@@ -113,7 +68,7 @@ def test_the_list_is_kept_beside_the_library_and_never_beside_the_recording(
 ) -> None:
     client = page()
     route = f"/api/transcripts/{seeded['id']}/edits"
-    client.put(route, json={"content": client.get(route).json()["content"]})
+    client.put(route, json=update(seeded, client.get(route).json()["content"]))
     path = edits_path(seeded["json"])
     assert path.parent == library_path().parent / "edits"
     assert path.is_file()
@@ -125,7 +80,7 @@ def test_a_broken_list_is_refused_whole_naming_the_entry(seeded: dict[str, Any])
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2]["length"] = -1.0
-    reply = client.put(route, json={"content": content})
+    reply = client.put(route, json=update(seeded, content))
     assert reply.status_code == 422
     assert reply.json()["error"] == "InvalidDocument"
     assert "entry 2" in reply.json()["message"]
@@ -139,7 +94,7 @@ def test_a_page_cannot_name_a_source_the_server_did_not_give_it(
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[1]["source"] = "/etc/passwd"
-    reply = client.put(route, json={"content": content})
+    reply = client.put(route, json=update(seeded, content))
     assert reply.status_code == 422
     assert "no such source" in reply.json()["message"]
 
@@ -150,7 +105,7 @@ def test_a_word_edited_by_hand_reads_as_sure(seeded: dict[str, Any]) -> None:
     content = client.get(route).json()["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["text"] = " their"
-    body = client.put(route, json={"content": content}).json()
+    body = client.put(route, json=update(seeded, content)).json()
     assert body["content"][there]["confidence"] == 1.0
     hello = next(e for e in body["content"] if e.get("text") == " Hello")
     assert hello["confidence"] == 0.99
@@ -181,7 +136,7 @@ def test_a_rebuilt_library_finds_the_same_list(seeded: dict[str, Any]) -> None:
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[1]["muted"] = True
-    client.put(route, json={"content": content})
+    client.put(route, json=update(seeded, content))
     library_path().unlink()
     with Library.open() as library:
         rebuilt = library.adopt([seeded["json"]]).transcripts[0]
@@ -282,7 +237,7 @@ def test_the_spans_a_render_would_mute_come_with_every_list(seeded: dict[str, An
     content = opened["content"]
     there = next(i for i, e in enumerate(content) if e.get("text") == " there")
     content[there]["muted"] = True
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     # hatao.spans_to_mute's own answer: the word, padded PAD_S each side.
     assert saved["spans"] == [[0.46, 0.9]]
     assert saved["unrenderable"] is None
@@ -293,7 +248,7 @@ def test_a_list_a_render_would_refuse_says_why(seeded: dict[str, Any]) -> None:
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2], content[3] = content[3], content[2]
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     assert saved["spans"] is None
     assert "deleted or moved" in saved["unrenderable"]
 
@@ -310,7 +265,7 @@ def test_saving_an_edit_marks_the_transcript_edited_in_the_library(
     route = f"/api/transcripts/{seeded['id']}/edits"
     content = client.get(route).json()["content"]
     content[2]["text"] = " Hullo"
-    saved = client.put(route, json={"content": content}).json()
+    saved = client.put(route, json=update(seeded, content)).json()
     listed = client.get("/api/recordings").json()[0]["transcripts"][0]
     assert listed["last_edited_at"] == saved["edited_at"]
     # The transcript's own file is never written.
@@ -324,6 +279,8 @@ def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
 
     with sqlite3.connect(library_path()) as con:
         con.execute("ALTER TABLE transcripts DROP COLUMN last_edited_at")
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
         con.execute("PRAGMA user_version = 2")
     with Library.open() as library:
         found = library.transcript(seeded["id"])
@@ -334,4 +291,35 @@ def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
     assert again is not None
     assert again.last_edited_at == "2026-10-03T00:00:00+00:00"
     with sqlite3.connect(library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+# -- speaker names (#243) ---------------------------------------------------------
+
+
+def test_a_name_given_to_a_speaker_is_kept_and_sent_back(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    assert client.get(f"{route}/edits").json()["names"] == {}
+    reply = rename(seeded, {"SPEAKER_00": "  Ali  "})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["names"] == {"SPEAKER_00": "Ali"}
+    assert page().get(f"{route}/edits").json()["names"] == {"SPEAKER_00": "Ali"}
+    # In the file `dsj hatao` reads, beside the library.
+    assert hatao.load(edits_path(seeded["json"])).names == {"SPEAKER_00": "Ali"}
+
+
+def test_saving_the_words_keeps_the_names(seeded: dict[str, Any]) -> None:
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    rename(seeded, {"SPEAKER_01": "Sara"})
+    content = client.get(f"{route}/edits").json()["content"]
+    content[2]["muted"] = True
+    saved = client.put(f"{route}/edits", json=update(seeded, content)).json()
+    assert saved["names"] == {"SPEAKER_01": "Sara"}
+
+
+def test_a_blank_name_gives_the_speaker_its_own_label_back(seeded: dict[str, Any]) -> None:
+    rename(seeded, {"SPEAKER_00": "Ali", "SPEAKER_01": "Sara"})
+    cleared = rename(seeded, {"SPEAKER_00": "", "SPEAKER_01": "Sara"}).json()
+    assert cleared["names"] == {"SPEAKER_01": "Sara"}

@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 
 from dsj.ui.jobs import Jobs, engine_choices
 from dsj.ui.routes.marks import entries
-from dsj.ui.schemas import EditsUpdate, Engine, Job, RenderJob, TranscribeRequest
+from dsj.ui.schemas import Engine, Job, ListContent, RenderJob, TranscribeRequest
 
 router = APIRouter(prefix="/api")
 
@@ -58,7 +58,7 @@ def transcribe(recording_id: str, settings: TranscribeRequest, request: Request)
 
 
 @router.post("/transcripts/{transcript_id}/render", status_code=202)
-def render(transcript_id: str, update: EditsUpdate, request: Request) -> RenderJob:
+def render(transcript_id: str, update: ListContent, request: Request) -> RenderJob:
     """Render the page's edit list beside the recording with dsj.hatao.render, once queued.
 
     Refused before anything is written when the list mutes nothing, cannot be

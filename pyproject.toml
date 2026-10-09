@@ -1,6 +1,6 @@
 [project]
 name = "dsj"
-version = "0.4.2"
+version = "0.5.0"
 description = "Make a long screen recording answerable: a timestamped transcript indexes the video, frames are retrieved on demand."
 readme = "README.md"
 # Capped, not open-ended, and the reason is measured rather than assumed.
@@ -100,6 +100,9 @@ android = [
 # used; not in android, where nothing opens a browser at it yet.
 ui = [
     "fastapi>=0.141.1",
+    # The QR code `dsj ui --tailnet` prints for the phone (#250). Pure Python,
+    # no dependencies on 3.10+, one py3-none-any wheel; pinned exactly.
+    "segno==1.6.6",
     "uvicorn>=0.53.0",
 ]
 

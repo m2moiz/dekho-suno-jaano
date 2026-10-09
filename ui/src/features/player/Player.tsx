@@ -1,16 +1,20 @@
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { Image as ImageIcon, ImageOff, LocateFixed, Pause, Play } from "lucide-react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { MuteGate } from "@/features/bleep/liveMute";
 import type { Span } from "@/features/edit/editing";
+import { selectWords, turnTexts } from "@/features/edit/selection";
 
 import { Button } from "@/components/ui/button";
 import { fromThrown, showError } from "@/features/errors/appError";
 import { durationLabel } from "@/features/library/describe";
 import type { RecordingRow } from "@/features/library/types";
 import { sessionToken } from "@/features/session/session";
+import { FIELD_BUTTON } from "@/features/shell/field";
 import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
 import { PLAYER_HEIGHT, Playhead } from "./playhead";
+import { applySpeed, readSpeed, saveSpeed, type Speed } from "./speed";
 import { SpeedControl } from "./SpeedControl";
 import { readVideoShown, saveVideoShown } from "./video";
 import { Waveform } from "./Waveform";
@@ -44,8 +48,9 @@ function play(element: HTMLMediaElement): void {
 }
 
 // Keys that scroll the page. Pressing one means the reader wants to look
-// somewhere else, so the view stops following the playhead.
-const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "]);
+// somewhere else, so the view stops following the playhead. Not Space: in the
+// reader it plays and pauses (readerKeys.ts) and scrolls nothing.
+const SCROLL_KEYS = new Set(["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"]);
 
 const MEDIA_ERRORS: Record<number, string> = {
   1: "loading was stopped",
@@ -54,62 +59,115 @@ const MEDIA_ERRORS: Record<number, string> = {
   4: "the browser cannot play this kind of file",
 };
 
-/** What the page can ask of the player, beyond a click on a word. */
+/** What a page can ask of the player beyond a click on a word: the reader's Hear, and all of Review. */
 export type PlayerControls = {
   /** Play from `from` and stop at `to`, both in seconds: audition one span (#84). */
   hear: (from: number, to: number) => void;
+  /**
+   * Play, or pause; playing again starts `backS` seconds before where it
+   * stopped (Review's Tab). With `within`, playing again stays inside that
+   * span: it starts no earlier than its start, from no later than its end,
+   * and stops at its end, as `hear` does (UAT 8 Oct, finding 3).
+   */
+  toggle: (backS?: number, within?: { start: number; end: number }) => void;
+  pause: () => void;
+  isPlaying: () => boolean;
+  /** Play at `speed` and keep it for later launches (#81). */
+  setSpeed: (speed: Speed) => void;
+  speed: () => Speed;
 };
 
 type Props = {
   recording: RecordingRow;
   reading: Reading;
-  /** The transcript's <article>, whose paragraphs the playhead paints. */
-  article: RefObject<HTMLElement | null>;
+  /** The transcript's <article>, whose paragraphs the playhead paints. Review has none. */
+  article?: RefObject<HTMLElement | null>;
   /** Spans to play silent, as a render of the edit list would (#84). */
   muteSpans?: readonly Span[] | null;
   /** Filled in with this player's controls while it is mounted. */
   controls?: RefObject<PlayerControls | null>;
+  /** On a touch screen, a tap on a word selects it for the selection toolbar rather than seeking (Task 3). */
+  selectOnTap?: boolean;
 };
 
 /**
- * The recording under the transcript (#60): click a word to hear it, and the
- * word being said is highlighted as it plays, with the view following it until
- * the reader scrolls away.
+ * The recording under the transcript (#60), as the blue rail of the Hashiya
+ * shell: play, the time, the waveform as the one scrubber, the speed. Click a
+ * word to hear it; the word being said is highlighted as it plays, with the
+ * view following it until the reader scrolls away. The browser's own audio
+ * bar is gone (critique: "two scrubbers").
  *
- * A screen recording plays in a <video> on the same playhead, so the picture,
- * the words and the waveform move together (#80); anything else in an <audio>,
- * with no empty picture box.
+ * A screen recording plays in a <video> on the same playhead (#80), shown
+ * above the rail and folded away with display: none, which keeps it playing.
  */
-export function Player({ recording, reading, article, muteSpans = null, controls }: Props) {
+export function Player({ recording, reading, article, muteSpans = null, controls, selectOnTap = false }: Props) {
   const media = useRef<HTMLMediaElement>(null);
-  // A file this browser will not open plays from a copy of its sound instead,
-  // which the server makes once and keeps (#110).
+  // A file this browser will not open plays from a copy of its sound instead (#110).
   const [soundOnly, setSoundOnly] = useState(false);
   const hasVideo = recording.video_codec !== null && !soundOnly;
   const [videoShown, setVideoShown] = useState(() => readVideoShown());
   const [playing, setPlaying] = useState(false);
   const [noPicture, setNoPicture] = useState(false);
+  const [speed, setSpeedState] = useState<Speed>(() => readSpeed());
   const clock = useRef<HTMLSpanElement>(null);
+  const clockTotal = useRef<HTMLSpanElement>(null);
   const playhead = useRef<Playhead | null>(null);
   const [following, setFollowing] = useState(true);
   // Views that move with the playhead's frame: the waveform's cursor (#61).
   const [frames] = useState(() => new Set<(seconds: number) => void>());
-
   // Where an audition stops, in seconds, while one plays (#84).
   const stopAt = useRef<number | null>(null);
 
-  /** Hear `seconds`: the one seek a word, the waveform and anything later share. */
-  const seek = (seconds: number) => {
+  const changeSpeed = useCallback((next: Speed) => {
+    setSpeedState(next);
+    saveSpeed(next);
+  }, []);
+  const speedNow = useRef(speed);
+  speedNow.current = speed;
+
+  useEffect(() => {
+    if (media.current !== null) applySpeed(media.current, speed);
+  }, [speed, soundOnly]);
+
+  /** Move the one playhead to `seconds` and keep the view with it; any move ends an audition. */
+  const scrub = (seconds: number) => {
     const element = media.current;
     if (element === null) return;
-    // Any seek ends an audition; `hear` sets its stop again after its own.
+    // `hear` sets its stop again after its own seek.
     stopAt.current = null;
     element.currentTime = seconds;
     playhead.current?.follow();
-    play(element);
+  };
+  /** Hear `seconds`: the one seek a word, a click on the waveform and anything later share. */
+  const seek = (seconds: number) => {
+    scrub(seconds);
+    if (media.current !== null) play(media.current);
   };
   const seekRef = useRef(seek);
   seekRef.current = seek;
+  const scrubRef = useRef(scrub);
+  scrubRef.current = scrub;
+  /** Play, or pause; resuming starts `backS` seconds earlier. The rail's button and Review's Tab both. */
+  const toggle = (backS = 0, within?: { start: number; end: number }) => {
+    const element = media.current;
+    if (element === null) return;
+    if (!element.paused) {
+      element.pause();
+      return;
+    }
+    stopAt.current = null;
+    if (within !== undefined) {
+      // Back from where it stopped, or from the span's end when it stopped
+      // past it, and never into what comes before the span.
+      element.currentTime = Math.max(within.start, Math.min(element.currentTime, within.end) - backS);
+    } else if (backS > 0) {
+      element.currentTime = Math.max(0, element.currentTime - backS);
+    }
+    play(element);
+    if (within !== undefined) stopAt.current = within.end;
+  };
+  const toggleRef = useRef(toggle);
+  toggleRef.current = toggle;
   // The live mute (#84), one per media element, with the spans it follows.
   const gate = useRef<MuteGate | null>(null);
   const spans = useRef<readonly Span[]>(muteSpans ?? []);
@@ -126,20 +184,22 @@ export function Player({ recording, reading, article, muteSpans = null, controls
         seekRef.current(from);
         stopAt.current = to;
       },
+      toggle: (backS = 0, within) => toggleRef.current(backS, within),
+      pause: () => media.current?.pause(),
+      isPlaying: () => media.current !== null && !media.current.paused,
+      setSpeed: changeSpeed,
+      speed: () => speedNow.current,
     };
     return () => {
       controls.current = null;
     };
-  }, [controls]);
+  }, [controls, changeSpeed]);
 
   useEffect(() => {
     const element = media.current;
-    const root = article.current;
-    if (element === null || root === null) return;
-    const texts: Text[] = [];
-    for (const p of root.querySelectorAll<HTMLElement>("p[data-turn]")) {
-      if (p.firstChild instanceof Text) texts[Number(p.dataset["turn"])] = p.firstChild;
-    }
+    const root = article?.current ?? null;
+    if (element === null) return;
+    const texts = root === null ? [] : turnTexts(root);
     const mute = new MuteGate(element);
     mute.setSpans(spans.current);
     gate.current = mute;
@@ -204,13 +264,19 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       const hit = offsetAtPoint(event);
       if (hit === null) return;
       const word = wordAtOffset(reading, hit.turn, hit.offset);
+      // On a touch screen a tap selects the word, so the selection toolbar
+      // can offer Correct and Hear (Hashiya spec, Reader); a Mac click seeks.
+      if (selectOnTap && window.matchMedia("(pointer: coarse)").matches) {
+        selectWords(reading, texts, word);
+        return;
+      }
       const at = reading.words.start[word];
       if (at !== undefined) seekRef.current(at);
     };
     const scrolledByHand = () => head.unfollow();
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      const typing = target?.closest("input, textarea, select, audio, video, button, [contenteditable]");
+      const typing = target?.closest("input, textarea, select, audio, video, button, [contenteditable], [role=slider]");
       if (SCROLL_KEYS.has(event.key) && typing == null) head.unfollow();
     };
 
@@ -221,7 +287,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     element.addEventListener("timeupdate", ticked);
     element.addEventListener("error", failed);
     element.addEventListener("loadedmetadata", loaded);
-    root.addEventListener("click", click);
+    root?.addEventListener("click", click);
     window.addEventListener("wheel", scrolledByHand, { passive: true });
     window.addEventListener("touchmove", scrolledByHand, { passive: true });
     window.addEventListener("keydown", key);
@@ -233,7 +299,7 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       element.removeEventListener("timeupdate", ticked);
       element.removeEventListener("error", failed);
       element.removeEventListener("loadedmetadata", loaded);
-      root.removeEventListener("click", click);
+      root?.removeEventListener("click", click);
       window.removeEventListener("wheel", scrolledByHand);
       window.removeEventListener("touchmove", scrolledByHand);
       window.removeEventListener("keydown", key);
@@ -242,16 +308,15 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       mute.dispose();
       gate.current = null;
     };
-  }, [reading, article, recording.id, frames, soundOnly]);
+  }, [reading, article, recording.id, frames, soundOnly, selectOnTap]);
 
-  // The time, written by the playhead's own frame, for when the picture and
-  // its controls are folded away.
+  // The time, written by the playhead's own frame.
   useEffect(() => {
     const tick = (seconds: number) => {
       const duration = media.current?.duration ?? Number.NaN;
       if (clock.current === null) return;
-      const total = Number.isFinite(duration) ? ` / ${durationLabel(duration)}` : "";
-      clock.current.textContent = `${durationLabel(seconds)}${total}`;
+      clock.current.textContent = durationLabel(seconds) ?? "0:00";
+      if (clockTotal.current !== null && Number.isFinite(duration)) clockTotal.current.textContent = `\u00a0/ ${durationLabel(duration)}`;
     };
     frames.add(tick);
     return () => {
@@ -259,11 +324,8 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     };
   }, [frames]);
 
-  // The page's scroll padding at the bottom is this bar's height, so anything
-  // the browser scrolls into view, a word found with Cmd+F above all, centres
-  // in the part of the window the bar leaves uncovered (#230). Without it a
-  // match centred in the whole window sat under the picture: the bar is 327 of
-  // 600 px tall, 371 of 725 and 422 of 870 with a 640x360 picture showing.
+  // The page's scroll padding at the bottom is this rail's height (#230), and
+  // the playhead's follow band ends where it starts (#231).
   const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = bar.current;
@@ -283,91 +345,87 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     media.current = element;
   };
   const src = mediaSrc(recording.id, soundOnly);
+  // The recording's length as the library knows it, until the media says it.
+  const clockLabel = durationLabel(recording.duration_s) ?? "0:00";
 
   return (
-    <div
-      ref={bar}
-      className="sticky bottom-0 mt-8 flex flex-col gap-2 border-t bg-background/95 py-3 backdrop-blur"
-    >
+    <div ref={bar} role="region" aria-label="Player" className="sticky bottom-0 z-20 pb-[env(safe-area-inset-bottom)]">
       {hasVideo && (
-        // Folded away with display: none, which leaves the element playing.
-        <div className={videoShown ? undefined : "hidden"}>
-          <video
-            ref={attach}
-            src={src}
-            controls
-            playsInline
-            preload="metadata"
-            className="mx-auto max-h-[35vh] w-full rounded-md bg-black"
-            aria-label="Recording"
-          />
+        <div className={videoShown ? "border-t bg-background/95 px-3 py-2 backdrop-blur sm:px-6" : "hidden"}>
+          <video ref={attach} src={src} playsInline preload="metadata" className="mx-auto max-h-[35vh] w-full rounded-md bg-black" aria-label="Recording" />
           {noPicture && (
             <p className="text-sm text-muted-foreground">
-              This browser cannot show this recording's picture ({recording.video_codec}). The sound
-              plays.
+              This browser cannot show this recording's picture ({recording.video_codec}). The sound plays.
             </p>
           )}
         </div>
       )}
       {soundOnly && (
-        <p className="text-sm text-muted-foreground">
+        <p className="bg-field px-4 pt-2 text-sm text-field-muted">
           This browser cannot open this recording's file, so a copy of its sound is playing.
         </p>
       )}
-      <Waveform
-        recordingId={recording.id}
-        media={media}
-        frames={frames}
-        onSeek={(seconds) => seekRef.current(seconds)}
-      />
-      <div className="flex items-center gap-3">
-        {hasVideo ? (
-          <>
-            {!videoShown && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const element = media.current;
-                  if (element === null) return;
-                  if (element.paused) play(element);
-                  else element.pause();
-                }}
-              >
-                {playing ? "Pause" : "Play"}
-              </Button>
-            )}
-            <span
-              ref={clock}
-              className={`flex-1 text-sm text-muted-foreground tabular-nums ${videoShown ? "invisible" : ""}`}
-            />
+      {!hasVideo && <audio ref={attach} src={src} preload="metadata" aria-label="Recording" className="hidden" />}
+      <div className="bg-field text-field-foreground">
+        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2 px-2 sm:gap-3 sm:px-6">
+          {/* A control, not the screen's action, so outlined on the field rather
+              than gold: one gold action per screen (DESIGN.md, The One Gold Rule;
+              Task 16a review I2). In phone Review a gold play sat just under the
+              gold Checked, next (critique 7 Oct, P1-2). */}
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label={playing ? "Pause" : "Play"}
+            onClick={() => toggleRef.current()}
+            className={`size-11 shrink-0 rounded-full border-2 border-field-muted ${FIELD_BUTTON}`}
+          >
+            {playing ? <Pause aria-hidden className="size-5" /> : <Play aria-hidden className="size-5" />}
+          </Button>
+          {/* Wide enough for its longest text from the first paint, so the waveform
+              beside it does not shrink when playing writes the length in. On a
+              phone only the time now, so the waveform, the only scrubber,
+              keeps its width: with the length too it was 32 px for a short
+              video and none at 2.5 h (fix round 1 review I3, measured in
+              tests/e2e/video.spec.ts). */}
+          <span className="shrink-0 text-xs text-field-muted tabular-nums sm:text-sm">
+            {/* Each part keeps its width as the time ticks; a no-break space
+                inside the second, since an inline block drops a plain one. */}
+            <span ref={clock} className="inline-block text-end" style={{ minWidth: `${clockLabel.length - 0.5}ch` }}>
+              0:00
+            </span>
+            <span ref={clockTotal} className="hidden sm:inline-block" style={{ minWidth: `${clockLabel.length + 2.5}ch` }}>
+              {`\u00a0/ ${clockLabel}`}
+            </span>
+          </span>
+          <Waveform recordingId={recording.id} media={media} frames={frames} onSeek={(seconds) => seekRef.current(seconds)} onScrub={(seconds) => scrubRef.current(seconds)} />
+          <SpeedControl speed={speed} onSpeed={changeSpeed} />
+          {hasVideo && (
             <Button
-              variant="outline"
-              size="sm"
+              variant="ghost"
+              aria-label={videoShown ? "Hide picture" : "Show picture"}
+              className={`h-11 min-w-11 shrink-0 max-sm:px-0 ${FIELD_BUTTON}`}
               onClick={() => {
                 setVideoShown(!videoShown);
                 saveVideoShown(!videoShown);
               }}
             >
-              {videoShown ? "Hide picture" : "Show picture"}
+              {/* A 44 px icon on a phone, words from sm up: the waveform needs the width (I3). */}
+              {videoShown ? <ImageOff aria-hidden className="sm:hidden" /> : <ImageIcon aria-hidden className="sm:hidden" />}
+              <span className="hidden sm:inline">{videoShown ? "Hide picture" : "Show picture"}</span>
             </Button>
-          </>
-        ) : (
-          <audio
-            ref={attach}
-            src={src}
-            controls
-            preload="metadata"
-            className="h-10 flex-1"
-            aria-label="Recording"
-          />
-        )}
-        <SpeedControl media={media} />
-        {!following && (
-          <Button variant="outline" size="sm" onClick={() => playhead.current?.follow()}>
-            Follow playback
-          </Button>
-        )}
+          )}
+          {!following && (
+            <Button
+              variant="ghost"
+              aria-label="Follow playback"
+              className={`h-11 min-w-11 shrink-0 max-sm:px-0 ${FIELD_BUTTON}`}
+              onClick={() => playhead.current?.follow()}
+            >
+              <LocateFixed aria-hidden className="sm:hidden" />
+              <span className="hidden sm:inline">Follow playback</span>
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

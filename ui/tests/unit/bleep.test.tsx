@@ -22,7 +22,9 @@ import { currentError, dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
+import { choose, openBleepPanel } from "./menus";
 
 describe("spanReached", () => {
   const spans = [[1, 2], [3, 3.5]] as const;
@@ -311,6 +313,7 @@ afterEach(() => {
 describe("the words to bleep, on the transcript page", () => {
   let words: string[] = [];
   let listed: (typeof BRAVO)[] = [];
+  let held: Content = CONTENT;
   let registry: ReturnType<typeof installHighlights>;
 
   beforeEach(() => {
@@ -326,6 +329,7 @@ describe("the words to bleep, on the transcript page", () => {
     takeToken();
     words = [];
     listed = [BRAVO];
+    held = CONTENT;
     fetchMock.mockReset();
     fetchMock.mockImplementation(async (request: Request) => {
       const path = new URL(request.url).pathname;
@@ -333,18 +337,18 @@ describe("the words to bleep, on the transcript page", () => {
         return Response.json([
           {
             id: 2, path: "/rec/a.wav", size_bytes: 1, duration_s: 3, content_id: "c", audio_codec: "pcm",
-            video_codec: null, first_seen: "x", missing: false, unreadable: null,
-            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null }],
+            video_codec: null, first_seen: "x", missing: false, unreadable: null, title: null,
+            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null, last_edited_at: null, language_tag: null, review_checked: null, review_total: null }],
           },
         ]);
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        return Response.json({ content, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+        if (saves(request)) held = await savedList(request, held);
+        return listReply(saves(request) ? held : CONTENT);
       }
       if (path === "/api/transcripts/7/matches") {
-        return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: x" });
+        return Response.json({ matches: listed, words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: how often whisper leaves a swear word out of its transcript is unmeasured (#152)" });
       }
       if (path === "/api/words") {
         const { word } = (await request.json()) as { word: string };
@@ -353,13 +357,15 @@ describe("the words to bleep, on the transcript page", () => {
         return Response.json({ entry: "user:charlie", added: true });
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The reader reads the review for its margin marks (Task 13); none here.
+      if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
 
   async function panel(): Promise<HTMLElement> {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const section = await screen.findByRole("region", { name: "Words to bleep" });
+    const section = await openBleepPanel();
     await within(section).findByRole("list", { name: "Matches" });
     return section;
   }
@@ -373,6 +379,23 @@ describe("the words to bleep, on the transcript page", () => {
     fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
     expect(row.textContent).toContain("muted");
     expect(painted(registry, "dsj-muted")).toEqual(["bravo"]);
+  });
+
+  it("badges the menu's Bleep item with the matches Mute all would still mute", async () => {
+    const section = await panel();
+    const openMenu = async () => {
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "More" }));
+      });
+      return screen.findByRole("menuitem", { name: /^Bleep/ });
+    };
+    const badged = await openMenu();
+    expect(badged.textContent).toBe("Bleep1");
+    // Bleep again closes the menu; the drawer is already open, and Mute all is in it.
+    choose(badged);
+    fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
+    await vi.waitFor(() => expect(painted(registry, "dsj-muted")).toEqual(["bravo"]));
+    expect((await openMenu()).textContent).toBe("Bleep");
   });
 
   it("dismisses a match and brings it back with one undo each", async () => {
@@ -391,6 +414,50 @@ describe("the words to bleep, on the transcript page", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", true);
   });
 
+  // The menu's export items, with the edit list's save held or refused by the test.
+  async function exportAfterAMute(putting: Promise<Response>): Promise<string[]> {
+    const normal = fetchMock.getMockImplementation();
+    const exported: string[] = [];
+    fetchMock.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/transcripts/7/export/srt") {
+        exported.push(path);
+        return new Response("1\n", { headers: { "content-type": "text/plain" } });
+      }
+      if (path === "/api/transcripts/7/edits" && saves(request)) return putting;
+      return (normal as (request: Request) => Promise<Response>)(request);
+    });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const section = await panel();
+    fireEvent.click(within(section).getByRole("button", { name: "Mute all 1" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+    });
+    choose(await screen.findByRole("menuitem", { name: "Subtitles (SRT)" }));
+    return exported;
+  }
+
+  it("exports only once the edit list the mute started saving is saved", async () => {
+    let answer: (reply: Response) => void = () => undefined;
+    const putting = new Promise<Response>((resolve) => {
+      answer = resolve;
+    });
+    const exported = await exportAfterAMute(putting);
+    // The save has not come back, so the server's copy is behind the page's: no export yet.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(exported).toEqual([]);
+    answer(Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" }));
+    await vi.waitFor(() => expect(exported).toEqual(["/api/transcripts/7/export/srt"]));
+  });
+
+  it("exports nothing, and says so, when the edit list could not be saved", async () => {
+    const exported = await exportAfterAMute(Promise.resolve(Response.json({ detail: "disk full" }, { status: 500 })));
+    await vi.waitFor(() => expect(currentError()?.message).toContain("Nothing was exported"));
+    expect(exported).toEqual([]);
+  });
+
   it("adds a word to the user's list and mutes what the next pass finds of it", async () => {
     const section = await panel();
     const field = within(section).getByRole("textbox", { name: "A word to add to your list" });
@@ -403,12 +470,26 @@ describe("the words to bleep, on the transcript page", () => {
     expect(currentError()).toBeNull();
   });
 
-  it("says in words that nothing matched", async () => {
+  it("says in words that nothing matched, names the lists in words, and says what to do next", async () => {
     listed = [];
     render(<TranscriptPage recording={2} transcript={7} />);
-    const section = await screen.findByRole("region", { name: "Words to bleep" });
+    const section = await openBleepPanel();
     expect((await within(section).findByRole("status")).textContent).toBe(
-      "No word matched: 3 words searched against the en, ur, hi, pa lists.",
+      "No word matched: 3 words searched against the English, Urdu, Hindi and Punjabi lists. Add a word below to look for it too.",
     );
+  });
+
+  it("puts what it found first and the actions after, with no issue numbers in its words (critique 7 Oct, P2-7)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const section = await openBleepPanel();
+    const list = await within(section).findByRole("list", { name: "Matches" });
+    const muteAll = within(section).getByRole("button", { name: /^Mute all/ });
+    // The list comes before Mute all in the drawer's order.
+    expect(list.compareDocumentPosition(muteAll) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(section.textContent).not.toMatch(/#\d+/);
+    // Render, with nothing muted yet, does not look like the drawer's main action.
+    const renderButton = within(section).getByRole("button", { name: "Render" });
+    expect(renderButton.hasAttribute("disabled")).toBe(true);
+    expect(renderButton.className).not.toContain("bg-foreground");
   });
 });

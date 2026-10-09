@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
 import type { PlayerControls } from "@/features/player/Player";
 import type { Content, Editor, Item } from "@/lib/editOps";
+import { TOUCH, useMediaQuery } from "@/lib/media";
 import { type Bounds, boundsOf, type Edge, retime } from "./bounds";
 import type { EditReading } from "./readContent";
 
@@ -73,12 +74,20 @@ export function TimingStrip({ editor, content, edit, word, recordingId, controls
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ edge: Edge; base: Content; bounds: Bounds; length: number } | null>(null);
   const peaks = usePeaks(recordingId);
+  // 44 px buttons where the Selection toolbar has them (F15).
+  const touch = useMediaQuery(TOUCH);
   const left = (seconds: number) => `${((seconds - view.from) / (view.to - view.from)) * 100}%`;
   const width = (from: number, to: number) => `${((to - from) / (view.to - view.from)) * 100}%`;
   const text = edit.reading.turns[edit.reading.words.turn[word] ?? 0]?.text.slice(
     edit.reading.words.offset[word] ?? 0,
     (edit.reading.words.offset[word] ?? 0) + (edit.reading.words.length[word] ?? 0),
   ).trim();
+
+  // Focus goes into the strip when it opens on a word, to its start edge, so
+  // the arrow keys move it at once (Task 3 review: it opened out of reach).
+  useEffect(() => {
+    strip.current?.querySelector<HTMLElement>("[role=slider]")?.focus({ preventScroll: true });
+  }, [word]);
 
   useEffect(() => {
     const element = canvas.current;
@@ -165,9 +174,18 @@ export function TimingStrip({ editor, content, edit, word, recordingId, controls
     );
 
   return (
-    <section aria-label="Word timing" className="basis-full rounded-lg border p-3 text-sm">
-      <div className="mb-2 flex items-center gap-3">
-        <span>
+    <section
+      aria-label="Word timing"
+      className="rounded-lg border bg-card p-3 text-sm text-card-foreground shadow-lg shadow-black/15"
+      onKeyDown={(event) => {
+        // Esc closes the strip, and only the strip: not the reader's selection too.
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        onClose();
+      }}
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="whitespace-nowrap">
           <span dir="auto" className="font-medium">
             {text}
           </span>{" "}
@@ -175,16 +193,19 @@ export function TimingStrip({ editor, content, edit, word, recordingId, controls
             {start.toFixed(2)} to {end.toFixed(2)} s
           </span>
         </span>
-        <span className="text-xs text-muted-foreground">Drag an edge, or focus it and press ← →.</span>
+        {/* Under the row on a narrow screen, so the word's times keep their line. */}
+        <span className="order-last basis-full text-xs text-muted-foreground sm:order-none sm:basis-auto">
+          Drag an edge, or focus it and press ← →.
+        </span>
         <Button
           variant="outline"
           size="sm"
-          className="ml-auto"
+          className={`ml-auto ${touch ? "h-11 px-3" : ""}`}
           onClick={() => controls.current?.hear(Math.max(0, start - 0.5), end + 0.5)}
         >
           Hear
         </Button>
-        <Button variant="outline" size="sm" onClick={onClose}>
+        <Button variant="outline" size="sm" className={touch ? "h-11 px-3" : ""} onClick={onClose}>
           Done
         </Button>
       </div>

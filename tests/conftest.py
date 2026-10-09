@@ -10,9 +10,12 @@ re-reads on every call.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import math
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +26,7 @@ import numpy as np
 import pytest
 
 if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
     from numpy.typing import NDArray
     from parakeet_mlx import DecodingConfig
     from parakeet_mlx.alignment import AlignedResult
@@ -68,6 +72,24 @@ def private_library(
     and write the owner's index.
     """
     monkeypatch.setenv("DSJ_LIBRARY", str(tmp_path_factory.mktemp("library") / "library.db"))
+
+
+@pytest.fixture(autouse=True)
+def private_temp_folder(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test its own temp folder, which pytest prunes (#242).
+
+    A test builds the app with no lifespan, so nothing shuts its `Jobs` down,
+    and what it makes in the system's temp folder stays there for good: 20,434
+    `dsj-ui-jobs-*` folders were counted on 7 Oct 2026. Made under this one,
+    they go with pytest's own retention of its last three runs. `TMPDIR` too,
+    so a subprocess a test starts uses it, and `tempfile.tempdir`, which Python
+    reads once and then caches.
+    """
+    private = str(tmp_path_factory.mktemp("tmp"))
+    monkeypatch.setenv("TMPDIR", private)
+    monkeypatch.setattr(tempfile, "tempdir", private)
 
 
 @pytest.fixture(autouse=True)
@@ -419,3 +441,73 @@ def model_id() -> str:
     from dsj.suno import DEFAULT_MODEL
 
     return DEFAULT_MODEL
+
+
+# The page's routes and one library transcript (tests/test_ui_edits.py, tests/test_ui_export.py).
+def page() -> TestClient:
+    # Imported here, not at the top: the install gate's pytest runs on an install
+    # without the `ui` extra, where fastapi is absent (CI, PR #280).
+    from fastapi.testclient import TestClient
+
+    from dsj.ui.server import create_app
+
+    app, token = create_app(port=8721)
+    return TestClient(
+        app, base_url="http://127.0.0.1:8721", headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+def update(seeded: dict[str, Any], content: list[dict[str, Any]]) -> dict[str, Any]:
+    """A PUT of `content` as the transcript's edit list, against the transcript as it is (#249)."""
+    digest = hashlib.sha256(seeded["json"].read_bytes()).hexdigest()
+    return {"content": content, "transcript_sha": digest}
+
+
+def rename(seeded: dict[str, Any], names: dict[str, str]) -> Any:
+    """A PUT of `names` as the speakers' names, made against the list as the server holds it now.
+
+    A rename names the list it was made against, as a patch does (final review C1).
+    """
+    client = page()
+    route = f"/api/transcripts/{seeded['id']}"
+    held = client.get(f"{route}/edits").json()
+    body = {"names": names, "list_sha": held["list_sha"], "transcript_sha": held["transcript_sha"]}
+    return client.put(f"{route}/names", json=body)
+
+
+def tokens(*words: tuple[float, float, str, float]) -> list[dict[str, Any]]:
+    return [{"t": t, "e": e, "w": w, "c": c} for t, e, w, c in words]
+
+
+@pytest.fixture
+def seeded(tmp_path: Path) -> dict[str, Any]:
+    """One recording, one transcript of two sentences, in the library."""
+    audio = tmp_path / "talk.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+         "sine=frequency=440:duration=2", str(audio)],
+        check=True,
+    )
+    payload = {
+        "audio": str(audio),
+        "engine": "parakeet",
+        "model": "mlx-community/parakeet-tdt-0.6b-v3",
+        "speakers": ["SPEAKER_00", "SPEAKER_01"],
+        "diarization": "senko",
+        "text": " Hello there. Fine.",
+        "unclear": [],
+        "sentences": [
+            {"start": 0.2, "end": 0.9, "speaker": 0, "text": " Hello there.",
+             "tokens": tokens((0.2, 0.5, " Hello", 0.99), (0.56, 0.8, " there", 0.4),
+                              (0.8, 0.88, ".", 0.97))},
+            {"start": 1.2, "end": 1.6, "speaker": 1, "text": " Fine.",
+             "tokens": tokens((1.2, 1.5, " Fine", 0.9), (1.5, 1.6, ".", 0.95))},
+        ],
+    }
+    json_path = tmp_path / "talk.json"
+    json_path.write_text(json.dumps(payload))
+    from dsj.ui.store import Library  # lazy, as in page(): the install gate has no `ui` extra
+
+    with Library.open() as library:
+        row = library.record_run(json_path, engine="parakeet")
+    return {"id": row.id, "audio": audio, "json": json_path, "payload": payload}

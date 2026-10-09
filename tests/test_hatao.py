@@ -500,3 +500,46 @@ def test_a_render_refuses_a_recording_the_document_was_not_made_for(
     with pytest.raises(hatao.RenderRefused, match=r"not .*other\.mov"):
         hatao.render(doc, other, tmp_path / "out.mov")
     assert not (tmp_path / "out.mov").exists()
+
+
+# -- speaker names (#243) ---------------------------------------------------------
+
+
+def _named() -> Document:
+    return Document(
+        {"0": "/elsewhere/rec.mov"},
+        (
+            Paragraph("SPEAKER_00"), Item("0", 0.0, 0.5, " hi"),
+            Paragraph("SPEAKER_01"), Item("0", 0.5, 0.5, " yo"),
+        ),
+        {"SPEAKER_00": "Ali"},
+    )
+
+
+def test_speaker_names_come_back_from_the_file_and_survive_every_change() -> None:
+    back = hatao.loads(hatao.dumps(_named()))
+    assert back.names == {"SPEAKER_00": "Ali"}
+    assert hatao.mute(back, 1, 2).names == {"SPEAKER_00": "Ali"}
+    assert hatao.delete(back, 3, 4).names == {"SPEAKER_00": "Ali"}
+    assert hatao.move(back, 2, 4, 0).names == {"SPEAKER_00": "Ali"}
+
+
+def test_a_list_with_no_names_is_written_exactly_as_before() -> None:
+    plain = Document(
+        {"0": "/elsewhere/rec.mov"}, (Paragraph("SPEAKER_00"), Item("0", 0.0, 0.5, " hi"))
+    )
+    assert "names" not in json.loads(hatao.dumps(plain))
+    assert hatao.loads(hatao.dumps(plain)).names == {}
+
+
+@pytest.mark.parametrize("names", [{"SPEAKER_00": "  "}, {"": "Ali"}])
+def test_a_blank_name_or_label_is_refused_by_name(names: dict[str, str]) -> None:
+    with pytest.raises(InvalidDocument, match="speaker name"):
+        hatao.validate(Document({"0": "/x"}, (Paragraph("SPEAKER_00"),), names))
+
+
+def test_names_that_are_not_text_are_refused_on_load() -> None:
+    raw = json.loads(hatao.dumps(_named()))
+    raw["names"] = {"SPEAKER_00": 3}
+    with pytest.raises(InvalidDocument, match="names"):
+        hatao.loads(json.dumps(raw))

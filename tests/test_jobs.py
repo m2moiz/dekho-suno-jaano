@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import typing
@@ -165,6 +166,12 @@ def test_the_picker_lists_the_three_engines_and_nothing_else() -> None:
     assert typing.get_args(EngineName.__value__) == asr.ENGINES
 
 
+def test_every_engine_says_whether_it_is_a_cloud_one_and_what_an_hour_costs() -> None:
+    """The seam for a cloud engine (#247), which the Transcribe dialog draws: no local one is."""
+    listed = page().get("/api/engines").json()
+    assert [(e["cloud"], e["usd_per_hour"]) for e in listed] == [(False, None)] * len(asr.ENGINES)
+
+
 def test_an_engine_that_cannot_run_is_listed_with_its_own_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,6 +304,41 @@ def test_labelling_that_cannot_run_is_a_note_on_a_finished_run(
     assert any("no diarizer here" in note for note in job["notes"]), job["notes"]
     (row,) = client.get("/api/recordings").json()
     assert row["transcripts"][0]["diarized"] is False
+
+
+# -- the status folder goes with the server (#242) ------------------------------
+
+
+def status_folders() -> list[Path]:
+    """The `dsj ui` status folders in the temp folder, which conftest gives each test its own."""
+    return sorted(Path(tempfile.gettempdir()).glob("dsj-ui-jobs-*"))
+
+
+def test_an_app_that_ran_a_job_leaves_no_status_folder_once_it_has_shut_down(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int]
+) -> None:
+    stub = engine(held=True)
+    assert status_folders() == []
+    with page() as client:
+        client.post(f"/api/recordings/{recording[1]}/transcribe", json={"diarize": False})
+        # Held at its first chunk, so it has not reported a state yet.
+        last_job(client, lambda j: j["state"] == "starting")
+        # A job that is still running keeps its status folder: only shutdown removes it.
+        assert len(status_folders()) == 1
+        stub.release_all()
+        last_job(client, finished)
+        assert len(status_folders()) == 1
+    assert status_folders() == []
+
+
+def test_an_app_that_never_ran_a_job_makes_no_status_folder_at_all() -> None:
+    # `just api` and every test that builds the app without a lifespan: nothing
+    # closes those, so nothing may be made until a job needs it.
+    page()
+    # A `with` block runs the app's lifespan, as uvicorn does.
+    with page():
+        pass
+    assert status_folders() == []
 
 
 # -- whisper's options ----------------------------------------------------------
@@ -464,3 +506,137 @@ def test_a_running_job_keeps_the_server_from_stopping_idle() -> None:
     # The idle minute starts when the run ends, not when the page last beat.
     now[0] = 1010.0
     assert beats.idle_s() == 10.0
+
+
+def test_a_roman_urdu_run_and_an_urdu_run_of_one_recording_keep_their_own_transcripts() -> None:
+    """Both are whisper in language "ur"; their words differ, so their files must (#246)."""
+    model = "mlx-community/whisper-large-v3-turbo"
+    urdu = jobs_mod.transcript_path(3, "whisper", model, "ur")
+    roman = jobs_mod.transcript_path(3, "whisper", model, "ur", roman_urdu=True)
+    assert urdu.name == "3-whisper-whisper-large-v3-turbo-ur.json"
+    assert roman.name == "3-whisper-whisper-large-v3-turbo-ur-roman.json"
+
+
+def test_a_roman_urdu_run_from_the_page_writes_to_its_own_name(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Jobs.start hands roman_urdu on to transcript_path, so the page's run is kept apart (#246)."""
+    engine()
+    outs: list[Path] = []
+
+    def transcribe(**arguments: Any) -> None:
+        outs.append(arguments["out"])
+        raise RuntimeError("stopped here: only where the run writes is under test")
+
+    monkeypatch.setattr(suno, "transcribe", transcribe)
+    client = page()
+    body = {"engine": "whisper", "roman_urdu": True, "diarize": False}
+    reply = client.post(f"/api/recordings/{recording[1]}/transcribe", json=body)
+    assert reply.status_code == 202, reply.text
+    last_job(client, finished)
+    expected = f"{recording[1]}-whisper-whisper-large-v3-turbo-ur-roman.json"
+    assert [out.name for out in outs] == [expected]
+
+
+# -- a Roman Urdu transcript from before #246 ---------------------------------------
+
+
+def earlier_run(media: Path, recording_id: int, words: str) -> Path:
+    """A whisper transcript at the plain Urdu run's name, in the library, as before #246."""
+    out = jobs_mod.transcript_path(recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "audio": str(media),
+        "engine": "whisper",
+        "model": DEFAULT_WHISPER_MODEL,
+        "text": words,
+        "sentences": [{"text": words, "start": 0.0, "end": 1.0, "tokens": []}],
+    }
+    out.write_text(json.dumps(payload), encoding="utf-8")
+    with Library.open() as library:
+        library.record_run(out, engine="whisper", language="ur")
+    return out
+
+
+def run_plain_urdu(monkeypatch: pytest.MonkeyPatch, recording_id: int) -> list[str]:
+    """Start a `--language ur` run from the page; return what was at its path when it began."""
+    seen: list[str] = []
+
+    def transcribe(**arguments: Any) -> None:
+        out: Path = arguments["out"]
+        seen.append(out.read_text(encoding="utf-8") if out.exists() else "")
+        raise RuntimeError("stopped here: only what the run finds is under test")
+
+    monkeypatch.setattr(suno, "transcribe", transcribe)
+    client = page()
+    body = {"engine": "whisper", "language": "ur", "diarize": False}
+    reply = client.post(f"/api/recordings/{recording_id}/transcribe", json=body)
+    assert reply.status_code == 202, reply.text
+    last_job(client, finished)
+    return seen
+
+
+def test_a_plain_urdu_run_moves_an_earlier_roman_run_off_its_name_with_its_edits_first(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before #246 a Roman run took the Urdu name; the next Urdu run must not write over it."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "Yaar kal ki meeting das baje hai")
+    before = plain.read_text(encoding="utf-8")
+    edits = jobs_mod.edits.edits_path(plain)
+    edits.parent.mkdir(parents=True, exist_ok=True)
+    edits.write_text('{"made up": "edit list"}', encoding="utf-8")
+    # The note of what it was made from (#249) goes with it, or at its new
+    # name the list would have nothing saying it still fits.
+    note = jobs_mod.edits.source_path(edits)
+    made_from = json.dumps({"transcript_sha": jobs_mod.edits.transcript_sha(plain)})
+    note.write_text(made_from, encoding="utf-8")
+
+    assert run_plain_urdu(monkeypatch, recording_id) == [""]
+
+    roman = jobs_mod.transcript_path(
+        recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur", roman_urdu=True
+    )
+    assert roman.read_text(encoding="utf-8") == before
+    moved_edits = jobs_mod.edits.edits_path(roman)
+    assert moved_edits.read_text(encoding="utf-8") == '{"made up": "edit list"}'
+    assert not edits.exists()
+    # And it still matches the transcript beside it: moved is not stale.
+    moved_note = jobs_mod.edits.source_path(moved_edits)
+    assert moved_note.read_text(encoding="utf-8") == made_from
+    assert made_from == json.dumps({"transcript_sha": jobs_mod.edits.transcript_sha(roman)})
+    assert not note.exists()
+    with Library.open() as library:
+        paths = [t.json_path for t in library.transcripts(recording_id)]
+    assert paths == [roman.resolve()]
+
+
+def test_a_plain_urdu_run_leaves_an_earlier_urdu_run_where_it_is(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same settings again: the run resumes or replaces its own file, as before (#246)."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "کل کی میٹنگ دس بجے ہے")
+    before = plain.read_text(encoding="utf-8")
+    assert run_plain_urdu(monkeypatch, recording_id) == [before]
+
+
+def test_an_earlier_roman_run_never_replaces_a_later_one(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a -roman file already there, the earlier one takes the next free name (#246)."""
+    engine()
+    media, recording_id = recording
+    plain = earlier_run(media, recording_id, "Yaar kal ki meeting das baje hai")
+    before = plain.read_text(encoding="utf-8")
+    roman = jobs_mod.transcript_path(
+        recording_id, "whisper", DEFAULT_WHISPER_MODEL, "ur", roman_urdu=True
+    )
+    roman.write_text("later", encoding="utf-8")
+
+    run_plain_urdu(monkeypatch, recording_id)
+
+    assert roman.read_text(encoding="utf-8") == "later"
+    assert roman.with_name(f"{roman.stem}-2.json").read_text(encoding="utf-8") == before

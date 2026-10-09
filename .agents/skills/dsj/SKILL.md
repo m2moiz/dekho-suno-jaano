@@ -10,7 +10,7 @@ description: >
   or text, when an existing caption file has to stand in for a transcript, or when
   swear words or other listed words have to be bleeped out of a recording.
 metadata:
-  version: 0.4.2
+  version: 0.5.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv
@@ -311,11 +311,19 @@ everything it shows comes from the files the other verbs write, so query those i
 ```bash
 dsj ui
 dsj ui --print-url
+dsj ui --tailnet --print-url
 ```
 
 | Flag | |
 |---|---|
 | `--print-url` | print the URL and serve, without opening a browser |
+| `--tailnet` | also serve it to the owner's own Tailscale devices, and print the phone URL |
+
+dsj 0.5.0 upgrades the library (`library.db`) from version 3 to 5 on first open, keeping
+the old file once as `library.db.v3.bak` beside it and saying so on stderr. dsj 0.4.2
+cannot open a version 5 library: its `dsj ui` will not start and its `dsj suno` runs
+stop being listed. Install 0.5.0 globally (`uv tool install --reinstall` with the bundle
+line from the README) before opening the app from a 0.5.0 checkout.
 
 It listens on `127.0.0.1` only, on a port the kernel picks, and prints the URL, alone,
 on stdout: `http://127.0.0.1:<port>/#t=<token>`. Every `/api` and `/media` request needs
@@ -335,6 +343,69 @@ started from the page (`GET /api/recordings`: every recording, newest first, eac
 with its transcripts' `finished_at`, `engine`, `model`, `diarized`, `speaker_count`,
 `mark_count`, `language`) and serves one transcript's JSON unchanged at
 `GET /api/transcripts/<id>`. For an agent the JSON files are still the thing to read.
+
+A review made in the app leaves two files beside the transcript JSON:
+`<name>.reference.json` (`format: "dsj-reference"`, `version: 1`, the transcript's file
+name, `engine`, `model`, `reviewed_against` (the transcript's sha), `made_at`,
+`complete`, and `segments`, each with `start`, `end`,
+`speaker`, `text`, `flags` and `checked`) and `<name>.reference.txt`, one
+`[m:ss] Speaker: words` line a sentence, its flags after it in words ("(not
+speech, cut off)") and ` [not checked]` on a sentence not checked. They are a person's checked reading of
+the recording: prefer them to the transcript where they exist, and read `complete`
+first, since a key saved part way through marks its unchecked sentences
+`checked: false`. A key already there is never written over: it is moved aside beside
+the new one, named for when it was written (`<name>.reference.20261008T101500Z.json`).
+A sentence checked before the transcript was made again stays checked only if its
+words are unchanged. `flags` holds `unclear`, `not_speech`, `overlap` and `cut_off`. The
+review itself, and each transcript's edit list (`dsj hatao`'s file, with an optional
+`names` map from speaker label to the name a person gave it), live beside the library in
+`reviews/` and `edits/`.
+
+Review is the owner's, by hand: sentence by sentence against the audio, in one of two
+passes, every sentence in order (for an answer key) or only the likely errors
+(unsure words, flags, or where another transcript of the same recording, shown as a
+second opinion, reads the span differently). On the Mac it is keyboard-first; on a
+phone or tablet each sentence is a card, swiped left for checked and right for back.
+The keys, for answering the owner's questions about them:
+
+| Key | Does |
+|---|---|
+| Enter / Shift+Enter | checked and next / previous |
+| Tab / Shift+Tab | play or pause / replay the sentence |
+| Ctrl+, / Ctrl+. | slower / faster (0.75x to 1.5x) |
+| Ctrl+1 to Ctrl+9 | said by speaker n |
+| Ctrl+G | take the second opinion's reading; Ctrl+G again, or Cmd+Z, puts the words back |
+| Ctrl+U / Ctrl+F | flag can't make it out / flag menu |
+| Ctrl+S / Ctrl+M | split at the cursor / merge with the previous |
+| Ctrl+J / Ctrl+Shift+J | next / previous likely error |
+| F6 / Shift+F6 | next / previous region (box, controls, bar, player) |
+| Ctrl+/ / Esc | key sheet / leave (progress is saved) |
+
+With `--tailnet` (for a phone or tablet, #250) it still listens on `127.0.0.1`, and
+runs `tailscale serve --bg --https=<https> http://127.0.0.1:<port>` in front of it, so
+only devices on the owner's tailnet reach it. `<https>` is the first of 8443, 8444, 8445
+and 10000 that serves nothing yet; a port already serving something is skipped, never
+replaced, and 443 is never used. It prints `https://<mac>.<tailnet>.ts.net:<https>/#t=<token>`
+on stdout instead, and a QR code of it on stderr; the token is still required, and
+`<mac>.<tailnet>.ts.net:<https>` is the one extra `Host` let in. The lock file records
+which port the run took, and only that entry is removed when it stops: on Ctrl-C,
+`kill`, a closed Terminal window (SIGHUP), the idle stop or an error. `kill -9` and a
+power cut cannot clean up; the lock file keeps the record, and the next `dsj ui`, with
+or without `--tailnet`, removes the entry first, only if it still points at that dead
+run's port. A record stays until its entry is confirmed gone.
+It waits 30 minutes for a page instead of three, and a page's goodbye does not stop it,
+because a phone sends one on every app switch or screen lock. It exits 1 with one line,
+changing nothing, when `tailscale` is not on PATH, when Tailscale is not running (it
+never starts it), when MagicDNS is off (the Mac has no tailnet name), when all four ports
+already serve something (it names each), or when a `dsj ui` without `--tailnet` is
+already running. A `tailscale` command that hangs is given up after 30 s, with what it
+printed on either stream. With HTTPS certificates off for the tailnet, `serve --bg` is
+expected to print the URL that turns them on, which that line would then carry (read
+from tailscale's source; not yet seen against a real Tailscale). A start that finds a recorded entry says so on
+stderr before it asks tailscale. It never runs `tailscale funnel`, so
+nothing is on the public internet. An agent should not run it: the phone check belongs
+to the owner, and has not been observed yet (Tailscale was stopped while #250 was built;
+the tests drive a stand-in `tailscale`).
 
 It needs the `ui` extra, which the `mac` bundle carries. Without it the command fails
 in a second with `UIUnavailable`, whose message is the line that installs it.

@@ -15,6 +15,7 @@ import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import type { Content, Item } from "../../src/lib/editOps";
 import { installHighlights } from "./highlights";
+import { openBleepPanel } from "./menus";
 
 function item(sourceStart: number, length: number, text: string, muted = false): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted, confidence: text ? 0.9 : null };
@@ -97,14 +98,14 @@ describe("the Render buttons", () => {
         return Response.json([
           {
             id: 2, path: "/rec/a.wav", size_bytes: 1, duration_s: 3, content_id: "c", audio_codec: "pcm",
-            video_codec: null, first_seen: "x", missing: false, unreadable: null,
-            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null, last_edited_at: null }],
+            video_codec: null, first_seen: "x", missing: false, unreadable: null, title: null,
+            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null, last_edited_at: null, language_tag: null, review_checked: null, review_total: null }],
           },
         ]);
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        return Response.json({ content: CONTENT, pad_s: 0.1, edited_at: null, spans: [[0.2, 0.8], [0.9, 1.5]], unrenderable: null });
+        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [[0.2, 0.8], [0.9, 1.5]], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [BRAVO], words_searched: 3, lists: ["en"], recall: "recall: x" });
@@ -118,13 +119,15 @@ describe("the Render buttons", () => {
         return Response.json([{ ...JOB, state: polls > 1 ? "done" : "rendering", fraction: polls > 1 ? 1 : 0.5 }]);
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The reader reads the review for its margin marks (Task 13); none here.
+      if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
 
   it("renders the list as it is, follows the job, and links the file when done", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const panel = await screen.findByRole("region", { name: "Words to bleep" });
+    const panel = await openBleepPanel();
     await within(panel).findByRole("list", { name: "Matches" });
     expect(panel.textContent).toContain("with 2 spans silenced");
     fireEvent.click(within(panel).getByRole("button", { name: "Render" }));
@@ -133,9 +136,21 @@ describe("the Render buttons", () => {
     expect(await within(panel).findByRole("link", { name: "a.bleeped.wav" }, { timeout: 3000 })).toBeTruthy();
   });
 
+  it("shows the render where it is when the drawer is closed and opened again", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const panel = await openBleepPanel();
+    await within(panel).findByRole("list", { name: "Matches" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Render" }));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await vi.waitFor(() => expect(screen.queryByRole("region", { name: "Words to bleep" })).toBeNull());
+    const again = await openBleepPanel();
+    expect(await within(again).findByRole("status", { name: /^Render(ing|ed)$/ })).toBeTruthy();
+  });
+
   it("renders one match alone", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const panel = await screen.findByRole("region", { name: "Words to bleep" });
+    const panel = await openBleepPanel();
     await within(panel).findByRole("list", { name: "Matches" });
     fireEvent.click(within(panel).getByRole("button", { name: "Render alone" }));
     await vi.waitFor(() => expect(sent).toHaveLength(1));

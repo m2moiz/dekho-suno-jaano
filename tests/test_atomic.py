@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from dsj.atomic import atomic_write_text
+from dsj.atomic import atomic_write_text, atomic_write_texts
 
 # Big enough that the write cannot complete in one syscall-sized gulp, which is
 # what makes the torn-read window wide enough to hit reliably. With a 200-byte
@@ -167,3 +167,43 @@ def test_the_file_is_written_as_utf8_whatever_the_locale_is(tmp_path: Path) -> N
     atomic_write_text(p, "café — ünïcode ✓")
 
     assert p.read_bytes() == "café — ünïcode ✓".encode()
+
+
+def test_a_pair_that_fails_part_way_leaves_both_files_as_they_were(tmp_path: Path) -> None:
+    """The second temp cannot be written: the first file is not replaced either."""
+    first = tmp_path / "key.json"
+    first.write_text("old json", encoding="utf-8")
+    second = tmp_path / "gone" / "key.txt"
+    with pytest.raises(FileNotFoundError):
+        atomic_write_texts([(first, "new json"), (second, "new text")], fsync=True)
+    assert first.read_text(encoding="utf-8") == "old json"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json"]
+
+
+def test_a_pair_is_written_whole(tmp_path: Path) -> None:
+    pair = [(tmp_path / "key.json", "{}"), (tmp_path / "key.txt", "text\n")]
+    atomic_write_texts(pair)
+    assert [p.read_text(encoding="utf-8") for p, _ in pair] == ["{}", "text\n"]
+
+
+def test_two_threads_writing_one_file_never_take_each_others_temp(tmp_path: Path) -> None:
+    """One server, two requests at once: the pid alone named the temp, and one renamed it away."""
+    single = tmp_path / "key.json"
+    pair = [tmp_path / "key.json", tmp_path / "key.txt"]
+    failures: list[BaseException] = []
+
+    def writer(mark: str) -> None:
+        try:
+            for _ in range(200):
+                atomic_write_text(single, mark)
+                atomic_write_texts([(p, mark) for p in pair])
+        except BaseException as exc:  # collected, then asserted empty
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(m,)) for m in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json", "key.txt"]

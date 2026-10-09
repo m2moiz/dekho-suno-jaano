@@ -28,9 +28,10 @@ from dsj.hatao import InvalidDocument, RenderRefused, TranscriptUnusable, WordLi
 from dsj.media import FFmpegNotFound, MediaError, NoAudioStream, NoVideoStream
 from dsj.runlock import AlreadyRunning
 from dsj.ui import UIUnavailable
-from dsj.ui.edits import NoSuchTranscript
+from dsj.ui.edits import ListChanged, NoSuchTranscript, TranscriptChanged
 from dsj.ui.jobs import NotStarted
 from dsj.ui.pick import NoFilePicker, PickerBusy
+from dsj.ui.review import InvalidReview, ReviewChanged, ReviewIncomplete
 from dsj.ui.store import NotATranscript, NotTheSameRecording
 from dsj.whisper import WhisperUnavailable
 
@@ -59,6 +60,8 @@ STATUS: dict[type[Exception], int] = {
     RenderRefused: 422,
     # A spelling with no letters, or a user word list that is broken, named (#84).
     WordListError: 422,
+    # A review document that is broken, named (#248).
+    InvalidReview: 422,
     # No such transcript, or its file is gone: the routes' own 404, said by name.
     NoSuchTranscript: 404,
     # Gone from where the library last saw it (#113).
@@ -67,6 +70,14 @@ STATUS: dict[type[Exception], int] = {
     AlreadyRunning: 409,
     # The Mac's file dialog is already open for an earlier click (#110).
     PickerBusy: 409,
+    # An answer key while sentences are unchecked: the request was fine, the review is not done.
+    ReviewIncomplete: 409,
+    # The transcript was made again since the page loaded its list or checked its review (#249).
+    TranscriptChanged: 409,
+    # A patch made against an edit list or a review that has changed since, in
+    # another tab or by a rename: the page reloads it, never patches over it (#251).
+    ListChanged: 409,
+    ReviewChanged: 409,
     # ffmpeg failed on the file in a way nobody named. Genuinely unexpected.
     MediaError: 500,
 }

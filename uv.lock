@@ -378,7 +378,7 @@ wheels = [
 
 [[package]]
 name = "dsj"
-version = "0.4.2"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -398,6 +398,7 @@ mac = [
     { name = "fastapi" },
     { name = "mlx-whisper" },
     { name = "parakeet-mlx" },
+    { name = "segno" },
     { name = "senko" },
     { name = "silero-vad" },
     { name = "uvicorn" },
@@ -411,6 +412,7 @@ sherpa = [
 ]
 ui = [
     { name = "fastapi" },
+    { name = "segno" },
     { name = "uvicorn" },
 ]
 whisper = [
@@ -438,6 +440,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "parakeet-mlx", marker = "extra == 'parakeet'", specifier = ">=0.5.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "segno", marker = "extra == 'ui'", specifier = "==1.6.6" },
     { name = "senko", marker = "extra == 'diarize'", specifier = ">=0.1.0,<0.2" },
     { name = "sherpa-onnx", marker = "extra == 'sherpa'", specifier = ">=1.13.6" },
     { name = "sherpa-onnx-core", marker = "extra == 'sherpa'", specifier = ">=1.13.6" },
@@ -1672,6 +1675,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bb/73/eda39f7a2d306ff0ffc574afd13c0bbb6d10a603d9a413998ee269487a80/scipy-1.18.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:b6f758e35f12757b5d95c00bc6de2438e229c2664b7a92e96f205959d9f2dfa4", size = 37404785, upload-time = "2026-06-19T15:00:34.072Z" },
     { url = "https://files.pythonhosted.org/packages/b7/d2/ae881ee28d014f38e0ccbfd974a06a919ba9af34f1f74bf42b5301891d63/scipy-1.18.0-cp313-cp313-win_amd64.whl", hash = "sha256:1afac4a847207c7ff8efd321734a50b06d0280b3b2a2c0fc2f413101747ad7c7", size = 36554943, upload-time = "2026-06-19T15:00:36.903Z" },
     { url = "https://files.pythonhosted.org/packages/70/3a/21154e2d54eb3639c6bf4dbae2e531c68356bfe95990daa30df33b30d556/scipy-1.18.0-cp313-cp313-win_arm64.whl", hash = "sha256:c5dbddf60e58c2312316d097271a8e73d40eaf2eabfa4d95ed7d3695bbf2ce7b", size = 24350911, upload-time = "2026-06-19T15:00:40.062Z" },
+]
+
+[[package]]
+name = "segno"
+version = "1.6.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/2e/b396f750c53f570055bf5a9fc1ace09bed2dff013c73b7afec5702a581ba/segno-1.6.6.tar.gz", hash = "sha256:e60933afc4b52137d323a4434c8340e0ce1e58cec71439e46680d4db188f11b3", size = 1628586, upload-time = "2025-03-12T22:12:53.324Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/02/12c73fd423eb9577b97fc1924966b929eff7074ae6b2e15dd3d30cb9e4ae/segno-1.6.6-py3-none-any.whl", hash = "sha256:28c7d081ed0cf935e0411293a465efd4d500704072cdb039778a2ab8736190c7", size = 76503, upload-time = "2025-03-12T22:12:48.106Z" },
 ]
 
 [[package]]
