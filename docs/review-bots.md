@@ -148,7 +148,8 @@ PR behaviour.
 1. The `no test may silently skip` step already runs the fast suite a second time. It now
    adds `--cov=dsj --cov-report=xml`, so coverage needs no extra run of the suite. Measured
    locally on 2026-10-09: 160 s without coverage, 147 s and 139 s with it, so the cost is
-   within run to run noise and well under the one minute allowed. The step's guard against
+   within run to run noise and well under the one minute allowed. On CI the step took 2 min
+   43 s on this PR's first push (run 37951151166) against 2 min 10 s on `main` before it. The step's guard against
    skipped tests still reads only pytest's summary line: the XML report adds one line,
    "Coverage XML written to file", and no line that says "skipped".
 2. A new last step uploads `coverage.xml` with `codecov/codecov-action@v7.1.1` and
@@ -277,6 +278,9 @@ secret, but the token has to come from the owner's own `claude setup-token`.
   `dekho-suno-jaano` is listed ([quick start](https://docs.codecov.com/docs/quick-start)).
   The Codecov app is already installed; widen it to all repositories on
   [github.com/settings/installations](https://github.com/settings/installations) if it is not.
+  This step is needed first: the upload from this PR's first CI run (run 37951151166) was
+  refused with `Repository not found`, and the step still showed green because a failed
+  upload does not fail CI. Re-run that job, or push, once the repo shows in Codecov.
 - [ ] **Create no token.** CI authenticates with OIDC. Only if the first upload fails with an
   authentication error: copy the repository token from the repo's **Configuration** tab in
   Codecov, store it as the `CODECOV_TOKEN` secret, and replace `use_oidc: true` with
