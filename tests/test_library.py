@@ -491,6 +491,58 @@ def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
     ]
 
 
+def _downgrade_to_version_3(path: Path) -> Path:
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN title")
+        con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("PRAGMA user_version = 3")
+    return path.with_name(f"{path.name}.v3.bak")
+
+
+def test_a_half_written_backup_from_a_killed_upgrade_does_not_stop_the_next_one(
+    tmp_path: Path,
+) -> None:
+    """#284: SQLite refuses to copy into the leftover temp file, and every start failed on it."""
+    with Library.open() as library:
+        rid = library.add_recording(_wav(tmp_path / "old.wav")).id
+    path = store.library_path()
+    backup = _downgrade_to_version_3(path)
+    partial = backup.with_name(f".{backup.name}.tmp")
+    partial.write_bytes(path.read_bytes()[:100])
+    with Library.open() as library:
+        assert library.recording(rid) is not None
+    with sqlite3.connect(backup) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert con.execute("SELECT id FROM recordings").fetchall() == [(rid,)]
+    assert not partial.exists()
+
+
+def test_a_backup_copy_that_raises_leaves_no_temp_file_behind(tmp_path: Path) -> None:
+    with Library.open() as library:
+        library.add_recording(_wav(tmp_path / "old.wav"))
+    path = store.library_path()
+    backup = _downgrade_to_version_3(path)
+
+    class Boom(Exception):
+        pass
+
+    class Dying(sqlite3.Connection):
+        def backup(self, target: sqlite3.Connection, **kwargs: Any) -> None:
+            # Some bytes reach the temp file before the process dies.
+            target.execute("CREATE TABLE half (x)")
+            raise Boom
+
+    db = sqlite3.connect(path, factory=Dying)
+    try:
+        with pytest.raises(Boom):
+            store._keep_before_upgrade(db, path, 3)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        db.close()
+    assert not backup.exists()
+    assert not backup.with_name(f".{backup.name}.tmp").exists()
+
+
 def test_a_library_backup_already_there_is_never_written_over(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
