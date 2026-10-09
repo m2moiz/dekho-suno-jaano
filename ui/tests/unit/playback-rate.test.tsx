@@ -1,5 +1,4 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -59,28 +58,12 @@ describe("applySpeed", () => {
 });
 
 describe("SpeedControl", () => {
-  it("starts the recording at the saved speed", () => {
-    saveSpeed(1.5);
-    const media = createRef<HTMLAudioElement>();
-    render(
-      <>
-        <audio ref={media} />
-        <SpeedControl media={media} />
-      </>,
-    );
-    expect(media.current?.playbackRate).toBe(1.5);
-    expect(screen.getByRole("combobox", { name: "Playback speed" }).textContent).toContain("1.5×");
-  });
-
-  it("plays at the speed picked, and keeps it", async () => {
-    const media = createRef<HTMLAudioElement>();
-    render(
-      <>
-        <audio ref={media} />
-        <SpeedControl media={media} />
-      </>,
-    );
-    act(() => fireEvent.click(screen.getByRole("combobox", { name: "Playback speed" })));
+  it("shows the speed it is given and hands back the one picked", async () => {
+    const picked: number[] = [];
+    render(<SpeedControl speed={1.5} onSpeed={(s) => picked.push(s)} />);
+    const trigger = screen.getByRole("combobox", { name: "Playback speed" });
+    expect(trigger.textContent).toContain("1.5×");
+    act(() => fireEvent.click(trigger));
     const double = await screen.findByRole("option", { name: "2×" });
     // A click alone picks nothing here: Base UI's Select item also wants the
     // pointerdown a real click starts with (tried one event at a time).
@@ -88,7 +71,6 @@ describe("SpeedControl", () => {
       fireEvent.pointerDown(double, { pointerType: "mouse" });
       fireEvent.click(double);
     });
-    expect(media.current?.playbackRate).toBe(2);
-    expect(readSpeed()).toBe(2);
+    expect(picked).toEqual([2]);
   });
 });

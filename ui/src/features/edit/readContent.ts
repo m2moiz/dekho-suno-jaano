@@ -19,8 +19,27 @@ export type EditReading = {
   stop: Uint32Array;
 };
 
-/** The reading of `content`, with `speakers` (the transcript's legend) naming its paragraphs. */
-export function readContent(content: Content, speakers: string[] | undefined): EditReading {
+/**
+ * The transcript's legend, then any label the list uses that the legend
+ * lacks, in order of first use: a speaker a person added in Review (Ctrl+3 on
+ * a two-speaker call) reads as "Speaker 3". Undefined when neither has a label,
+ * so an unlabelled transcript still breaks paragraphs at pauses (document.ts GAP_S).
+ */
+export function speakerLabels(content: Content, legend: readonly string[] | undefined): string[] | undefined {
+  const labels = [...(legend ?? [])];
+  const known = new Set(labels);
+  for (const entry of content) {
+    if (entry.kind === "paragraph" && entry.speaker !== null && !known.has(entry.speaker)) {
+      known.add(entry.speaker);
+      labels.push(entry.speaker);
+    }
+  }
+  return legend === undefined && labels.length === 0 ? undefined : labels;
+}
+
+/** The reading of `content`, with `legend` (the transcript's speakers, then any the list adds) naming its paragraphs. */
+export function readContent(content: Content, legend: string[] | undefined): EditReading {
+  const speakers = speakerLabels(content, legend);
   const sentences: Sentence[] = [];
   const entryOf: number[][] = [];
   let sentence: Sentence | null = null;

@@ -10,21 +10,25 @@ terminal cannot disagree.
 
 from __future__ import annotations
 
-__all__ = ["entries", "router"]
+__all__ = ["entries", "router", "transcript_number"]
 
 import math
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from dsj import hatao
+from dsj import hatao, likho
 from dsj.ui import edits, words
 from dsj.ui.schemas import (
     EditEntry,
     Edits,
+    EditsPatch,
+    EditsSaved,
     EditsUpdate,
     ItemEntry,
+    ListContent,
     Match,
     Matches,
+    NamesUpdate,
     ParagraphEntry,
     WordAdded,
     WordRequest,
@@ -33,11 +37,24 @@ from dsj.ui.schemas import (
 router = APIRouter(prefix="/api")
 
 
-def _id(transcript_id: str) -> int:
+def transcript_number(transcript_id: str) -> int:
     """The id as a number, or the same 404 the transcript route gives for anything else."""
     if not (transcript_id.isascii() and transcript_id.isdigit()):
         raise HTTPException(404, f"There is no transcript {transcript_id!r} in the library.")
     return int(transcript_id)
+
+
+def _renderable(doc: hatao.Document, duration_s: float | None) -> tuple[
+    list[tuple[float, float]] | None, str | None
+]:
+    """The stretches a render of `doc` silences, or None and why it cannot be rendered."""
+    try:
+        # A length the library never learned leaves the last span unclipped,
+        # which plays the same: nothing is after the recording's end to mute.
+        spans = hatao.spans_to_mute(doc, duration_s=math.inf if duration_s is None else duration_s)
+    except hatao.RenderRefused as exc:
+        return None, str(exc)
+    return spans, None
 
 
 def _wire(opened: edits.Opened) -> Edits:
@@ -59,23 +76,17 @@ def _wire(opened: edits.Opened) -> Edits:
                     confidence=confidence,
                 )
             )
-    spans: list[tuple[float, float]] | None = None
-    unrenderable: str | None = None
-    try:
-        # A length the library never learned leaves the last span unclipped,
-        # which plays the same: nothing is after the recording's end to mute.
-        spans = hatao.spans_to_mute(
-            opened.doc,
-            duration_s=math.inf if opened.duration_s is None else opened.duration_s,
-        )
-    except hatao.RenderRefused as exc:
-        unrenderable = str(exc)
+    spans, unrenderable = _renderable(opened.doc, opened.duration_s)
     return Edits(
         content=content,
+        names=dict(opened.doc.names),
         pad_s=hatao.PAD_S,
         edited_at=opened.edited_at,
         spans=spans,
         unrenderable=unrenderable,
+        replaced=opened.replaced,
+        transcript_sha=opened.transcript_sha,
+        list_sha=edits.list_sha(opened.doc),
     )
 
 
@@ -85,7 +96,7 @@ def _entry(wire: EditEntry) -> hatao.Entry:
     return hatao.Item(wire.source, wire.sourceStart, wire.length, wire.text, wire.muted)
 
 
-def entries(update: EditsUpdate) -> tuple[hatao.Entry, ...]:
+def entries(update: ListContent) -> tuple[hatao.Entry, ...]:
     """The page's entries as dsj.hatao's, `confidence` left behind: it is not in the file."""
     return tuple(_entry(entry) for entry in update.content)
 
@@ -97,27 +108,91 @@ def read_edits(transcript_id: str) -> Edits:
     A transcript without word end times (before v0.2.0, or a `dsj parho`
     import) has none, and is answered 422 with the reason: it still reads,
     but cannot be edited without guessing where each word stops.
+
+    This is the page's own read of the list, so it is the one that hands on,
+    and clears, the sentence saying a list was put aside because the
+    transcript was made again (#249), whichever route put it aside.
     """
-    return _wire(edits.open_edits(_id(transcript_id)))
+    return _wire(edits.open_edits(transcript_number(transcript_id), report=True))
 
 
 @router.put("/transcripts/{transcript_id}/edits")
 def save_edits(transcript_id: str, update: EditsUpdate) -> Edits:
     """Save the page's edit list in place of the last one, or refuse it whole, naming the entry."""
-    return _wire(edits.save_edits(_id(transcript_id), entries(update)))
+    found = transcript_number(transcript_id)
+    return _wire(edits.save_edits(found, entries(update), update.transcript_sha))
+
+
+@router.patch("/transcripts/{transcript_id}/edits")
+def patch_edits(transcript_id: str, change: EditsPatch) -> EditsSaved:
+    """Save one change to the edit list, made against the list `list_sha` names (#251).
+
+    The answer is the new list's sha and what a render would mute, never the
+    entries: on a 2.5 h transcript those were 3.5 MB each way per correction.
+    """
+    saved = edits.patch_edits(
+        transcript_number(transcript_id),
+        change.transcript_sha,
+        change.list_sha,
+        change.start,
+        change.delete,
+        tuple(_entry(entry) for entry in change.insert),
+    )
+    spans, unrenderable = _renderable(saved.doc, saved.duration_s)
+    return EditsSaved(
+        list_sha=edits.list_sha(saved.doc),
+        edited_at=saved.edited_at,
+        spans=spans,
+        unrenderable=unrenderable,
+    )
+
+
+@router.put("/transcripts/{transcript_id}/names")
+def save_names(transcript_id: str, update: NamesUpdate) -> Edits:
+    """Save the speakers' names in the transcript's edit list, the words untouched (#243).
+
+    Made against the list `list_sha` names, as a patch is (#274): a rename is
+    a change to the list, and the page takes the sha it answers as its own.
+    """
+    found = transcript_number(transcript_id)
+    return _wire(edits.save_names(found, update.names, update.transcript_sha, update.list_sha))
+
+
+@router.get(
+    "/transcripts/{transcript_id}/export/{fmt}",
+    response_class=Response,
+    responses={200: {"content": {"text/plain": {}, "text/vtt": {}}}},
+)
+def export(transcript_id: str, fmt: str) -> Response:
+    """The transcript as edited, as SRT, WebVTT or plain text, by dsj likho's own writers (#244).
+
+    A download, by the transcript's id: nothing is written on this machine,
+    and no path reaches the page (#112 rule 5).
+    """
+    write = likho.EXPORTERS.get(fmt)
+    if write is None:
+        known = ", ".join(sorted(likho.EXPORTERS))
+        raise HTTPException(404, f"There is no export format {fmt!r}; there are {known}.")
+    found = transcript_number(transcript_id)
+    text = write(edits.as_payload(edits.open_edits(found)))
+    return Response(
+        content=text,
+        media_type="text/vtt; charset=utf-8" if fmt == "vtt" else "text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="transcript-{found}.{fmt}"'},
+    )
 
 
 @router.post("/transcripts/{transcript_id}/matches")
-def find_matches(transcript_id: str, update: EditsUpdate) -> Matches:
+def find_matches(transcript_id: str, update: ListContent) -> Matches:
     """Every word of the page's edit list a word list spells, by dsj.hatao.find itself.
 
     The page sends its list as it is now, so a word it has just retyped
     (#83) is matched as retyped. Nothing is saved.
     """
-    opened = edits.open_edits(_id(transcript_id))
+    opened = edits.open_edits(transcript_number(transcript_id))
     doc = hatao.validate(hatao.Document(opened.doc.sources, entries(update)))
     found = hatao.find(doc, hatao.load_words(hatao.word_lists()))
-    engine = edits.engine_of(_id(transcript_id))
+    engine = edits.engine_of(transcript_number(transcript_id))
     return Matches(
         matches=[
             Match(

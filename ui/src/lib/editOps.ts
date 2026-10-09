@@ -53,8 +53,16 @@ export type CorrectOp = { kind: "correct"; start: number; stop: number; entries:
  */
 export type RetimeOp = { kind: "retime"; start: number; stop: number; entries: Entry[] };
 
+/**
+ * Put `entries` in place of entries [start, stop): the paragraph marks that
+ * say who said a stretch, changed or added so someone else said it (Hashiya
+ * spec, Review mode, Ctrl+1 to Ctrl+9). The words and their times are
+ * untouched. features/edit/speaker.ts builds it.
+ */
+export type SpeakerOp = { kind: "speaker"; start: number; stop: number; entries: Entry[] };
+
 // Every kind of edit there is. A new kind joins this union and `KINDS` below.
-export type EditOp = MuteOp | FlagOp | DismissOp | CorrectOp | RetimeOp;
+export type EditOp = MuteOp | FlagOp | DismissOp | CorrectOp | RetimeOp | SpeakerOp;
 
 /** What every kind of edit must say: how to do it, how to undo it, and what to call it. */
 export type EditKind<O extends EditOp> = {
@@ -117,6 +125,16 @@ const KINDS: Kinds = {
       entries: before.slice(op.start, op.stop),
     }),
     describe: () => "timing",
+  },
+  speaker: {
+    apply: (content, op) => splice(content, op.start, op.stop, op.entries),
+    invert: (before, op) => ({
+      kind: "speaker",
+      start: op.start,
+      stop: op.start + op.entries.length,
+      entries: before.slice(op.start, op.stop),
+    }),
+    describe: () => "speaker",
   },
 };
 

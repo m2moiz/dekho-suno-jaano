@@ -11,16 +11,12 @@ import {
 import { offsetAtPoint } from "../../src/lib/offsetAtPoint";
 import { syntheticTranscript } from "../perf/fixture";
 import { type FakeHighlight, installHighlights, painted } from "./highlights";
+import { sentence } from "./sentences";
 
 // jsdom has Range but lays nothing out, so Range has no geometry methods at
 // all; each test spies on these placeholders to say where the text is.
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
-
-function sentence(start: number, words: string[], step = 0.5): Sentence {
-  const tokens = words.map((w, i) => ({ t: start + i * step, w }));
-  return { start, end: start + words.length * step, text: words.join(""), tokens };
-}
 
 function doc(sentences: Sentence[]): TranscriptDoc {
   return { audio: "a.wav", model: "m", sentences };

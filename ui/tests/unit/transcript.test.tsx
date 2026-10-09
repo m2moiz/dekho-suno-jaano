@@ -167,6 +167,8 @@ describe("TranscriptPage", () => {
     video_codec: null,
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
+    unreadable: null,
+    title: null,
     transcripts: [
       {
         id: 7,
@@ -177,6 +179,10 @@ describe("TranscriptPage", () => {
         speaker_count: null,
         mark_count: null,
         language: null,
+        last_edited_at: null,
+        language_tag: null,
+        review_checked: null,
+        review_total: null,
       },
     ],
   };
@@ -217,7 +223,13 @@ describe("TranscriptPage", () => {
   it("opens the transcript under its recording's name, with the token on both requests", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     expect(await screen.findByText(" Hello there.", { normalizer: (s) => s })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "review.m4a" })).toBeTruthy();
+    // The library's title for it: the file's name without its extension.
+    const heading = screen.getByRole("heading", { level: 1, name: "review" });
+    expect(heading.getAttribute("lang")).toBeNull();
+    expect(heading.className).toContain("font-reading");
+    // Speaker turns are list items under that one heading, not headings of their own.
+    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     // The library, the transcript, its edit list and the waveform; the
     // recording itself is the <audio> element's own request, with the token in
     // its query (#59).
@@ -228,6 +240,20 @@ describe("TranscriptPage", () => {
     expect(screen.getByRole("note").textContent).toContain("cannot be edited");
     expect(document.querySelector("audio")?.getAttribute("src")).toBe("/api/recording/2/media?t=a-token");
     expect(currentError()).toBeNull();
+  });
+
+  it("sets a recording's Urdu-script title in Nastaliq, with lang ur", async () => {
+    const reply = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (request: Request) =>
+      new URL(request.url).pathname === "/api/recordings"
+        ? Response.json([{ ...RECORDING, title: "امی کی کال" }])
+        : (reply as (r: Request) => Promise<Response>)(request),
+    );
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const heading = await screen.findByRole("heading", { level: 1, name: "امی کی کال" });
+    expect(heading.getAttribute("lang")).toBe("ur");
+    expect(heading.getAttribute("dir")).toBe("auto");
+    expect(heading.className).toContain("font-urdu");
   });
 
   it("shows the error dialog when the library has no such transcript", async () => {

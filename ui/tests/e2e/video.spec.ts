@@ -189,3 +189,35 @@ test("an audio recording has no picture box and no error", async ({ page }) => {
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+/** A tiny video of `seconds`, 16x16 at 1 fps with near-silent sound, so 2.5 h stays small. */
+function tinyVideo(dir: string, seconds: number, name: string): string {
+  const file = path.join(dir, name);
+  run("ffmpeg", [
+    "-y", "-loglevel", "error",
+    "-f", "lavfi", "-i", `color=c=gray:size=16x16:rate=1:duration=${seconds}`,
+    "-f", "lavfi", "-i", `anullsrc=r=8000:cl=mono:d=${seconds}`,
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "8k", "-shortest", file,
+  ]);
+  return file;
+}
+
+// The waveform is the rail's only scrubber. On a phone, a video's rail also
+// holds the picture button, and the time joined it in fix round 1: worked out
+// from font metrics it left the waveform about 26 px, and none at an hour
+// (fix round 1 review, I3). Measured here at 390 px, short and 2.5 h.
+for (const [label, seconds] of [["a 12 s", 12], ["a 2.5 h", 9000]] as const) {
+  test(`on a 390 px phone, ${label} video leaves the waveform 120 px or more`, async ({ page }, info) => {
+    test.slow();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dir = scratchDir();
+    const video = tinyVideo(dir, seconds + info.project.name.length / 100, `tiny-${seconds}-${info.project.name}.mov`);
+    const seeded = seed(transcript(video), dir);
+    await page.goto(readerUrl(seeded));
+    const position = page.getByRole("slider", { name: "Position" });
+    await expect(position).toBeVisible();
+    const box = await position.boundingBox();
+    console.log(`waveform at 390 px, ${label} video: ${box?.width.toFixed(1)} px`);
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(120);
+  });
+}

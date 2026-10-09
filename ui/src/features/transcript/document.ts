@@ -81,6 +81,11 @@ export type Reading = { turns: Turn[]; words: Words; speakers: string[] };
 // sentences a paragraph on the second file, the wall of text #58 is about.
 export const GAP_S = 0.2;
 
+// Half a millisecond: dsj/hatao.py rounds every time to the millisecond, so
+// two times closer than this are one time. Every comparison of times in the
+// reader and the edit list uses it.
+export const TIME_EPS_S = 0.0005;
+
 function fail(message: string): never {
   throw new TypeError(`This transcript cannot be read: ${message}`);
 }

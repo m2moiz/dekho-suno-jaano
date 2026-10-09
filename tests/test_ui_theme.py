@@ -42,7 +42,20 @@ def test_every_colour_is_written_once_for_both_schemes() -> None:
 
 
 def lightness(colour: str) -> float:
-    found = re.fullmatch(r"oklch\(\s*([\d.]+)(%?)\s.*\)", colour.strip())
+    """OKLab lightness, 0 to 1, of an `oklch(...)` or a `#rrggbb` colour."""
+    colour = colour.strip()
+    if colour.startswith("#"):
+        r, g, b = (int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
+        lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+        l_ = 0.4122214708 * lin[0] + 0.5363325363 * lin[1] + 0.0514459929 * lin[2]
+        m_ = 0.2119034982 * lin[0] + 0.6806995451 * lin[1] + 0.1073969566 * lin[2]
+        s_ = 0.0883024619 * lin[0] + 0.2817188376 * lin[1] + 0.6299787005 * lin[2]
+        return (
+            0.2104542553 * l_ ** (1 / 3)
+            + 0.7936177850 * m_ ** (1 / 3)
+            - 0.0040720468 * s_ ** (1 / 3)
+        )
+    found = re.fullmatch(r"oklch\(\s*([\d.]+)(%?)\s.*\)", colour)
     assert found, colour
     value = float(found[1])
     return value / 100 if found[2] else value
@@ -51,7 +64,7 @@ def lightness(colour: str) -> float:
 def test_dark_body_text_is_not_pure_white() -> None:
     """Near-white on near-black halates over an hour's reading (#57 section 11.3)."""
     css = THEME_CSS.read_text()
-    found = re.search(r"--foreground:\s*light-dark\((oklch\([^)]*\)),\s*(oklch\([^)]*\))\)", css)
+    found = re.search(r"(?<![\w-])--foreground:\s*light-dark\(([^,]+),\s*([^)]+)\)", css)
     assert found, "no light-dark() --foreground in theme.css"
     assert lightness(found[2]) < 0.95
     # And the light side really is the dark text, so the pair is not reversed.

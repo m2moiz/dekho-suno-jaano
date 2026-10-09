@@ -1,25 +1,28 @@
-import { useCallback, useEffect, useState } from "react";
+import { Search } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/appError";
-import { transcriptHref } from "@/lib/route";
+import { AppBar } from "@/features/shell/AppBar";
+import { FIELD_EDGE } from "@/features/shell/field";
 import { useFinishedCount } from "@/features/transcribe/jobs";
-import { TranscribeControl } from "@/features/transcribe/TranscribeControl";
-import {
-  durationLabel,
-  engineLabel,
-  fileName,
-  marksLabel,
-  pictureNote,
-  sizeLabel,
-  speakersLabel,
-  whenLabel,
-} from "./describe";
-import { importRecording, relinkRecording } from "./imports";
-import type { RecordingRow, TranscriptRow } from "./types";
+import { fold } from "@/lib/fold";
+import { fileName } from "./describe";
+import { importRecording } from "./imports";
+import { RecordingRowItem } from "./RecordingRow";
+import { displayTitle } from "./title";
+import type { RecordingRow } from "./types";
 
 const ROUTE = "/api/recordings";
+
+// The list is one local request, and a flash of placeholder is worse than a
+// few milliseconds of nothing (#57 section 11.7). So the skeleton shows only
+// when the answer is late enough to be seen waiting: 300 ms, the commonly
+// cited edge of a delay people notice (a convention, not measured here).
+const SKELETON_AFTER_MS = 300;
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; rows: RecordingRow[] };
 
@@ -29,18 +32,86 @@ async function loadRecordings(): Promise<RecordingRow[]> {
   return data;
 }
 
+/** True once `on` has stayed true for `ms`. */
+function useLate(on: boolean, ms: number): boolean {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    if (!on) {
+      setLate(false);
+      return;
+    }
+    const timer = setTimeout(() => setLate(true), ms);
+    return () => clearTimeout(timer);
+  }, [on, ms]);
+  return late;
+}
+
+/** Titles and file names holding every word of `query`, in any order and case. */
+function matches(row: RecordingRow, query: string): boolean {
+  const haystack = fold(`${displayTitle(row)} ${fileName(row.path)}`);
+  return fold(query)
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => haystack.includes(word));
+}
+
 /**
- * Every recording dsj knows, newest first, each with its transcripts (#156),
- * and the way a new one comes in (#110).
+ * The library's front door (#110): the Mac's own file dialog, opened by the
+ * server. The gold primary, in the bar; the empty library offers it again,
+ * in outline, so the screen still has one gold action (rulings F23). Its
+ * waiting line sits on the ground there rather than the blue field.
+ */
+function AddRecording({ onAdded, onField = true }: { onAdded: () => void; onField?: boolean }) {
+  const [asking, setAsking] = useState(false);
+  const run = () => {
+    setAsking(true);
+    importRecording().then(
+      (row) => {
+        setAsking(false);
+        if (row !== null) onAdded();
+      },
+      (thrown: unknown) => {
+        setAsking(false);
+        showError(fromThrown(thrown, "/api/recordings/import"));
+      },
+    );
+  };
+  return (
+    <>
+      <Button
+        variant={onField ? "default" : "outline"}
+        disabled={asking}
+        onClick={run}
+        className={onField ? "h-11 bg-gold px-4 font-semibold text-primary-foreground hover:bg-gold/90" : "h-11 px-4"}
+      >
+        Add recording
+      </Button>
+      {asking && (
+        <span
+          className={`basis-full px-2 text-sm sm:basis-auto ${onField ? "text-field-muted" : "text-muted-foreground"}`}
+          role="status"
+        >
+          Choose a file in the dialog. It may be behind this window.
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Every recording dsj knows, newest first (#156), as conversations: readable
+ * titles, search, and the way a new one comes in (#110).
  */
 export function LibraryPage() {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
-  // Read again when a transcription started from this page finishes (#113), so
-  // its transcript appears without a reload, and when a recording is added or
-  // found again (#110).
+  // Read again when a transcription started from this page finishes (#113),
+  // and when a recording is added, found again or renamed.
   const finished = useFinishedCount();
   const [changed, setChanged] = useState(0);
   const reload = useCallback(() => setChanged((n) => n + 1), []);
+  const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement>(null);
+  const late = useLate(loaded.state === "loading", SKELETON_AFTER_MS);
   useEffect(() => {
     let live = true;
     loadRecordings().then(
@@ -58,149 +129,104 @@ export function LibraryPage() {
     };
   }, [finished, changed]);
 
-  // No skeleton: the list is one local request, and a flash of placeholder is
-  // worse than a few milliseconds of nothing (#57 section 11.7).
-  if (loaded.state === "loading") return null;
+  const empty = loaded.state === "ready" && loaded.rows.length === 0;
+  const shown = loaded.state === "ready" ? loaded.rows.filter((row) => matches(row, query)) : [];
   return (
-    <div className="flex flex-col gap-6">
-      <AddRecording onAdded={reload} />
-      {loaded.state === "failed" ? (
-        <p className="text-muted-foreground">The library could not be read.</p>
-      ) : loaded.rows.length === 0 ? (
-        <p className="text-muted-foreground">The library is empty.</p>
-      ) : (
-        <ul className="flex flex-col gap-6" aria-label="Recordings">
-          {loaded.rows.map((row) => (
-            <Recording key={row.id} row={row} onChanged={reload} />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/**
- * Run one of the dialog's requests: the button waits while the dialog is open,
- * a refusal goes to the error dialog in the server's words, and a cancel does
- * nothing at all.
- */
-function useDialog(ask: () => Promise<RecordingRow | null>, done: () => void, request: string) {
-  const [asking, setAsking] = useState(false);
-  const run = () => {
-    setAsking(true);
-    ask().then(
-      (row) => {
-        setAsking(false);
-        if (row !== null) done();
-      },
-      (thrown: unknown) => {
-        setAsking(false);
-        showError(fromThrown(thrown, request));
-      },
-    );
-  };
-  return [asking, run] as const;
-}
-
-/**
- * The library's front door (#110): the Mac's own file dialog, opened by the
- * server, so the file is read where it lies and never copied. Drag and drop
- * is not here: a page is never told where a dropped file is (#127 trap 16).
- */
-function AddRecording({ onAdded }: { onAdded: () => void }) {
-  const [asking, run] = useDialog(importRecording, onAdded, "/api/recordings/import");
-  return (
-    <div className="flex items-center gap-3">
-      <Button variant="outline" size="sm" disabled={asking} onClick={run}>
-        Add recording
-      </Button>
-      {asking && (
-        <span className="text-sm text-muted-foreground" role="status">
-          Choose a file in the dialog. It may be behind this window.
-        </span>
-      )}
-    </div>
-  );
-}
-
-function FindFile({ row, onFound }: { row: RecordingRow; onFound: () => void }) {
-  const [asking, run] = useDialog(
-    () => relinkRecording(row.id),
-    onFound,
-    `/api/recordings/${row.id}/relink`,
-  );
-  return (
-    <div className="mt-1">
-      <Button variant="outline" size="sm" disabled={asking} onClick={run}>
-        Find this file
-      </Button>
-    </div>
-  );
-}
-
-function Recording({ row, onChanged }: { row: RecordingRow; onChanged: () => void }) {
-  const length = durationLabel(row.duration_s);
-  const size = sizeLabel(row.size_bytes);
-  const picture = pictureNote(row.video_codec);
-  return (
-    <li
-      className={row.missing ? "opacity-50" : undefined}
-      data-missing={row.missing || undefined}
-      aria-label={fileName(row.path)}
-    >
-      <div className="flex items-baseline gap-3">
-        <h2 className="font-medium text-balance">{fileName(row.path)}</h2>
-        {length !== null && <span className="text-sm text-muted-foreground">{length}</span>}
-        {size !== null && <span className="text-sm text-muted-foreground">{size}</span>}
-        {row.video_codec !== null && <span className="text-sm text-muted-foreground">video</span>}
-      </div>
-      {row.missing && (
-        <>
-          <p className="text-sm text-muted-foreground">
-            Missing. Last seen at <span className="font-mono break-all">{row.path}</span>
-          </p>
-          <FindFile row={row} onFound={onChanged} />
-        </>
-      )}
-      {row.unreadable !== null && (
-        <p className="text-sm text-destructive select-text whitespace-pre-wrap" role="note">
-          ffmpeg could not read this file: {row.unreadable}
-        </p>
-      )}
-      {picture !== null && <p className="text-sm text-muted-foreground">{picture}</p>}
-      <ul className="mt-1 flex flex-col gap-0.5">
-        {row.transcripts.map((t) => (
-          <Transcript key={t.id} recording={row.id} t={t} />
-        ))}
-      </ul>
-      <TranscribeControl recording={row} />
-    </li>
-  );
-}
-
-function Transcript({ recording, t }: { recording: number; t: TranscriptRow }) {
-  const parts = [
-    whenLabel(t.finished_at),
-    engineLabel(t),
-    t.model,
-    ...(t.language === null ? [] : [t.language]),
-    speakersLabel(t),
-    marksLabel(t),
-    // Corrected by hand in the app (#83): the edit list changed, never the file.
-    ...(t.last_edited_at === null ? [] : [`edited ${whenLabel(t.last_edited_at)}`]),
-  ];
-  // The whole line opens the transcript (#58): its date and model are what tell
-  // one transcript of a recording from another. A block, so the whole row
-  // takes the click: as an inline link wrapped onto two lines, a click on the
-  // row's middle did not open it in Chromium (2026-10-02).
-  return (
-    <li className="text-sm text-muted-foreground">
-      <a
-        href={transcriptHref(recording, t.id)}
-        className="block underline-offset-4 hover:text-foreground hover:underline"
-      >
-        {parts.join(" · ")}
-      </a>
-    </li>
+    <>
+      {/* The bar's content lines up with the list below it. */}
+      <AppBar measure="max-w-3xl">
+        <h1 className="sr-only">Library</h1>
+        {/* Nothing to search in an empty library. */}
+        {!empty && (
+          <label className="relative order-last flex min-w-0 basis-full items-center sm:order-none sm:max-w-sm sm:flex-1 sm:basis-auto">
+            <Search aria-hidden className="pointer-events-none absolute left-3 size-4 text-field-muted" />
+            <Input
+              ref={search}
+              type="search"
+              dir="auto"
+              aria-label="Search titles"
+              placeholder="Search titles"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className={`h-11 bg-transparent pr-3 pl-9 text-base text-field-foreground placeholder:text-field-muted md:text-sm dark:bg-transparent ${FIELD_EDGE}`}
+            />
+          </label>
+        )}
+        <AddRecording onAdded={reload} />
+      </AppBar>
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-3 px-3 py-6 sm:px-6">
+        {loaded.state === "loading" ? (
+          late && (
+            <ul
+              aria-label="Loading recordings"
+              className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+            >
+              {[0, 1, 2, 3].map((i) => (
+                <li key={i} className="px-4 py-3">
+                  <Skeleton className="h-6 w-2/3" />
+                  <Skeleton className="mt-2 h-4 w-1/3" />
+                </li>
+              ))}
+            </ul>
+          )
+        ) : loaded.state === "failed" ? (
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-muted-foreground">The library could not be read.</p>
+            <Button variant="outline" className="h-11 px-4 sm:h-9" onClick={reload}>
+              Try again
+            </Button>
+          </div>
+        ) : empty ? (
+          <section className="mx-auto mt-16 flex max-w-md flex-col items-start gap-3">
+            <h2 className="font-reading text-2xl font-semibold">No recordings yet</h2>
+            <p className="text-muted-foreground">
+              Add a recording from this Mac. dsj reads it where it is, transcribes it here, and nothing leaves the
+              machine.
+            </p>
+            <AddRecording onAdded={reload} onField={false} />
+          </section>
+        ) : (
+          // A block, not the main column's gap: the status line takes no room while empty.
+          <div>
+            {/* On the page from the first list, so a screen reader hears it
+                when a search stops matching (a live region added already
+                full is often not read). */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <p role="status" className="text-muted-foreground">
+                {shown.length === 0 && (
+                  <>
+                    No title or file name has “<bdi>{query.trim()}</bdi>” in it.
+                  </>
+                )}
+              </p>
+              {shown.length === 0 && (
+                <Button
+                  variant="outline"
+                  className="h-11 px-4 sm:h-9"
+                  onClick={() => {
+                    setQuery("");
+                    search.current?.focus();
+                  }}
+                >
+                  Clear search
+                </Button>
+              )}
+            </div>
+            {shown.length > 0 && (
+              // One surface, a hairline between conversations: an archive to read
+              // down, not a stack of boxes (craft floor, "cards are the lazy container").
+              <ul
+                className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card text-card-foreground"
+                aria-label="Recordings"
+              >
+                {shown.map((row) => (
+                  <RecordingRowItem key={row.id} row={row} onChanged={reload} />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </main>
+    </>
   );
 }

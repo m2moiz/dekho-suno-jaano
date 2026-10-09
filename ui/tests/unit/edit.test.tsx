@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -14,7 +14,9 @@ import { currentError, dismissError } from "../../src/features/errors/appError";
 import { takeToken } from "../../src/features/session/session";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { type Content, Editor, type Entry, type Item, muteRange } from "../../src/lib/editOps";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
+import { stubMatchMedia } from "./media";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted: false, confidence: 0.9, ...extra };
@@ -118,6 +120,19 @@ describe("wordsIn", () => {
     expect(wordsIn(edit.reading, root, select(first, 1, first, 7))).toEqual({ first: 0, last: 0 });
   });
 
+  it("reads a selection whose ends sit on elements, as a triple-click's do, by the text it takes in", () => {
+    const { root, texts } = article();
+    const [first, second] = texts as [Text, Text];
+    const range = document.createRange();
+    // From before the first paragraph to the start of the second: all of the first.
+    range.setStart(root, 0);
+    range.setEnd(second.parentElement as HTMLElement, 0);
+    expect(wordsIn(edit.reading, root, range)).toEqual({ first: 0, last: 1 });
+    range.setStart(first, 3);
+    range.setEnd(root, root.childNodes.length);
+    expect(wordsIn(edit.reading, root, range)).toEqual({ first: 0, last: 2 });
+  });
+
   it("is null for a collapsed selection or one outside the transcript", () => {
     const { root, texts } = article();
     const first = texts[0] as Text;
@@ -140,6 +155,7 @@ describe("TranscriptPage, editing", () => {
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
     unreadable: null,
+    title: null,
     transcripts: [
       {
         id: 7,
@@ -150,6 +166,10 @@ describe("TranscriptPage, editing", () => {
         speaker_count: 2,
         mark_count: null,
         language: null,
+        last_edited_at: null,
+        language_tag: null,
+        review_checked: null,
+        review_total: null,
       },
     ],
   };
@@ -180,38 +200,34 @@ describe("TranscriptPage, editing", () => {
       if (path === "/api/recordings") return Response.json([RECORDING]);
       if (path === "/api/transcripts/7") return Response.json(TRANSCRIPT);
       if (path === "/api/transcripts/7/edits" && request.method === "GET") {
-        return Response.json({ content: CONTENT, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+        return Response.json({ content: CONTENT, names: {}, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null, replaced: null, transcript_sha: "sha-1" });
       }
-      if (path === "/api/transcripts/7/edits" && request.method === "PUT") {
-        const body = (await request.json()) as { content: Content };
-        saved.push(body.content);
-        return Response.json({
-          content: body.content,
-          pad_s: 0.1,
-          edited_at: "2026-10-03T00:00:00+00:00",
-          spans: [],
-          unrenderable: null,
-        });
+      if (path === "/api/transcripts/7/edits" && saves(request)) {
+        const content = await savedList(request, (saved.at(-1) as Content | undefined) ?? CONTENT);
+        saved.push(content);
+        return listReply(content, { edited_at: "2026-10-03T00:00:00+00:00" });
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [], words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: unmeasured" });
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The reader reads the review for its margin marks (Task 13); none here.
+      if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
 
   /**
-   * Select `word` and wait until Mute takes it, as a person waits for an
-   * enabled button. findByRole returns once the toolbar is in the page, which
-   * can be before React has run the effects that listen for the selection:
-   * a click in that gap, less than a frame, found Mute still disabled and did
-   * nothing (3 of 30 runs on 2026-10-03; every run when the click is made in
-   * the commit itself).
+   * Select `word` and wait for the Selection toolbar's `button`, as a person
+   * waits for the tools to appear beside the words. The toolbar appears only
+   * once React has run the effects that read the selection, so finding it is
+   * the wait (a click made in the commit itself, before those effects, did
+   * nothing on 2026-10-03).
    */
   async function selectReady(word: string, button = "Mute"): Promise<HTMLButtonElement> {
     act(() => selectWord(word));
-    const found = screen.getByRole("button", { name: button }) as HTMLButtonElement;
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    const found = within(tools).getByRole("button", { name: button }) as HTMLButtonElement;
     await vi.waitFor(() => expect(found.disabled).toBe(false));
     return found;
   }
@@ -255,6 +271,125 @@ describe("TranscriptPage, editing", () => {
     expect(currentError()).toBeNull();
   });
 
+  /** The edit list's saves held until `release` is called, and what happened in what order. */
+  function holdSaves(answer: "ok" | "fail" = "ok") {
+    const log: string[] = [];
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const before = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/transcripts/7/edits" && saves(request)) {
+        await held;
+        log.push("saved");
+        if (answer === "fail") return Response.json({ error: "Boom", message: "The disk is full.", request: path }, { status: 500 });
+      }
+      return (before as (r: Request) => Promise<Response>)(request);
+    });
+    return { log, release: () => release() };
+  }
+
+  it("R opens Review only once the edit in flight is saved, so Review starts from it (Task 13 re-review)", async () => {
+    const save = holdSaves();
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "r", code: "KeyR" });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Nothing has left yet: no navigation, so no browser "Leave site?" either.
+    expect(save.log).toEqual([]);
+    save.release();
+    await vi.waitFor(() => expect(save.log).toEqual(["saved", "went /?recording=2&transcript=7&review=1"]));
+    expect(currentError()).toBeNull();
+  });
+
+  it("the gold Review link waits the same way", async () => {
+    const save = holdSaves();
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    fireEvent.click(screen.getByRole("link", { name: "Review" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(save.log).toEqual([]);
+    save.release();
+    await vi.waitFor(() => expect(save.log).toEqual(["saved", "went /?recording=2&transcript=7&review=1"]));
+  });
+
+  it("stays in the reader and says so when the edit cannot be saved", async () => {
+    const save = holdSaves("fail");
+    render(<TranscriptPage recording={2} transcript={7} navigate={(href) => save.log.push(`went ${href}`)} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "r", code: "KeyR" });
+    });
+    save.release();
+    await vi.waitFor(() => expect(currentError()?.message).toMatch(/^Review did not open/));
+    // The one error dialog shows this message in place of the save's own, so
+    // it carries the server's reason too (Task 13 re-review round 2).
+    expect(currentError()?.message).toContain("The disk is full.");
+    // A 500 may have been written all the same: the list is read, found without
+    // the change, and the change sent once more, which fails too (#251 fix round 1).
+    expect(save.log).toEqual(["saved", "saved"]);
+  });
+
+  it("offers Unmute in place of Mute once every selected word is muted, and it takes the mute away", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there"));
+    expect(painted(registry, "dsj-muted")).toEqual(["there."]);
+    const tools = screen.getByRole("toolbar", { name: "Selection" });
+    expect(within(tools).queryByRole("button", { name: "Mute" })).toBeNull();
+    fireEvent.click(within(tools).getByRole("button", { name: "Unmute" }));
+    expect(painted(registry, "dsj-muted")).toEqual([]);
+    await vi.waitFor(() => expect(saved).toHaveLength(2));
+  });
+
+  it("on a phone the word toolbar goes once playback starts, so it never sits over the line being read (UAT 8)", async () => {
+    const before = window.matchMedia;
+    const play = HTMLMediaElement.prototype.play;
+    const rect = Range.prototype.getBoundingClientRect;
+    stubMatchMedia((query) => query.includes("coarse"));
+    // Playback runs the playhead, which measures the word it paints.
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+    try {
+      render(<TranscriptPage recording={2} transcript={7} />);
+      await screen.findByRole("toolbar", { name: "Edit" });
+      await selectReady("there");
+      // Play, from the rail: the selection and its toolbar go.
+      act(() => {
+        document.querySelector("audio")?.dispatchEvent(new Event("play"));
+      });
+      await vi.waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull());
+      // Hear, from the toolbar itself, keeps it: the words are being listened to before a fix.
+      fireEvent.click(await selectReady("there", "Hear"));
+      act(() => {
+        document.querySelector("audio")?.dispatchEvent(new Event("play"));
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole("toolbar", { name: "Selection" })).not.toBeNull();
+    } finally {
+      window.matchMedia = before;
+      HTMLMediaElement.prototype.play = play;
+      Range.prototype.getBoundingClientRect = rect;
+    }
+  });
+
+  it("keeps Undo, Redo and whether it is saved in the Edit toolbar, and nothing for the selection there", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    const bar = await screen.findByRole("toolbar", { name: "Edit" });
+    expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Undo", "Redo"]);
+    // "Saved" says nothing before there is an edit for it to be about.
+    expect(within(bar).getByRole("status").textContent).toBe("");
+    fireEvent.click(await selectReady("there"));
+    await vi.waitFor(() => expect(within(bar).getByRole("status").textContent).toBe("Saved"));
+  });
+
   it("leaves Cmd+Z to a text field being typed in", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
@@ -295,9 +430,14 @@ describe("TranscriptPage, editing", () => {
     expect(painted(registry, "dsj-muted")).toEqual(["there."]);
   });
 
-  it("says that edits are kept and their undo history is not", async () => {
+  it("says, in the key sheet, that edits are kept and their undo history is not", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
-    const bar = await screen.findByRole("toolbar", { name: "Edit" });
-    expect(bar.textContent).toContain("closing or reloading it keeps the edits and forgets their undo");
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => fireEvent.keyDown(document.body, { key: "?", code: "Slash", shiftKey: true }));
+    // KeySheet is App's; this page only asks for it, so the request is read back here.
+    const { KeySheet, hideKeys } = await import("../../src/features/shell/KeySheet");
+    render(<KeySheet />);
+    expect((await screen.findByRole("dialog")).textContent).toContain("closing or reloading it keeps the edits and forgets their undo");
+    act(() => hideKeys());
   });
 });

@@ -30,16 +30,19 @@ __all__ = [
     "NotStarted",
     "Render",
     "engine_choices",
+    "keep_earlier_roman_run",
     "render_path",
     "transcript_path",
 ]
 
 import contextlib
+import glob
 import json
 import logging
 import os
 import queue
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -58,8 +61,9 @@ from dsj.filetag import source_sidecar_for
 from dsj.parakeet import DEFAULT_MODEL as PARAKEET_MODEL
 from dsj.sherpa import DEFAULT_MODEL as SHERPA_MODEL
 from dsj.ui import edits
+from dsj.ui.review import review_path
 from dsj.ui.schemas import TranscribeRequest
-from dsj.ui.store import Library, library_path
+from dsj.ui.store import URDU_SHARE, Library, NotATranscript, library_path, urdu_share_of
 from dsj.whisper import DEFAULT_WHISPER_MODEL
 
 # Each engine's own default, which the page's model box starts on. Not what
@@ -83,6 +87,12 @@ class EngineChoice:
     # Why it cannot run here, in the sentence its own available() wrote, or None.
     reason: str | None
     default_model: str
+    # The seam for a cloud engine (#247, Hashiya spec, Transcribe): one that
+    # sends the audio off this Mac says so, and what an hour of audio costs on
+    # it, and the Transcribe dialog marks it and prices the recording. The
+    # three engines dsj has run here and cost nothing.
+    cloud: bool = False
+    usd_per_hour: float | None = None
 
 
 def engine_choices() -> list[EngineChoice]:
@@ -103,7 +113,9 @@ def engine_choices() -> list[EngineChoice]:
     return choices
 
 
-def transcript_path(recording_id: int, engine: str, model: str, language: str | None) -> Path:
+def transcript_path(
+    recording_id: int, engine: str, model: str, language: str | None, *, roman_urdu: bool = False
+) -> Path:
     """Where a run from the page writes its transcript: one file per recording and settings.
 
     Beside the library, not beside the recording: the page never writes into
@@ -111,10 +123,72 @@ def transcript_path(recording_id: int, engine: str, model: str, language: str | 
     second run with other settings keeps the first one's file, and a run
     repeated with the same settings writes the same path, where its checkpoint
     lets it resume (dsj/checkpoint.py keys that file to `out`).
+
+    A Roman Urdu run is whisper in language "ur" with a prompt, so without its
+    own suffix it took the same name as a plain Urdu run and replaced it
+    (#246): the Transcribe dialog offers both, and Review's second opinion
+    needs both kept. A Roman Urdu run started before this fix resumes from
+    nothing once, under the new name.
     """
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(model).name or model).strip("._") or "model"
     stem = f"{recording_id}-{engine}-{name}" + (f"-{language}" if language else "")
+    stem += "-roman" if roman_urdu else ""
     return library_path().parent / "transcripts" / f"{stem}.json"
+
+
+def keep_earlier_roman_run(out: Path, roman: Path) -> Path | None:
+    """Move a Roman Urdu transcript found at a plain Urdu run's `out` to its own name (#246).
+
+    Before #246 a Roman Urdu run from the page took the plain Urdu run's name,
+    so the next plain Urdu run would write over it, and over whatever the owner
+    corrected in it. Called by that run before it starts: a transcript at `out`
+    mostly in Latin letters is a Roman one (under URDU_SHARE, which sits
+    between the 3% Urdu script --roman-urdu writes and the 78% --language ur
+    does, dsj/ui/store.py), and it goes to `roman`, or `roman`'s
+    next free numbered name when a later Roman run already has it, so neither
+    is written over. Its edit list, review and the files beside it named after
+    it go with it, and the library's row follows, keeping its id.
+
+    Returns where it went, or None when `out` holds no Roman transcript: the
+    run then resumes from or replaces its own earlier file, as it always has.
+    """
+    if not out.is_file():
+        return None
+    try:
+        share = urdu_share_of(out)
+    except NotATranscript:
+        # Not a transcript the library can read: nothing of the owner's to keep.
+        return None
+    if share >= URDU_SHARE:
+        return None
+    target, n = roman, 1
+    while target.exists():
+        n += 1
+        target = roman.with_name(f"{roman.stem}-{n}{roman.suffix}")
+    beside = [p for p in out.parent.glob(f"{glob.escape(out.stem)}.*") if p != out]
+    moves = [(out, target)]
+    moves += [(p, target.with_name(target.stem + p.name[len(out.stem) :])) for p in beside]
+    # The edit list goes with its note of the transcript it was made from
+    # (#249), and with any word for the page that it was put aside: the
+    # transcript's bytes do not change, so at its new name the list still
+    # matches, and is never taken for a stale one.
+    moves += list(zip(edits.kept_with(out), edits.kept_with(target), strict=True))
+    moves += [(review_path(out), review_path(target))]
+    # Under the lock the page's saves take, so a save landing now cannot
+    # write an edit list or a review back under the name being left.
+    with edits.WRITING:
+        for source, dest in moves:
+            if source.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(dest)
+        with Library.open() as library:
+            library.move_transcript(out, target)
+    logging.getLogger("dsj.suno").warning(
+        "kept an earlier Roman Urdu transcript of this recording: it was at %s and is now at %s",
+        out.name,
+        target.name,
+    )
+    return target
 
 
 @dataclass
@@ -130,6 +204,9 @@ class Job:
     started_at: str
     out: Path
     status_path: Path
+    # Where a plain Urdu run moves a Roman Urdu transcript it finds at `out`
+    # before it starts (keep_earlier_roman_run, #246); None for any other run.
+    roman_twin: Path | None = None
     # Set by the worker when the run is over, and only then.
     outcome: str | None = None
     error: str | None = None
@@ -269,7 +346,25 @@ class Jobs:
         self._worker: threading.Thread | None = None
         self._start_lock = threading.Lock()
         # Status files only this server reads; nothing in them outlives a run.
-        self._status_dir = Path(tempfile.mkdtemp(prefix="dsj-ui-jobs-"))
+        # Made by the first job, not here: an app built and never served (`just
+        # api`, a test) has nothing to close it, and 20,434 such folders filled
+        # the Mac's temp folder (#242). `close()` removes it.
+        self._status_dir: Path | None = None
+
+    def close(self) -> None:
+        """Remove the status folder. Called when the server shuts down, and only then.
+
+        A job still running at that point loses its status file with the rest;
+        it is on a daemon thread that the exit takes with it. While the server
+        is up a running job's file is never touched, which is why this is not
+        called when a job ends.
+        """
+        with self._start_lock:
+            folder, self._status_dir = self._status_dir, None
+        if folder is not None:
+            # ignore_errors: a worker may be writing into it as it goes, and a
+            # folder that cannot be removed must not stop the server's exit.
+            shutil.rmtree(folder, ignore_errors=True)
 
     def all(self) -> list[Job]:
         """Every job, the first started first."""
@@ -302,10 +397,12 @@ class Jobs:
         get_engine(engine)  # EngineUnavailable with its remedy, before any lock is taken
         model: str = arguments["model_id"]
         language: str | None = arguments["language"]
-        out = transcript_path(recording_id, engine, model, language)
+        out = transcript_path(recording_id, engine, model, language, roman_urdu=request.roman_urdu)
         out.parent.mkdir(parents=True, exist_ok=True)
         with self._start_lock:
             job_id = len(self._jobs) + 1
+            if self._status_dir is None:
+                self._status_dir = Path(tempfile.mkdtemp(prefix="dsj-ui-jobs-"))
             status_path = self._status_dir / f"{job_id}.status.json"
             # Taken here, so a refusal is this request's answer; released by the
             # worker when the run is over.
@@ -329,6 +426,11 @@ class Jobs:
                 started_at=datetime.now(UTC).isoformat(timespec="seconds"),
                 out=out,
                 status_path=status_path,
+                roman_twin=(
+                    transcript_path(recording_id, engine, model, language, roman_urdu=True)
+                    if engine == "whisper" and language == "ur" and not request.roman_urdu
+                    else None
+                ),
             )
             self._jobs[job_id] = job
             run_arguments = arguments | {"out": out, "status_path": status_path}
@@ -497,6 +599,8 @@ class Jobs:
         error: str | None = None
         try:
             with self._hold():
+                if job.roman_twin is not None:
+                    keep_earlier_roman_run(job.out, job.roman_twin)
                 # Looked up at call time, so a test can stand in for it.
                 suno.transcribe(**arguments)
                 with Library.open() as library:

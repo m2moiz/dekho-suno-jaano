@@ -13,7 +13,8 @@ import {
 } from "../../src/features/transcript/confidence";
 import { read, type Sentence, type TranscriptDoc } from "../../src/features/transcript/document";
 import { TranscriptView } from "../../src/features/transcript/TranscriptView";
-import { UnsureToggle } from "../../src/features/transcript/UnsureToggle";
+import { UnsureNav } from "../../src/features/transcript/UnsureNav";
+import { contrast, pair } from "./contrast";
 import { type FakeHighlight, installHighlights, painted } from "./highlights";
 
 type Piece = [w: string, c?: number];
@@ -62,7 +63,7 @@ describe("a word's confidence", () => {
   });
 });
 
-describe("UnsureToggle", () => {
+describe("UnsureNav", () => {
   let registry: Map<string, FakeHighlight>;
   beforeEach(() => {
     registry = installHighlights();
@@ -76,7 +77,7 @@ describe("UnsureToggle", () => {
     const article = createRef<HTMLElement>();
     render(
       <>
-        <UnsureToggle reading={reading} model={model} article={article} />
+        <UnsureNav reading={reading} model={model} article={article} />
         <TranscriptView reading={reading} articleRef={article} />
       </>,
     );
@@ -86,13 +87,75 @@ describe("UnsureToggle", () => {
 
   it("is off until switched on, then paints every unsure word, and clears when switched off", () => {
     mount(WHISPER, SHAKY);
-    const toggle = screen.getByRole("button", { name: "Unsure words (2)" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    // A real switch named for what it does, the count beside it (critique 7 Oct round 2, P2-4).
+    const toggle = screen.getByRole("switch", { name: "Unsure words" });
+    expect(screen.getByRole("group", { name: "Unsure words" }).textContent).toContain("2");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(registry.has(UNSURE)).toBe(false);
     act(() => fireEvent.click(toggle));
     expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
     act(() => fireEvent.click(toggle));
     expect(registry.has(UNSURE)).toBe(false);
+  });
+
+  it("selects the next unsure word with its arrow, and the previous one, wrapping round, switching the tint on", () => {
+    mount(WHISPER, SHAKY);
+    const next = screen.getByRole("button", { name: "Next unsure word" });
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("two");
+    expect(screen.getByRole("switch", { name: "Unsure words" }).getAttribute("aria-checked")).toBe("true");
+    expect(painted(registry, UNSURE)).toEqual(["two", "three"]);
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("three");
+    act(() => fireEvent.click(next));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Previous unsure word" })));
+    expect(window.getSelection()?.toString()).toBe("three");
+  });
+
+  it("answers ] and [ from the page, but not from inside a text field", () => {
+    mount(WHISPER, SHAKY);
+    act(() => fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.keyDown(document.body, { key: "[", code: "BracketLeft" }));
+    expect(window.getSelection()?.toString()).toBe("three");
+    const field = document.createElement("input");
+    document.body.append(field);
+    act(() => fireEvent.keyDown(field, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("three");
+    field.remove();
+  });
+
+  it("goes on from where it was after an edit renumbers the words: skip one, fix the next, ] goes to the one after", () => {
+    const shaky = (third: number) => [sentence(0, [[" one", 0.95], [" two", 0.2], [" three", third], [" four", 0.1]])];
+    const first = read(doc(WHISPER, shaky(0.25)));
+    const article = createRef<HTMLElement>();
+    const view = (reading: typeof first) => (
+      <>
+        <UnsureNav reading={reading} model={WHISPER} article={article} />
+        <TranscriptView reading={reading} articleRef={article} />
+      </>
+    );
+    const { rerender } = render(view(first));
+    const next = () => act(() => fireEvent.keyDown(document.body, { key: "]", code: "BracketRight" }));
+    next();
+    expect(window.getSelection()?.toString()).toBe("two");
+    next();
+    expect(window.getSelection()?.toString()).toBe("three");
+    // "three" corrected: sure now, and a new reading of the words.
+    rerender(view(read(doc(WHISPER, shaky(1)))));
+    next();
+    expect(window.getSelection()?.toString()).toBe("four");
+  });
+
+  it("answers ] and [ with a button focused, the arrows' own included", () => {
+    mount(WHISPER, SHAKY);
+    const next = screen.getByRole("button", { name: "Next unsure word" });
+    next.focus();
+    act(() => fireEvent.keyDown(next, { key: "]", code: "BracketRight" }));
+    expect(window.getSelection()?.toString()).toBe("two");
+    act(() => fireEvent.keyDown(next, { key: "[", code: "BracketLeft" }));
+    expect(window.getSelection()?.toString()).toBe("three");
   });
 
   it("is not offered for a transcript with no confidence, or from an engine it has no cut-off for", () => {
@@ -103,36 +166,6 @@ describe("UnsureToggle", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 });
-
-// WCAG 2 contrast from the oklch() values in the stylesheets, so a colour
-// changed there is checked here. oklch -> OKLab -> linear sRGB per Björn
-// Ottosson's published matrices, then relative luminance.
-function luminance(l: number, c: number, h: number): number {
-  const a = c * Math.cos((h * Math.PI) / 180);
-  const b = c * Math.sin((h * Math.PI) / 180);
-  const l_ = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-  const m_ = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-  const s_ = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
-  const clamp = (x: number) => Math.min(1, Math.max(0, x));
-  const r = clamp(4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_);
-  const g = clamp(-1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_);
-  const bl = clamp(-0.0041960863 * l_ - 0.7034186147 * m_ + 1.707614701 * s_);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
-}
-
-function contrast(x: number[], y: number[]): number {
-  const [hi, lo] = [luminance(x[0] ?? 0, x[1] ?? 0, x[2] ?? 0), luminance(y[0] ?? 0, y[1] ?? 0, y[2] ?? 0)].sort((p, q) => q - p);
-  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
-}
-
-/** The light and dark oklch() inside `light-dark(...)` on the line declaring `property` after `selector`. */
-function pair(css: string, selector: string, property: string): [number[], number[]] {
-  const block = css.slice(css.indexOf(selector));
-  const line = new RegExp(`${property}:\\s*light-dark\\(([^;]+)\\);`).exec(block)?.[1] ?? "";
-  const colours = Array.from(line.matchAll(/oklch\(([\d.]+) ([\d.]+) ([\d.]+)/g), (m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
-  if (colours.length !== 2) throw new Error(`no light-dark oklch pair for ${property} in ${selector}`);
-  return [colours[0] ?? [], colours[1] ?? []];
-}
 
 describe("tinted text stays readable", () => {
   const ui = path.resolve(import.meta.dirname, "../../src");

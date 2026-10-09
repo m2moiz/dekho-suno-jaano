@@ -1,0 +1,117 @@
+/* Review mode's desk (Hashiya spec, Review mode). The sentence in hand is the
+   only thing at full contrast: large, already in an edit box with a gold edge.
+   The sentences around it and the second opinion are the dim ink (4.5:1,
+   palette.test.ts), plainly not the one in hand. Urdu in Nastaliq at 1.3x and
+   2.1 leading, as in the reader (transcript.css). */
+
+/* The margin on the left of every sentence, the same side for Urdu and
+   English, as the reader's: the grid runs left to right, each text its own way. */
+/* The measure of an Urdu sentence on the desk, box and context alike. */
+:root {
+  --urdu-desk-measure: 34rem;
+}
+
+.review-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  column-gap: 1.75rem;
+  direction: ltr;
+}
+
+.review-margin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.45rem;
+  font: 500 0.8125rem/1.35 var(--font-sans);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-margin .nameplate {
+  max-width: 100%;
+  color: var(--speaker, var(--muted-foreground));
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* How long the sentence lasted, to scale: 15 s fills the margin. */
+.review-tick {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  inline-size: max(3px, var(--tick, 0%));
+  background: var(--speaker, var(--muted-foreground));
+}
+
+/* The Textarea primitive with the box Review needs. Unlayered, so it outranks
+   the primitive's utilities (index.css says why). Focus stays in it the whole
+   time, so its gold edge is its focus mark; the outline would only double it. */
+.review-box {
+  min-height: 4.75rem;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--gold-ink);
+  border-radius: 0.75rem;
+  background: var(--card);
+  color: var(--foreground);
+  font: 400 1.5rem/1.6 var(--font-reading);
+  unicode-bidi: plaintext;
+  text-align: start;
+  resize: none;
+}
+
+.review-box:focus-visible {
+  outline: none;
+  border-color: var(--gold-ink);
+  box-shadow: none;
+}
+
+.review-box:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.95rem;
+  line-height: 2.1;
+  /* Right to left, the sentence starts on the right, a whole column from the
+     margin; a narrower measure brings its start near it (owner's ruling,
+     8 Oct; critique 7 Oct, P1-1): about 42 Nastaliq letters at this size,
+     as the reader's 30ch holds about 45 at its own. */
+  max-inline-size: var(--urdu-desk-measure);
+}
+
+.review-context {
+  margin: 0;
+  color: var(--dim);
+  font: 400 1.0625rem/1.65 var(--font-reading);
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+.review-context:lang(ur) {
+  font-family: var(--font-urdu);
+  font-size: 1.38rem;
+  line-height: 2.1;
+  /* Its start lines up with the box text's: the box's measure less the box's
+     padding and edge, which the context lines do not have. */
+  max-inline-size: calc(var(--urdu-desk-measure) - 1rem - 2px);
+}
+
+/* The card's speaker chips (ReviewCard.tsx): each in its speaker's colour,
+   which palette.test.ts holds to 4.5:1 as text on the ground and on a card;
+   the one who says the sentence in hand is filled with a wash of it and set
+   heavier, in the ink, as a hovered chip is, since neither wash is measured. */
+.review-chip {
+  border-color: var(--speaker, var(--border));
+  color: var(--speaker, var(--foreground));
+}
+
+.review-chip:hover,
+.review-chip[aria-pressed="true"] {
+  color: var(--foreground);
+}
+
+.review-chip[aria-pressed="true"] {
+  border-width: 2px;
+  background: color-mix(in oklch, var(--speaker, var(--muted)) 16%, var(--card));
+  font-weight: 650;
+}

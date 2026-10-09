@@ -4,7 +4,7 @@
 // mean something else without failing anything.
 import { describe, expect, it } from "vitest";
 
-import { SHAPE, syntheticTranscript } from "../perf/fixture.ts";
+import { LONG_SHAPE, SHAPE, syntheticTranscript } from "../perf/fixture.ts";
 
 describe("the synthetic perf fixture", () => {
   const transcript = syntheticTranscript();
@@ -37,5 +37,18 @@ describe("the synthetic perf fixture", () => {
     for (const sentence of transcript.sentences) {
       expect(sentence.text).toBe(sentence.tokens.map((token) => token.w).join(""));
     }
+  });
+});
+
+describe("the 2.5 h fixture", () => {
+  const long = syntheticTranscript(LONG_SHAPE);
+  it("has 1,500 sentences, 31,500 tokens, 344 turns and four speakers, and lasts about 2.5 h", () => {
+    expect(long.sentences).toHaveLength(1500);
+    expect(long.sentences.flatMap((s) => s.tokens)).toHaveLength(31500);
+    const turns = long.sentences.filter((s, i) => i === 0 || s.speaker !== long.sentences[i - 1]?.speaker);
+    expect(turns).toHaveLength(344);
+    expect(long.speakers).toEqual(["SPEAKER_00", "SPEAKER_01", "SPEAKER_02", "SPEAKER_03"]);
+    expect(new Set(long.sentences.map((s) => s.speaker)).size).toBe(4);
+    expect(long.sentences.at(-1)?.end ?? 0).toBeGreaterThan(9000);
   });
 });

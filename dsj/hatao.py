@@ -97,7 +97,7 @@ import sys
 import tomllib
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -159,10 +159,18 @@ type Entry = Paragraph | Item
 
 @dataclass(frozen=True)
 class Document:
-    """Sources by id, each an absolute path, and the entries that play from them."""
+    """Sources by id, each an absolute path, the entries that play from them, and speaker names.
+
+    `names` maps a speaker label (a paragraph's `speaker`) to the name a person
+    gave it in the app (#243, Hashiya spec "Speakers are renamable").
+    Optional and additive: a file without it is the version 1 file it always
+    was, written byte for byte as before, and a dsj older than this ignores the
+    key. Paragraphs keep their labels; only what the page shows changes.
+    """
 
     sources: Mapping[str, str]
     content: tuple[Entry, ...]
+    names: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 def _where(index: int, entry: Entry) -> str:
@@ -186,6 +194,12 @@ def validate(doc: Document) -> Document:
     for key, path in doc.sources.items():
         if not key or not path:
             raise InvalidDocument(f"source {key!r} has no path; every source names a file")
+    for label, name in doc.names.items():
+        if not label or not name.strip():
+            raise InvalidDocument(
+                f"speaker name {name!r} for label {label!r}: both must be non-empty text; "
+                f"leave a speaker out of `names` to show the diarizer's own label"
+            )
     for index, entry in enumerate(doc.content):
         if isinstance(entry, Paragraph):
             if entry.language is not None and not _LANGUAGE.match(entry.language):
@@ -291,13 +305,13 @@ def mute(doc: Document, start: int, stop: int, *, muted: bool = True) -> Documen
         replace(entry, muted=muted) if start <= i < stop and isinstance(entry, Item) else entry
         for i, entry in enumerate(doc.content)
     )
-    return validate(Document(doc.sources, content))
+    return validate(replace(doc, content=content))
 
 
 def delete(doc: Document, start: int, stop: int) -> Document:
     """Take entries [start, stop) out of the list. The source keeps its audio."""
     _check_range(doc, start, stop)
-    return validate(Document(doc.sources, doc.content[:start] + doc.content[stop:]))
+    return validate(replace(doc, content=doc.content[:start] + doc.content[stop:]))
 
 
 def move(doc: Document, start: int, stop: int, to: int) -> Document:
@@ -308,7 +322,7 @@ def move(doc: Document, start: int, stop: int, to: int) -> Document:
     block = doc.content[start:stop]
     rest = doc.content[:start] + doc.content[stop:]
     at = to if to <= start else to - len(block)
-    return validate(Document(doc.sources, rest[:at] + block + rest[at:]))
+    return validate(replace(doc, content=rest[:at] + block + rest[at:]))
 
 
 def _entry_json(entry: Entry) -> dict[str, Any]:
@@ -332,15 +346,16 @@ def dumps(doc: Document) -> str:
     """
     validate(doc)
     used = {entry.source for entry in doc.content if isinstance(entry, Item)}
-    return json.dumps(
-        {
-            "format": FORMAT,
-            "version": FORMAT_VERSION,
-            "sources": {key: path for key, path in doc.sources.items() if key in used},
-            "content": [_entry_json(entry) for entry in doc.content],
-        },
-        ensure_ascii=False,
-    )
+    out: dict[str, Any] = {
+        "format": FORMAT,
+        "version": FORMAT_VERSION,
+        "sources": {key: path for key, path in doc.sources.items() if key in used},
+        "content": [_entry_json(entry) for entry in doc.content],
+    }
+    # Only when there are names, so a list nobody renamed is the file it always was.
+    if doc.names:
+        out["names"] = dict(doc.names)
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _broken(index: int, name: str, kind: str, raw: Mapping[str, Any]) -> InvalidDocument:
@@ -410,8 +425,13 @@ def loads(text: str) -> Document:
     paths = cast("dict[Any, Any]", sources)
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in paths.items()):
         raise InvalidDocument(f"every source must map an id to a path: {paths!r}")
+    names = top.get("names", {})
+    if not isinstance(names, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in cast("dict[Any, Any]", names).items()
+    ):
+        raise InvalidDocument(f"`names` must map speaker labels to names, both text: {names!r}")
     entries = tuple(_entry(i, entry) for i, entry in enumerate(cast("list[Any]", content)))
-    return validate(Document(cast("dict[str, str]", paths), entries))
+    return validate(Document(cast("dict[str, str]", paths), entries, cast("dict[str, str]", names)))
 
 
 def save(doc: Document, path: Path) -> None:

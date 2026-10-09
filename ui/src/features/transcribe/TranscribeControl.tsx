@@ -12,7 +12,7 @@ import { TranscribeDialog } from "./TranscribeDialog";
  * the error if it failed, what it could not do if it finished with notes.
  * Cancel is #72 and a queue of many files is #90; neither is here.
  */
-export function TranscribeControl({ recording }: { recording: RecordingRow }) {
+export function TranscribeControl({ recording, label = "Transcribe" }: { recording: RecordingRow; label?: string }) {
   const job = useJobFor(recording.id);
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -26,15 +26,16 @@ export function TranscribeControl({ recording }: { recording: RecordingRow }) {
           <Button
             variant="outline"
             size="sm"
+            className="h-11 sm:h-9"
             disabled={recording.missing || recording.unreadable !== null}
             onClick={() => setOpen(true)}
           >
-            Transcribe
+            {label}
           </Button>
         </div>
       )}
       {job?.state === "failed" && (
-        <p className="text-sm text-destructive select-text" role="alert">
+        <p className="text-sm whitespace-pre-wrap text-destructive select-text" role="alert">
           The last transcription failed: {job.error}
         </p>
       )}

@@ -15,6 +15,7 @@ import { takeToken } from "../../src/features/session/session";
 import { hasFraction, progressLine } from "../../src/features/transcribe/describe";
 import { type Engine, forgetJobs, type Job } from "../../src/features/transcribe/jobs";
 import { TranscribeControl } from "../../src/features/transcribe/TranscribeControl";
+import { choose } from "./menus";
 
 const RECORDING: RecordingRow = {
   id: 4,
@@ -24,6 +25,7 @@ const RECORDING: RecordingRow = {
   audio_codec: "aac",
   missing: false,
   unreadable: null,
+  title: null,
   duration_s: 315,
   video_codec: null,
   first_seen: "2026-10-02T08:30:00+00:00",
@@ -31,12 +33,20 @@ const RECORDING: RecordingRow = {
 };
 
 const ENGINES: Engine[] = [
-  { name: "parakeet", reason: null, default_model: "mlx-community/parakeet-tdt-0.6b-v3" },
-  { name: "whisper", reason: null, default_model: "mlx-community/whisper-large-v3-turbo" },
+  { name: "parakeet", reason: null, default_model: "mlx-community/parakeet-tdt-0.6b-v3", cloud: false, usd_per_hour: null },
+  { name: "whisper", reason: null, default_model: "mlx-community/whisper-large-v3-turbo", cloud: false, usd_per_hour: null },
   {
     name: "sherpa",
-    reason: "the sherpa engine cannot run here: sherpa-onnx will not import here",
+    // dsj's own words when the sherpa extra is absent (dsj/asr.py get_engine around
+    // dsj/sherpa.py available()): an ImportError, said as "will not import".
+    reason:
+      "the sherpa engine cannot run here: sherpa-onnx will not import here: No module named 'sherpa_onnx'. Install it with " +
+      '`uv tool install "dsj[sherpa] @ git+https://github.com/m2moiz/dekho-suno-jaano"`, or from a clone add `--extra sherpa` ' +
+      "to the `uv sync` line you already use (`uv sync` uninstalls every extra it is not given). On Android that install " +
+      "goes inside a proot glibc container, not Termux itself, which is bionic.",
     default_model: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+    cloud: false,
+    usd_per_hour: null,
   },
 ];
 
@@ -97,87 +107,145 @@ afterEach(() => {
   });
 });
 
-async function openPicker() {
-  render(<TranscribeControl recording={RECORDING} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Transcribe" }));
-  return screen.findByRole("dialog");
-}
-
-describe("the picker", () => {
-  it("lists parakeet, whisper and sherpa, and nothing else", async () => {
-    serve({ "GET /api/jobs": () => Response.json([]), "GET /api/engines": () => Response.json(ENGINES) });
-    const dialog = await openPicker();
-    const group = within(dialog).getByRole("group", { name: "Engine" });
-    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "parakeet",
-      "whisper",
-      "sherpa",
-    ]);
-  });
-
-  it("disables an engine that cannot run, and shows its reason", async () => {
-    serve({ "GET /api/jobs": () => Response.json([]), "GET /api/engines": () => Response.json(ENGINES) });
-    const dialog = await openPicker();
-    const sherpa = within(dialog).getByRole("button", { name: "sherpa" });
-    expect(sherpa.hasAttribute("disabled") || sherpa.getAttribute("aria-disabled") === "true").toBe(true);
-    expect(within(dialog).getByText(/sherpa-onnx will not import here/)).toBeTruthy();
-    const parakeet = within(dialog).getByRole("button", { name: "parakeet" });
-    expect(parakeet.hasAttribute("disabled")).toBe(false);
-  });
-
-  it("shows language, prompt and Roman Urdu for whisper only", async () => {
-    serve({ "GET /api/jobs": () => Response.json([]), "GET /api/engines": () => Response.json(ENGINES) });
-    const dialog = await openPicker();
-    expect(within(dialog).queryByLabelText("Language")).toBeNull();
-    expect(within(dialog).queryByLabelText("Prompt")).toBeNull();
-    expect(within(dialog).queryByRole("switch", { name: "Roman Urdu" })).toBeNull();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "whisper" }));
-    expect(within(dialog).getByLabelText("Language")).toBeTruthy();
-    expect(within(dialog).getByLabelText("Prompt")).toBeTruthy();
-    expect(within(dialog).getByRole("switch", { name: "Roman Urdu" })).toBeTruthy();
-    expect(within(dialog).getByText(/reports no progress until it is done/)).toBeTruthy();
-    // The model box follows the engine, to that engine's own default.
-    expect((within(dialog).getByLabelText("Model") as HTMLInputElement).value).toBe(
-      "mlx-community/whisper-large-v3-turbo",
-    );
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "parakeet" }));
-    expect(within(dialog).queryByLabelText("Language")).toBeNull();
-  });
-
-  it("sends whisper with Roman Urdu, speakers on, as dsj suno's flags", async () => {
-    const bodies: unknown[] = [];
+describe("the Transcribe dialog", () => {
+  async function open(engines: Engine[] = ENGINES): Promise<Request[]> {
+    const posted: Request[] = [];
     serve({
       "GET /api/jobs": () => Response.json([]),
-      "GET /api/engines": () => Response.json(ENGINES),
-      "POST /api/recordings/4/transcribe": async (request) => {
-        bodies.push(await request.json());
-        return Response.json(job({ engine: "whisper", reports_progress: true, state: "starting" }), {
-          status: 202,
-        });
+      "GET /api/engines": () => Response.json(engines),
+      "POST /api/recordings/4/transcribe": (request) => {
+        posted.push(request.clone());
+        return Response.json(job({ engine: "whisper" }), { status: 202 });
       },
     });
-    const dialog = await openPicker();
-    fireEvent.click(within(dialog).getByRole("button", { name: "whisper" }));
-    fireEvent.click(within(dialog).getByRole("switch", { name: "Roman Urdu" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Start" }));
-    expect(await screen.findByRole("status", { name: "Transcription" })).toBeTruthy();
-    expect(bodies).toEqual([
-      {
-        engine: "whisper",
-        model: "mlx-community/whisper-large-v3-turbo",
-        language: null,
-        prompt: null,
-        roman_urdu: true,
-        diarize: true,
-        require_diarize: false,
-        start_over: false,
-      },
-    ]);
-    expect(sent("POST", "/api/recordings/4/transcribe")[0]?.headers.get("Authorization")).toBe(
-      "Bearer a-token",
+    render(<TranscribeControl recording={{ ...RECORDING, duration_s: 2520 }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Transcribe" }));
+    await screen.findByRole("radiogroup", { name: "What's spoken?" });
+    return posted;
+  }
+
+  it("asks what is spoken first, says how long and what it will use, and runs it", async () => {
+    const posted = await open();
+    // 2,520 s at --roman-urdu's slowest measured 2.53x (choices.ts).
+    expect(screen.getByRole("status").textContent).toBe(
+      "About 17 minutes for this 42-minute recording. Uses whisper, writing Urdu in Roman letters.",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toEqual({
+      engine: "whisper",
+      model: null,
+      language: null,
+      prompt: null,
+      roman_urdu: true,
+      diarize: true,
+      require_diarize: false,
+      start_over: false,
+    });
+    expect(posted[0]?.headers.get("Authorization")).toBe("Bearer a-token");
+  });
+
+  it("runs English on parakeet, and mostly Urdu on whisper in Urdu", async () => {
+    const posted = await open();
+    choose(screen.getByRole("radio", { name: "English or European languages" }));
+    expect(screen.getByRole("status").textContent).toBe("About 2 minutes for this 42-minute recording. Uses parakeet.");
+    choose(screen.getByRole("radio", { name: "Mostly Urdu" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "whisper", roman_urdu: false, language: "ur" });
+  });
+
+  it("offers every engine that can run as a choice, and one that cannot as one grey line", async () => {
+    const posted = await open();
+    const group = screen.getByRole("radiogroup", { name: "Engine" });
+    // Each engine says what it is for in a line, and the answer's is named as
+    // recommended for it (critique 7 Oct round 2, P2-2).
+    expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent)).toEqual([
+      "parakeetFast. English and European languages, no Urdu.",
+      "whisperRecommended for mixed Urdu and EnglishReads Urdu and mixed speech. Slower.",
+    ]);
+    // sherpa runs on a Mac; it is only not in this install (fix round 1 re-review 2, I1).
+    expect(screen.getByText("sherpa: the portable engine, with parakeet's weights. Not installed with this install of dsj.")).toBeTruthy();
+    // The estimate sits under the engines, at body size.
+    const status = screen.getByRole("status");
+    expect(group.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/sherpa-onnx will not import here/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Why sherpa can't run" }));
+    expect(screen.getByText(/sherpa-onnx will not import here/)).toBeTruthy();
+
+    // Picked by hand, an engine runs as itself, without the answer's Roman Urdu.
+    choose(within(group).getByRole("radio", { name: "parakeet" }));
+    expect(screen.getByRole("status").textContent).toBe("About 2 minutes for this 42-minute recording. Uses parakeet.");
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "parakeet", roman_urdu: false, language: null });
+  });
+
+  it("marks an engine the server calls cloud, prices the recording on it, and stops saying nothing leaves", async () => {
+    // A stand-in for sub-project B's cloud engine (#247): the dialog reads only the fields.
+    await open([{ ...ENGINES[0], cloud: true, usd_per_hour: 1.2 } as Engine, ...ENGINES.slice(1)]);
+    const group = screen.getByRole("radiogroup", { name: "Engine" });
+    const parakeet = within(group).getByRole("radio", { name: /^parakeet/ }).closest("label");
+    expect(parakeet?.textContent).toBe("parakeetcloudFast. English and European languages, no Urdu.About $0.84 for this recording");
+    expect(screen.getByText("Runs on this Mac. Nothing leaves it.")).toBeTruthy();
+    choose(within(group).getByRole("radio", { name: /^parakeet/ }));
+    expect(screen.getByText("Sends the recording's sound to parakeet, off this Mac.")).toBeTruthy();
+  });
+
+  it("starts on Enter from an answer or an engine", async () => {
+    const posted = await open();
+    const urdu = screen.getByRole("radio", { name: "Mostly Urdu" });
+    choose(urdu);
+    fireEvent.keyDown(urdu, { key: "Enter" });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "whisper", language: "ur" });
+  });
+
+  it("says plainly when the answer's engine cannot run, why, and the way round it, and Start says so too", async () => {
+    const reason = "the whisper engine cannot run here: mlx-whisper is not installed. Install it with uv sync --extra whisper.";
+    const posted = await open(ENGINES.map((e) => (e.name === "whisper" ? { ...e, reason } : e)));
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(
+      "whisper is not installed with this install of dsj, so this can't start." +
+        "mlx-whisper is not installed. Install it with uv sync --extra whisper." +
+        "Fix that, then open this again, or pick parakeet below.",
+    );
+    expect(status.textContent).not.toContain("About");
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(start.hasAttribute("disabled")).toBe(true);
+    expect(start.getAttribute("aria-describedby")).toBe(status.id);
+    // Said once, in the status, not again as a grey line under the engines.
+    expect(screen.queryByText("whisper can't run on this Mac.")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("radio", { name: "Mixed Urdu and English" }), { key: "Enter" });
+
+    choose(screen.getByRole("radio", { name: "parakeet" }));
+    expect(screen.getByRole("status").textContent).toContain("Uses parakeet.");
+    expect(start.hasAttribute("aria-describedby")).toBe(false);
+    fireEvent.click(start);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ engine: "parakeet" });
+  });
+
+  it("folds the rest under Advanced", async () => {
+    await open();
+    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+    expect(screen.getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded")).toBe("true");
+    expect((screen.getByLabelText("Model") as HTMLInputElement).placeholder).toBe("mlx-community/whisper-large-v3-turbo");
+    expect(screen.getByLabelText("Prompt")).toBeTruthy();
+    choose(screen.getByRole("radio", { name: "English or European languages" }));
+    // parakeet takes no prompt, as `dsj suno` refuses one.
+    expect(screen.queryByLabelText("Prompt")).toBeNull();
+  });
+
+  it("carries Skip speaker labels into the request", async () => {
+    const posted = await open();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Skip speaker labels" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(await posted[0]?.json()).toMatchObject({ diarize: false, require_diarize: false });
   });
 
   it("puts a refusal in the error dialog in the server's own words", async () => {
@@ -191,8 +259,9 @@ describe("the picker", () => {
       "GET /api/engines": () => Response.json(ENGINES),
       "POST /api/recordings/4/transcribe": () => Response.json(refusal, { status: 409 }),
     });
-    const dialog = await openPicker();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Start" }));
+    render(<TranscribeControl recording={RECORDING} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Transcribe" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
     await vi.waitFor(() => expect(currentError()).toEqual(refusal));
   });
 });

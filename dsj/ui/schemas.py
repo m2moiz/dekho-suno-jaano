@@ -21,27 +21,44 @@ from __future__ import annotations
 __all__ = [
     "EditEntry",
     "Edits",
+    "EditsPatch",
+    "EditsSaved",
     "EditsUpdate",
     "Engine",
     "EngineName",
     "ItemEntry",
     "Job",
     "JobState",
+    "LanguageTag",
+    "ListContent",
     "Match",
     "Matches",
+    "NamesUpdate",
     "ParagraphEntry",
     "Recording",
+    "ReferenceRequest",
+    "ReferenceWritten",
     "RenderJob",
     "RenderState",
+    "Review",
+    "ReviewCorrection",
+    "ReviewDocument",
+    "ReviewFlag",
+    "ReviewPass",
+    "ReviewPatch",
+    "ReviewSaved",
+    "ReviewSegment",
+    "SegmentState",
+    "TitleUpdate",
     "TranscribeRequest",
     "Transcript",
     "WordAdded",
     "WordRequest",
 ]
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # dsj.asr.ENGINES, spelled out because a type cannot be built from a tuple;
 # tests/test_jobs.py holds the two equal.
@@ -56,6 +73,17 @@ type JobState = Literal[
 
 # A render from the page (#215, dsj/ui/jobs.py Render.view): queued, writing, over.
 type RenderState = Literal["starting", "rendering", "done", "failed"]
+
+
+# The sha256 of a transcript JSON's bytes, as dsj/ui/edits.py transcript_sha
+# writes it (#249): 64 lowercase hex digits, and nothing else, since a page's
+# copy of it names the file its refused edits are kept in.
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+# What the library row calls a transcript's language (Hashiya spec, Library):
+# worked out from its run and its script by dsj/ui/routes/recording.py.
+type LanguageTag = Literal["urdu", "mixed", "english"]
 
 
 class Transcript(BaseModel):
@@ -74,6 +102,11 @@ class Transcript(BaseModel):
     language: str | None
     # When an edit to it was last saved from the app (#83), else None.
     last_edited_at: str | None
+    # Urdu, mixed or English, or None when nothing says (#245).
+    language_tag: LanguageTag | None
+    # How far its review got, or both None when nobody has reviewed it.
+    review_checked: int | None
+    review_total: int | None
 
 
 class Recording(BaseModel):
@@ -90,7 +123,15 @@ class Recording(BaseModel):
     missing: bool
     # What ffprobe said when it could not read the file, else None (#110).
     unreadable: str | None
+    # A title a person gave it, else None: the page derives one from the file's name.
+    title: str | None
     transcripts: list[Transcript]
+
+
+class TitleUpdate(BaseModel):
+    """A recording's title; empty or None takes it away, so the page derives one again."""
+
+    title: str | None = Field(default=None, max_length=200)
 
 
 class Engine(BaseModel):
@@ -100,6 +141,10 @@ class Engine(BaseModel):
     # The sentence the engine's own available() wrote when it cannot run, else None.
     reason: str | None
     default_model: str
+    # True when it sends the audio off this Mac (#247); the dialog marks it "cloud".
+    cloud: bool
+    # What an hour of audio costs on it in US dollars, or None when it costs nothing.
+    usd_per_hour: float | None
 
 
 class TranscribeRequest(BaseModel):
@@ -184,6 +229,8 @@ class Edits(BaseModel):
     """A transcript's edit list as the page edits it, and what it needs beside it."""
 
     content: list[EditEntry]
+    # The names a person gave the speakers, by label (#243); {} when none.
+    names: dict[str, str]
     # How far a mute reaches past each side of a word, in seconds (dsj.hatao.PAD_S).
     pad_s: float
     # When the list was last saved, or None while it is as the transcript made it.
@@ -194,12 +241,65 @@ class Edits(BaseModel):
     # rendered, and `unrenderable` says why.
     spans: list[tuple[float, float]] | None
     unrenderable: str | None
+    # Why the saved list was put aside and this one built fresh, or None (#249).
+    replaced: str | None
+    # The sha256 of the transcript JSON this list goes with: the page sends it
+    # back with each save, so a list loaded before the transcript was made
+    # again is never saved over the new one (#249).
+    transcript_sha: Sha256
+    # The sha256 of this list itself, its entries and names (dsj/ui/edits.py
+    # list_sha): what the page's next patch is made against (#251).
+    list_sha: Sha256
 
 
-class EditsUpdate(BaseModel):
-    """The page's whole edit list, to save in place of the one before."""
+class ListContent(BaseModel):
+    """The page's whole edit list as it is now, for a route that reads it and saves nothing."""
 
     content: list[EditEntry]
+
+
+class EditsUpdate(ListContent):
+    """The page's whole edit list, to save in place of the one before."""
+
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: Sha256
+
+
+class EditsPatch(BaseModel):
+    """One change to the edit list (#251): `delete` entries at `start` replaced by `insert`.
+
+    Made against the list whose sha is `list_sha`, so two patches made against
+    the same list never both apply. A 2.5 h transcript's whole list is about
+    3.5 MB; one correction's patch is a few entries.
+    """
+
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: Sha256
+    # The sha of the list the change was made to (Edits.list_sha, or the last EditsSaved's).
+    list_sha: Sha256
+    start: int
+    delete: int
+    insert: list[EditEntry]
+
+
+class EditsSaved(BaseModel):
+    """What a patch answers: the list's new sha and what a render would mute, never the entries."""
+
+    list_sha: Sha256
+    edited_at: str
+    # As Edits.spans and Edits.unrenderable.
+    spans: list[tuple[float, float]] | None
+    unrenderable: str | None
+
+
+class NamesUpdate(BaseModel):
+    """Every speaker's name, by label, in place of the ones before; a blank name clears one."""
+
+    names: dict[str, str]
+    # The sha of the transcript the page loaded the list against (Edits.transcript_sha).
+    transcript_sha: Sha256
+    # The sha of the list the rename was made to, as EditsPatch.list_sha (#274).
+    list_sha: Sha256
 
 
 class Match(BaseModel):
@@ -256,3 +356,123 @@ class RenderJob(BaseModel):
     error: str | None
     # What it could not do, though it finished.
     notes: list[str]
+
+
+# Review mode (Hashiya spec, #248). No field below has a default, on purpose:
+# a model that is both sent and accepted with defaults is split by FastAPI into
+# "-Input" and "-Output" schemas, and the page would have two types for one
+# document. The page always sends every field.
+
+# What a person can say about a sentence besides its words (spec, Ctrl+U and Ctrl+F).
+type ReviewFlag = Literal["unclear", "not_speech", "overlap", "cut_off"]
+# Every sentence in order (for answer keys), or only the likely errors.
+type ReviewPass = Literal["every", "likely"]
+type SegmentState = Literal["unchecked", "checked"]
+# Eight lowercase hex digits, and nothing else: never the words, never a path.
+WordsHash = Annotated[str, Field(pattern=r"^[0-9a-f]{8}$")]
+
+
+class ReviewSegment(BaseModel):
+    """One sentence of a review, by its span of the recording, which every edit keeps."""
+
+    start: float
+    end: float
+    state: SegmentState
+    flags: list[ReviewFlag]
+    # The speaker label a person set for it in Review (Ctrl+1 to Ctrl+9), else None.
+    speaker: str | None
+    # Whether a person changed its words in Review.
+    edited: bool
+    # A short hash of its words as they were when it was checked, else None
+    # (#274, ruling R7): the page's wordsHash (ui/src/features/review/model.ts),
+    # 32-bit FNV-1a of the words, as eight hex digits. A transcript made again
+    # keeps a sentence checked only while its words still hash the same; the
+    # review never holds the words themselves.
+    words_hash: WordsHash | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _saved_before_hashes(cls, data: object) -> object:
+        """A review saved before #274 has no `words_hash`: its checks vouch for words unknown."""
+        if not isinstance(data, dict):
+            return data
+        fields = cast("dict[str, object]", data)
+        return fields if "words_hash" in fields else {**fields, "words_hash": None}
+
+
+class ReviewCorrection(BaseModel):
+    """One change of words made in Review, before and after: sub-project C's learning data."""
+
+    at: str
+    start: float
+    end: float
+    before: str
+    after: str
+
+
+class ReviewDocument(BaseModel):
+    """A transcript's review: its sentences and their state, the pass, and where the person was."""
+
+    version: Literal[1]
+    # The sha256 of the transcript JSON the review was made against: when the
+    # transcript is made again, the page re-checks the sentences by span.
+    transcript_sha: Sha256
+    review_pass: ReviewPass
+    # Where the person was, in seconds, so leaving and coming back resumes there.
+    cursor_s: float
+    started_at: str
+    updated_at: str
+    segments: list[ReviewSegment]
+    corrections: list[ReviewCorrection]
+
+
+class Review(BaseModel):
+    """A transcript's review, or None, and the sha of the transcript as it is now."""
+
+    document: ReviewDocument | None
+    transcript_sha: Sha256
+    # The sha of the review as saved (dsj/ui/review.py review_sha), or None
+    # with no review: what the page's first patch is made against (#251).
+    review_sha: Sha256 | None
+
+
+class ReviewPatch(BaseModel):
+    """One change to the review (#251): segments spliced, corrections appended, pass and cursor set.
+
+    Made against the review whose sha is `review_sha`, as EditsPatch is.
+    """
+
+    # The sha of the transcript as the page loaded it: the review is saved under it.
+    transcript_sha: Sha256
+    review_sha: Sha256
+    start: int
+    delete: int
+    insert: list[ReviewSegment]
+    # Corrections made since the last save, added after the ones the review holds.
+    corrections: list[ReviewCorrection]
+    review_pass: ReviewPass
+    cursor_s: float
+
+
+class ReviewSaved(BaseModel):
+    """What a save of the review answers: its new sha and when, never the review itself."""
+
+    review_sha: Sha256
+    updated_at: str
+
+
+class ReferenceRequest(BaseModel):
+    """Save the answer key; with `allow_partial`, even while sentences are unchecked."""
+
+    allow_partial: bool = False
+
+
+class ReferenceWritten(BaseModel):
+    """The answer key's files (names only, beside the transcript), and how much of it is checked."""
+
+    files: list[str]
+    segments: int
+    unchecked: int
+    # The earlier key's files, moved aside beside it before this one was written
+    # (#274), names only; [] when there was none. A key is never written over.
+    kept: list[str]

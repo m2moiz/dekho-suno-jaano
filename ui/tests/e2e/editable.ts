@@ -64,3 +64,12 @@ export async function selectWord(page: Page, word: string, last: string = word):
 export function painted(page: Page, name: string): Promise<string[]> {
   return page.evaluate((name) => Array.from(CSS.highlights.get(name) ?? [], (r) => r.toString()), name);
 }
+
+/** Open the bleep drawer from the reader's menu, and return its panel. */
+export async function openBleep(page: Page) {
+  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: /^Bleep/ }).click();
+  const panel = page.getByRole("region", { name: "Words to bleep" });
+  await panel.waitFor();
+  return panel;
+}

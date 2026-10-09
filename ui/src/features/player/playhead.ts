@@ -170,6 +170,8 @@ export class Playhead {
     // TARGET, unless the word would end under the player there: then the
     // middle of what the player leaves.
     const target = height * TARGET + rect.height <= bottom ? height * TARGET : (top + bottom - rect.height) / 2;
-    window.scrollBy({ top: rect.top - target, behavior: "smooth" });
+    // Smooth for the eye, unless the Mac asks for less motion.
+    const behavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    window.scrollBy({ top: rect.top - target, behavior });
   }
 }

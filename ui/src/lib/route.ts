@@ -1,11 +1,13 @@
-// Which page the address names. Two pages, so no router: the library at `/`,
-// and one transcript at `/?recording=<id>&transcript=<id>`. Plain links
+// Which page the address names. Three pages, so no router: the library at
+// `/`, one transcript at `/?recording=<id>&transcript=<id>`, and that
+// transcript's review at the same address with `&review=1`. Plain links
 // between them, so the back button, a reload and a new tab all just work; the
 // token survives each, because session.ts keeps it for the tab (#112).
 
 export type Route =
   | { page: "library" }
-  | { page: "transcript"; recording: number; transcript: number };
+  | { page: "transcript"; recording: number; transcript: number }
+  | { page: "review"; recording: number; transcript: number };
 
 function id(value: string | null): number | null {
   return value !== null && /^\d+$/.test(value) ? Number(value) : null;
@@ -17,10 +19,16 @@ export function readRoute(search: string): Route {
   const recording = id(params.get("recording"));
   const transcript = id(params.get("transcript"));
   if (recording === null || transcript === null) return { page: "library" };
-  return { page: "transcript", recording, transcript };
+  // Review is the same transcript, checked sentence by sentence (Hashiya spec, Review mode).
+  return params.get("review") === "1" ? { page: "review", recording, transcript } : { page: "transcript", recording, transcript };
 }
 
 /** The address of one transcript's page. */
 export function transcriptHref(recording: number, transcript: number): string {
   return `/?recording=${recording}&transcript=${transcript}`;
+}
+
+/** The address of one transcript's review. */
+export function reviewHref(recording: number, transcript: number): string {
+  return `${transcriptHref(recording, transcript)}&review=1`;
 }

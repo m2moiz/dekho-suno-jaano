@@ -11,12 +11,14 @@ race is measured rather than assumed.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
 from pathlib import Path
 
 import pytest
 
-from dsj.atomic import atomic_write_text
+from dsj.atomic import atomic_write_text, atomic_write_texts
 
 # Big enough that the write cannot complete in one syscall-sized gulp, which is
 # what makes the torn-read window wide enough to hit reliably. With a 200-byte
@@ -149,7 +151,73 @@ def test_fsync_is_off_by_default_and_reaches_the_file_when_asked(
     assert synced == []
 
     atomic_write_text(tmp_path / "b.json", "{}", fsync=True)
-    assert len(synced) == 1
+    # The file's bytes, then the folder that holds its new name (#285).
+    assert len(synced) == 2
+
+
+def _spy_fsync(monkeypatch: pytest.MonkeyPatch, watch: Path) -> list[tuple[str, str]]:
+    """Record each os.fsync as (kind of fd, what `watch` held at that moment).
+
+    The fd is inspected inside the call, while it is still open, so the test
+    sees whether it was a folder and whether the rename had happened yet.
+    """
+    from dsj import atomic
+
+    calls: list[tuple[str, str]] = []
+
+    def record_fsync(fd: int) -> None:
+        kind = "folder" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        calls.append((kind, watch.read_text(encoding="utf-8") if watch.exists() else "absent"))
+
+    monkeypatch.setattr(atomic.os, "fsync", record_fsync)
+    return calls
+
+
+def test_a_single_file_write_syncs_its_folder_after_the_rename_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#285: a rename is a change to the folder, so the folder is what must reach the disk."""
+    target = tmp_path / "key.json"
+    target.write_text("old", encoding="utf-8")
+    calls = _spy_fsync(monkeypatch, target)
+
+    atomic_write_text(target, "new", fsync=False)
+    assert calls == []
+
+    target.write_text("old", encoding="utf-8")
+    atomic_write_text(target, "new", fsync=True)
+    # The file is synced while the old name still holds the old text; the
+    # folder is synced once the new text is in place.
+    assert calls == [("file", "old"), ("folder", "new")]
+
+
+def test_a_pair_write_syncs_the_folder_once_after_the_last_rename_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = tmp_path / "key.json", tmp_path / "key.txt"
+    first.write_text("old", encoding="utf-8")
+    second.write_text("old", encoding="utf-8")
+    calls = _spy_fsync(monkeypatch, second)
+
+    atomic_write_texts([(first, "new"), (second, "new")], fsync=False)
+    assert calls == []
+
+    first.write_text("old", encoding="utf-8")
+    second.write_text("old", encoding="utf-8")
+    atomic_write_texts([(first, "new"), (second, "new")], fsync=True)
+    assert calls == [("file", "old"), ("file", "old"), ("folder", "new")]
+
+
+def test_a_pair_in_two_folders_syncs_each_folder_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    calls = _spy_fsync(monkeypatch, tmp_path / "a" / "key.json")
+    atomic_write_texts(
+        [(tmp_path / "a" / "key.json", "x"), (tmp_path / "b" / "key.txt", "x")], fsync=True
+    )
+    assert [kind for kind, _ in calls] == ["file", "file", "folder", "folder"]
 
 
 def test_the_file_is_written_as_utf8_whatever_the_locale_is(tmp_path: Path) -> None:
@@ -167,3 +235,43 @@ def test_the_file_is_written_as_utf8_whatever_the_locale_is(tmp_path: Path) -> N
     atomic_write_text(p, "café — ünïcode ✓")
 
     assert p.read_bytes() == "café — ünïcode ✓".encode()
+
+
+def test_a_pair_that_fails_part_way_leaves_both_files_as_they_were(tmp_path: Path) -> None:
+    """The second temp cannot be written: the first file is not replaced either."""
+    first = tmp_path / "key.json"
+    first.write_text("old json", encoding="utf-8")
+    second = tmp_path / "gone" / "key.txt"
+    with pytest.raises(FileNotFoundError):
+        atomic_write_texts([(first, "new json"), (second, "new text")], fsync=True)
+    assert first.read_text(encoding="utf-8") == "old json"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json"]
+
+
+def test_a_pair_is_written_whole(tmp_path: Path) -> None:
+    pair = [(tmp_path / "key.json", "{}"), (tmp_path / "key.txt", "text\n")]
+    atomic_write_texts(pair)
+    assert [p.read_text(encoding="utf-8") for p, _ in pair] == ["{}", "text\n"]
+
+
+def test_two_threads_writing_one_file_never_take_each_others_temp(tmp_path: Path) -> None:
+    """One server, two requests at once: the pid alone named the temp, and one renamed it away."""
+    single = tmp_path / "key.json"
+    pair = [tmp_path / "key.json", tmp_path / "key.txt"]
+    failures: list[BaseException] = []
+
+    def writer(mark: str) -> None:
+        try:
+            for _ in range(200):
+                atomic_write_text(single, mark)
+                atomic_write_texts([(p, mark) for p in pair])
+        except BaseException as exc:  # collected, then asserted empty
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(m,)) for m in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json", "key.txt"]

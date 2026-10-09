@@ -7,10 +7,10 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
-import { editableTranscript, painted } from "./editable.ts";
-import { readerUrl, scratchDir, seed } from "./seed.ts";
+import { editableTranscript, openBleep, painted } from "./editable.ts";
+import { readerUrl, scratchDir, seed, tone } from "./seed.ts";
 
 // Where "foxtrot" is in the transcript below (editable.ts spaces the words),
 // and the span dsj.hatao.spans_to_mute makes of it: 0.1 s either side.
@@ -129,7 +129,7 @@ test("a word added from the app is matched, muted live where a render mutes, and
     dir,
   );
   await page.goto(readerUrl(seeded));
-  const panel = page.getByRole("region", { name: "Words to bleep" });
+  const panel = await openBleep(page);
   await expect(panel.getByRole("status")).toContainText("No word matched: 8 words searched");
 
   await panel.getByRole("textbox", { name: "A word to add to your list" }).fill(word);
@@ -193,3 +193,187 @@ test("a word added from the app is matched, muted live where a render mutes, and
   await expect(row).toContainText("muted");
   await expect.poll(() => painted(page, "dsj-muted")).toEqual([word]);
 });
+
+const PHONE = 767;
+
+for (const { width, height } of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  const phone = width <= PHONE;
+  test(`at ${width}x${height} the drawer is a ${phone ? "modal bottom sheet" : "non-modal right drawer"}, with focus, size and badge as specified`, async ({ page }, info) => {
+    const word = `sierra${width}${info.project.name}`;
+    const dir = scratchDir();
+    const seeded = seed(
+      editableTranscript(tone(dir, 9 + width / 10000 + info.project.name.length / 10, `drawer-${width}-${info.project.name}.wav`), [
+        ["alpha", "bravo", word, "delta"],
+      ]),
+      dir,
+    );
+    await page.setViewportSize({ width, height });
+    await page.goto(readerUrl(seeded));
+    await expect(page.locator("article")).toContainText(word);
+    const more = page.getByRole("button", { name: "More" });
+    const dialog = page.getByRole("dialog", { name: "Bleep" });
+    const menuBleep = page.getByRole("menuitem", { name: /^Bleep/ });
+    // Nothing of the panel is on the page before the menu opens it.
+    await expect(page.getByRole("region", { name: "Words to bleep" })).toHaveCount(0);
+    const panel = await openBleep(page);
+    await panel.getByRole("textbox", { name: "A word to add to your list" }).fill(word);
+    await panel.getByRole("button", { name: "Add" }).click();
+    const row = panel.getByRole("listitem", { name: word });
+    await expect(row).toContainText("muted");
+
+    // Settled against the edge it slides in from, so measured after its transition.
+    await expect
+      .poll(async () => {
+        const box = await dialog.boundingBox();
+        return box === null ? null : Math.round(phone ? box.y + box.height : box.x + box.width);
+      })
+      .toBe(phone ? height : width);
+
+    // No blur anywhere: a flat dim behind the phone's modal sheet, none behind the laptop's drawer.
+    const overlays = page.locator('[data-slot="sheet-overlay"]');
+    if (phone) {
+      await expect(overlays).toHaveCount(1);
+      expect(await overlays.evaluate((el) => getComputedStyle(el).backdropFilter)).toBe("none");
+      // The sheet leaves the text being acted on in sight: at most 60 dvh.
+      const box = await dialog.boundingBox();
+      expect(box?.height ?? height).toBeLessThanOrEqual(height * 0.6 + 1);
+    } else {
+      await expect(overlays).toHaveCount(0);
+    }
+
+    // Every target in the drawer is 44 px tall on the phone (F15).
+    if (phone) {
+      const buttons = [
+        page.getByRole("button", { name: "Close" }),
+        panel.getByRole("button", { name: "Mute all" }),
+        panel.getByRole("textbox", { name: "A word to add to your list" }),
+        panel.getByRole("button", { name: "Add" }),
+        panel.getByRole("button", { name: "Render", exact: true }),
+        ...["Hear", "Render alone", "Dismiss"].map((name) => row.getByRole("button", { name })),
+      ];
+      for (const button of buttons) {
+        const box = await button.boundingBox();
+        if (box === null) throw new Error("a control is not on screen");
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    // Render is the drawer's main action: filled with the text colour, which is neither the
+    // outlined buttons' fill nor gold (the rail's Play keeps that).
+    const fill = (button: Locator) => button.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const ink = await page.evaluate(() => getComputedStyle(document.body).color);
+    await expect.poll(() => fill(panel.getByRole("button", { name: "Render", exact: true }))).toBe(ink);
+    expect(await fill(row.getByRole("button", { name: "Hear" }))).not.toBe(ink);
+    expect(ink).not.toBe("rgb(200, 162, 74)");
+
+    if (phone) {
+      // Modal: Tab and Shift+Tab circle inside the sheet, however many times. Focus
+      // passes a guard on the way round, so it is read once it has settled: the
+      // same element for 100 ms running, not the first sample that happens to
+      // be inside, which a focus on its way out would pass (Task 4 review).
+      const settled = () =>
+        dialog.evaluate(async (el) => {
+          let last = document.activeElement;
+          let still = 0;
+          for (let n = 0; n < 100 && still < 5; n += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            if (document.activeElement === last) still += 1;
+            else [last, still] = [document.activeElement, 0];
+          }
+          if (still < 5) throw new Error("focus never settled in 2 s");
+          return el.contains(last);
+        });
+      for (const key of [...Array(14).fill("Tab"), ...Array(4).fill("Shift+Tab")]) {
+        await page.keyboard.press(key);
+        expect(await settled()).toBe(true);
+      }
+    } else {
+      // Non-modal: the bar stays in the accessibility tree and in reach, and a click on the transcript does not close the drawer.
+      await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
+      await expect(page.getByRole("toolbar", { name: "Edit" }).getByRole("status")).toHaveText("Saved");
+      await page.locator("article p").first().click({ position: { x: 5, y: 5 } });
+      await expect(dialog).toBeVisible();
+    }
+
+    // Esc and Close both hand focus back to the More button.
+    await panel.getByRole("textbox", { name: "A word to add to your list" }).focus();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(more).toBeFocused();
+    await openBleep(page);
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(more).toBeFocused();
+
+    // The menu's Bleep item counts what Mute all would still mute: nothing once the match is muted, one once it is dismissed.
+    await more.click();
+    await expect(menuBleep).toHaveText("Bleep");
+    // Esc once focus is in the menu: before that there is nothing yet to dismiss it.
+    await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[role=menu]") !== null)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(menuBleep).toHaveCount(0);
+    const again = await openBleep(page);
+    await again.getByRole("listitem", { name: word }).getByRole("button", { name: "Dismiss" }).click();
+    await page.getByRole("button", { name: "Close" }).click();
+    await more.click();
+    await expect(menuBleep).toHaveText("Bleep1");
+    // A count, not an action: never gold, which the bar's Review already is (DESIGN.md, The One Gold Rule; fix round 1 review I4).
+    const badge = menuBleep.locator("span").last();
+    expect(await badge.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe("rgb(200, 162, 74)");
+  });
+}
+
+test("on the phone the sheet's header and Close stay in sight while a long list scrolls", async ({ page }, info) => {
+  const word = `tango${info.project.name}`;
+  const dir = scratchDir();
+  const sentences = Array.from({ length: 6 }, () => ["alpha", word, "bravo", word, "charlie", word, "delta", word]);
+  const seeded = seed(editableTranscript(tone(dir, 40 + info.project.name.length / 10, `long-${info.project.name}.wav`), sentences), dir);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(readerUrl(seeded));
+  await expect(page.locator("article")).toContainText(word);
+  const panel = await openBleep(page);
+  await panel.getByRole("textbox", { name: "A word to add to your list" }).fill(word);
+  await panel.getByRole("button", { name: "Add" }).click();
+  await expect(panel.getByRole("listitem", { name: word })).toHaveCount(24);
+  const list = panel.locator("xpath=..");
+  const scrolled = await list.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+    return [el.scrollTop, el.scrollHeight, el.clientHeight];
+  });
+  expect(scrolled[0]).toBeGreaterThan(0);
+  expect(scrolled[1]).toBeGreaterThan(scrolled[2] ?? 0);
+  const close = await page.getByRole("button", { name: "Close" }).boundingBox();
+  const title = await page.getByRole("heading", { name: "Bleep" }).boundingBox();
+  for (const box of [close, title]) {
+    expect(box?.y ?? -1).toBeGreaterThanOrEqual(0);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(844);
+  }
+  // The sheet's top sits below 40 % of the window: the text being acted on is still on screen above it.
+  const sheet = await page.getByRole("dialog", { name: "Bleep" }).boundingBox();
+  expect(sheet?.y ?? 0).toBeGreaterThanOrEqual(844 * 0.4 - 1);
+});
+
+for (const width of [390, 700]) {
+  test(`at ${width} px wide the reader's menu items are 44 px tall`, async ({ page }, info) => {
+    const dir = scratchDir();
+    const seeded = seed(
+      editableTranscript(tone(dir, 11 + width / 10000 + info.project.name.length / 10, `items-${width}-${info.project.name}.wav`), [
+        ["alpha", "bravo", "charlie", "delta"],
+      ]),
+      dir,
+    );
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(readerUrl(seeded));
+    await expect(page.locator("article")).toContainText("charlie");
+    await page.getByRole("button", { name: "More" }).click();
+    for (const name of [/^Timing/, /^Bleep/]) {
+      // Polled: the menu zooms in, so its first frames are a little under full size.
+      await expect
+        .poll(async () => (await page.getByRole("menuitem", { name }).boundingBox())?.height ?? 0)
+        .toBeGreaterThanOrEqual(44);
+    }
+  });
+}

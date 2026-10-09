@@ -6,7 +6,7 @@ import { isOver, type RenderJob, renderSrc } from "./render";
 export function RenderStatus({ job }: { job: RenderJob }) {
   if (!isOver(job)) {
     return (
-      <div className="mt-3 flex flex-col gap-1" role="status" aria-label="Rendering">
+      <div className="flex flex-col gap-1" role="status" aria-label="Rendering">
         <span className="text-muted-foreground">
           Rendering {fileName(job.output)}: {Math.round(job.fraction * 100)}%
         </span>
@@ -16,13 +16,13 @@ export function RenderStatus({ job }: { job: RenderJob }) {
   }
   if (job.state === "failed") {
     return (
-      <p className="mt-3 text-destructive select-text" role="status">
+      <p className="text-destructive select-text" role="status">
         The render failed: {job.error}
       </p>
     );
   }
   return (
-    <div className="mt-3 flex flex-col gap-1" role="status" aria-label="Rendered">
+    <div className="flex flex-col gap-1" role="status" aria-label="Rendered">
       <span>
         Rendered {job.spans === 1 ? "1 span" : `${job.spans} spans`} into{" "}
         <a href={renderSrc(job.id)} target="_blank" rel="noreferrer" className="underline underline-offset-4">

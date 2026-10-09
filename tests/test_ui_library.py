@@ -173,3 +173,62 @@ def test_a_transcript_whose_file_is_gone_says_so(two_recordings: dict[str, Path]
 
 def test_an_empty_library_is_an_empty_list() -> None:
     assert page().get("/api/recordings").json() == []
+
+
+# -- titles, a language tag, review progress (#245) ------------------------------
+
+
+def test_a_title_is_set_trimmed_kept_and_cleared(two_recordings: dict[str, Path]) -> None:
+    client = page()
+    row = client.get("/api/recordings").json()[0]
+    assert row["title"] is None
+    reply = client.patch(f"/api/recordings/{row['id']}", json={"title": "  Sunday call  "})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["title"] == "Sunday call"
+    assert page().get("/api/recordings").json()[0]["title"] == "Sunday call"
+    assert client.patch(f"/api/recordings/{row['id']}", json={"title": ""}).json()["title"] is None
+
+
+def test_a_title_for_no_such_recording_is_404_and_a_long_one_is_422(
+    two_recordings: dict[str, Path],
+) -> None:
+    client = page()
+    assert client.patch("/api/recordings/999", json={"title": "x"}).status_code == 404
+    rid = client.get("/api/recordings").json()[0]["id"]
+    assert client.patch(f"/api/recordings/{rid}", json={"title": "x" * 201}).status_code == 422
+
+
+def test_each_transcript_says_whether_it_is_urdu_mixed_or_english(tmp_path: Path) -> None:
+    urdu_audio = wav(tmp_path / "urdu.wav", 550)
+    urdu = transcript(
+        tmp_path / "urdu.json", urdu_audio, LATER,
+        sentences=[{
+            "start": 0.0, "end": 1.0, "tokens": [],
+            "text": " آج صبح ہم نے دیکھا",
+        }],
+    )
+    mixed = transcript(tmp_path / "mixed.json", wav(tmp_path / "mixed.wav", 660), LATER)
+    english = transcript(tmp_path / "english.json", wav(tmp_path / "english.wav", 770), LATER)
+    with Library.open() as library:
+        library.record_run(urdu, engine="whisper", language="ur")
+        library.record_run(mixed, engine="whisper", language="ur")  # --roman-urdu writes Latin
+        library.record_run(english, engine="parakeet")
+    tags = {
+        row["path"].rsplit("/", 1)[-1]: row["transcripts"][0]["language_tag"]
+        for row in page().get("/api/recordings").json()
+    }
+    assert tags == {"urdu.wav": "urdu", "mixed.wav": "mixed", "english.wav": "english"}
+
+
+def test_review_progress_is_none_until_a_review_exists(two_recordings: dict[str, Path]) -> None:
+    from dsj.ui.review import review_path
+
+    row = page().get("/api/recordings").json()[0]
+    first = row["transcripts"][0]
+    assert (first["review_checked"], first["review_total"]) == (None, None)
+    path = review_path(two_recordings["unlabelled"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    states = ["checked", "unchecked", "checked"]
+    path.write_text(json.dumps({"segments": [{"state": state} for state in states]}))
+    again = page().get("/api/recordings").json()[0]["transcripts"][0]
+    assert (again["review_checked"], again["review_total"]) == (2, 3)

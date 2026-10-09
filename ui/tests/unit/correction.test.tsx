@@ -1,5 +1,5 @@
 // Retyping a stretch of words, bound to the same audio (#83).
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => {
@@ -16,6 +16,7 @@ import { unsureWords } from "../../src/features/transcript/confidence";
 import { TranscriptPage } from "../../src/features/transcript/TranscriptPage";
 import { type Content, Editor, type Entry, type Item } from "../../src/lib/editOps";
 import { lint } from "../../src/lib/linter";
+import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights } from "./highlights";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
@@ -124,21 +125,24 @@ describe("the Correct button", () => {
         return Response.json([
           {
             id: 2, path: "/rec/a.wav", size_bytes: 1, duration_s: 3, content_id: "c", audio_codec: "pcm",
-            video_codec: null, first_seen: "x", missing: false, unreadable: null,
-            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null, last_edited_at: null }],
+            video_codec: null, first_seen: "x", missing: false, unreadable: null, title: null,
+            transcripts: [{ id: 7, finished_at: "x", engine: "parakeet", model: "parakeet", diarized: null, speaker_count: null, mark_count: null, language: null, last_edited_at: null, language_tag: null, review_checked: null, review_total: null }],
           },
         ]);
       }
       if (path === "/api/transcripts/7") return Response.json({ audio: "/rec/a.wav", model: "parakeet", sentences: [] });
       if (path === "/api/transcripts/7/edits") {
-        const content = request.method === "PUT" ? ((await request.json()) as { content: Content }).content : CONTENT;
-        if (request.method === "PUT") saved.push(content);
-        return Response.json({ content, pad_s: 0.1, edited_at: null, spans: [], unrenderable: null });
+        if (!saves(request)) return listReply(CONTENT);
+        const content = await savedList(request, saved.at(-1) ?? CONTENT);
+        saved.push(content);
+        return listReply(content);
       }
       if (path === "/api/transcripts/7/matches") {
         return Response.json({ matches: [], words_searched: 6, lists: ["en"], recall: "recall: x" });
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The reader reads the review for its margin marks (Task 13); none here.
+      if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
     });
   });
@@ -158,17 +162,19 @@ describe("the Correct button", () => {
     document.dispatchEvent(new Event("selectionchange"));
   }
 
-  it("retypes the selected words in a dialog, and the reader and the saved list show it", async () => {
+  it("retypes the selected words in place, and the reader and the saved list show it", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);
     await screen.findByRole("toolbar", { name: "Edit" });
     act(() => select("the the", "the the"));
-    // Enabled once the page's effects have read the selection: a click
-    // before that, in the frame after the toolbar appears, does nothing.
-    const correct = screen.getByRole("button", { name: "Correct…" }) as HTMLButtonElement;
+    // The Selection toolbar appears once the page's effects have read the selection.
+    const tools = await screen.findByRole("toolbar", { name: "Selection" });
+    const correct = within(tools).getByRole("button", { name: "Correct" }) as HTMLButtonElement;
     await vi.waitFor(() => expect(correct.disabled).toBe(false));
     fireEvent.click(correct);
     const field = await screen.findByRole("textbox", { name: "What was said" });
     expect((field as HTMLInputElement).value).toBe("the the");
+    // In place, over the words: no dialog.
+    expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.change(field, { target: { value: "the" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await vi.waitFor(() => expect(document.querySelector("article p")?.textContent).toBe(" I have assigned the role"));

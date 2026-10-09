@@ -1,11 +1,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { readTheme, saveTheme } from "../../src/features/theme/theme";
-import { ThemeControl } from "../../src/features/theme/ThemeControl";
 
 // The inline script at the top of ui/index.html, run exactly as the page runs it.
 const page = readFileSync(path.resolve(import.meta.dirname, "../../index.html"), "utf8");
@@ -75,40 +74,5 @@ describe("saving a choice", () => {
     runHeadScript();
     expect(root.dataset.theme).toBe("dark");
     expect(readTheme()).toBe("dark");
-  });
-});
-
-describe("the control", () => {
-  it("offers exactly Light, Dark and System, and starts on System", () => {
-    render(<ThemeControl />);
-    const buttons = screen.getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Light", "Dark", "System"]);
-    expect(screen.getByRole("button", { name: "System" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Dark" }).getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("starts on the saved choice", () => {
-    document.cookie = "dsj-theme=light; path=/";
-    render(<ThemeControl />);
-    expect(screen.getByRole("button", { name: "Light" }).getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("saves and paints a choice at once", () => {
-    render(<ThemeControl />);
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Dark" }));
-    });
-    expect(readTheme()).toBe("dark");
-    expect(root.dataset.theme).toBe("dark");
-    expect(root.style.colorScheme).toBe("dark");
-    expect(screen.getByRole("button", { name: "Dark" }).getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("keeps the choice when the one already on is pressed again", () => {
-    render(<ThemeControl />);
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "System" }));
-    });
-    expect(screen.getByRole("button", { name: "System" }).getAttribute("aria-pressed")).toBe("true");
   });
 });
