@@ -409,11 +409,19 @@ def _keep_before_upgrade(db: sqlite3.Connection, path: Path, version: int) -> No
     backup = path.with_name(f"{path.name}.v{version}.bak")
     if not backup.exists():
         partial = backup.with_name(f".{backup.name}.tmp")
-        with contextlib.closing(sqlite3.connect(partial)) as copy:
-            # Not under BEGIN IMMEDIATE: SQLite refuses a backup from a
-            # connection that is writing, and Python retries it for ever.
-            db.backup(copy)
-            copied = int(copy.execute("PRAGMA user_version").fetchone()[0])
+        # A temp file left by an upgrade that was killed is a half-written
+        # database: SQLite refuses to copy into it, and every start after that
+        # would fail the same way (#284).
+        partial.unlink(missing_ok=True)
+        try:
+            with contextlib.closing(sqlite3.connect(partial)) as copy:
+                # Not under BEGIN IMMEDIATE: SQLite refuses a backup from a
+                # connection that is writing, and Python retries it for ever.
+                db.backup(copy)
+                copied = int(copy.execute("PRAGMA user_version").fetchone()[0])
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
         if copied != version:
             # Another process upgraded it in between: this is not the old file.
             partial.unlink()
