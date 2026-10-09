@@ -52,6 +52,13 @@ jobs:
         run: uv run pytest tests/test_install_gate.py -m "slow or not slow"
 
   check:
+    # contents: read is what checkout needs; id-token: write lets the Codecov
+    # step below prove who it is with OIDC instead of a stored token
+    # (https://github.com/codecov/codecov-action#using-oidc). Naming any
+    # permission drops every one not named, so both are listed.
+    permissions:
+      contents: read
+      id-token: write
     # macos-14 is the Apple Silicon runner. parakeet-mlx requires MLX, which is
     # Metal-backed, so a Linux runner cannot even import the package. Confirmed
     # still current and not deprecated.
@@ -153,7 +160,15 @@ jobs:
           # NOT `pytest -q`: addopts already carries -q, so a second one
           # makes -qq and pytest suppresses the summary line entirely --
           # the guard then fails on a run where nothing was wrong.
-          uv run pytest 2>&1 | tail -3 | tee /tmp/summary
+          #
+          # --cov rides on this run, which happens anyway, so coverage costs
+          # no third pass of the suite. Measured locally on 2026-10-09: 160s
+          # without it, 147s and 139s with it, so the cost is inside the
+          # noise. Only the XML report: the terminal report with skip-covered
+          # prints "N files skipped due to complete coverage", which the grep
+          # below would read as a skipped test. Observed tail with it on:
+          # "Coverage XML written to file ..." then the usual summary line.
+          uv run pytest --cov=dsj --cov-report=xml 2>&1 | tail -3 | tee /tmp/summary
           # `if`, not `grep && { }`: the shell runs with -e, and a compound
           # ending in a failed grep would abort the step on the healthy path.
           if grep -q 'skipped' /tmp/summary; then
@@ -165,3 +180,22 @@ jobs:
             echo "::error::fast lane is ${passed:-no} passed, floor is 246 -- the suite shrank"
             exit 1
           fi
+
+      # The fast lane's coverage, from the step above, to Codecov. Advisory:
+      # the main ruleset requires `check` and `install-gate`, not Codecov's
+      # statuses, and an upload failure does not fail this job, because the
+      # gate is the tests, not a third party's uptime. Push events only: every
+      # PR branch here lives in this repo, so its push run already uploads,
+      # and the pull_request run would send the same report twice.
+      # codecov.yml sets the statuses and the PR comment; docs/review-bots.md
+      # says what the owner has to switch on.
+      # Exact tag, checked to resolve on 2026-10-09 (`gh api
+      # repos/codecov/codecov-action/git/ref/tags/v7.1.1`).
+      - name: upload coverage to Codecov
+        if: github.event_name == 'push'
+        uses: codecov/codecov-action@v7.1.1
+        with:
+          use_oidc: true
+          files: ./coverage.xml
+          disable_search: true
+          fail_ci_if_error: false

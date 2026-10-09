@@ -1,0 +1,33 @@
+# Codecov settings for dekho-suno-jaano. docs/review-bots.md explains the
+# setup in plain English, including the steps only the owner can do.
+#
+# Keys: https://docs.codecov.com/docs/commit-status (statuses) and
+# https://docs.codecov.com/docs/pull-request-comments (the PR comment).
+# Checked with `curl --data-binary @codecov.yml https://codecov.io/validate`
+# (https://docs.codecov.com/docs/codecov-yaml) before it was committed.
+#
+# What CI uploads: the FAST lane only (`uv run pytest`, slow tests
+# deselected), from the `no test may silently skip` step in ci.yml. Code that
+# only the slow tests reach reads as uncovered here. `just verify` is still
+# the full measurement (floor 90 percent).
+
+coverage:
+  status:
+    # The whole package. `auto` compares with the base commit; the 1 percent
+    # threshold stops a refactor that deletes covered lines from going red.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    # Only the lines the PR adds or changes. 90 percent matches the
+    # --cov-fail-under floor in the justfile's `verify` recipe.
+    patch:
+      default:
+        target: 90%
+
+# One comment per PR, edited in place, and only when coverage drops or the
+# PR adds lines no test runs. A PR that keeps coverage level gets no comment.
+comment:
+  layout: "condensed_header, diff, condensed_files"
+  behavior: default
+  require_changes: "coverage_drop OR uncovered_patch"
