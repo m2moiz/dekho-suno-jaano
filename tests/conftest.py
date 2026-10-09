@@ -24,12 +24,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
-
-from dsj.ui.server import create_app
-from dsj.ui.store import Library
 
 if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
     from numpy.typing import NDArray
     from parakeet_mlx import DecodingConfig
     from parakeet_mlx.alignment import AlignedResult
@@ -448,6 +445,12 @@ def model_id() -> str:
 
 # The page's routes and one library transcript (tests/test_ui_edits.py, tests/test_ui_export.py).
 def page() -> TestClient:
+    # Imported here, not at the top: the install gate's pytest runs on an install
+    # without the `ui` extra, where fastapi is absent (CI, PR #280).
+    from fastapi.testclient import TestClient
+
+    from dsj.ui.server import create_app
+
     app, token = create_app(port=8721)
     return TestClient(
         app, base_url="http://127.0.0.1:8721", headers={"Authorization": f"Bearer {token}"}
@@ -503,6 +506,8 @@ def seeded(tmp_path: Path) -> dict[str, Any]:
     }
     json_path = tmp_path / "talk.json"
     json_path.write_text(json.dumps(payload))
+    from dsj.ui.store import Library  # lazy, as in page(): the install gate has no `ui` extra
+
     with Library.open() as library:
         row = library.record_run(json_path, engine="parakeet")
     return {"id": row.id, "audio": audio, "json": json_path, "payload": payload}
