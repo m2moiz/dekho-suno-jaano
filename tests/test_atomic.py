@@ -11,6 +11,8 @@ race is measured rather than assumed.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
 from pathlib import Path
 
@@ -149,7 +151,73 @@ def test_fsync_is_off_by_default_and_reaches_the_file_when_asked(
     assert synced == []
 
     atomic_write_text(tmp_path / "b.json", "{}", fsync=True)
-    assert len(synced) == 1
+    # The file's bytes, then the folder that holds its new name (#285).
+    assert len(synced) == 2
+
+
+def _spy_fsync(monkeypatch: pytest.MonkeyPatch, watch: Path) -> list[tuple[str, str]]:
+    """Record each os.fsync as (kind of fd, what `watch` held at that moment).
+
+    The fd is inspected inside the call, while it is still open, so the test
+    sees whether it was a folder and whether the rename had happened yet.
+    """
+    from dsj import atomic
+
+    calls: list[tuple[str, str]] = []
+
+    def record_fsync(fd: int) -> None:
+        kind = "folder" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        calls.append((kind, watch.read_text(encoding="utf-8") if watch.exists() else "absent"))
+
+    monkeypatch.setattr(atomic.os, "fsync", record_fsync)
+    return calls
+
+
+def test_a_single_file_write_syncs_its_folder_after_the_rename_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#285: a rename is a change to the folder, so the folder is what must reach the disk."""
+    target = tmp_path / "key.json"
+    target.write_text("old", encoding="utf-8")
+    calls = _spy_fsync(monkeypatch, target)
+
+    atomic_write_text(target, "new", fsync=False)
+    assert calls == []
+
+    target.write_text("old", encoding="utf-8")
+    atomic_write_text(target, "new", fsync=True)
+    # The file is synced while the old name still holds the old text; the
+    # folder is synced once the new text is in place.
+    assert calls == [("file", "old"), ("folder", "new")]
+
+
+def test_a_pair_write_syncs_the_folder_once_after_the_last_rename_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = tmp_path / "key.json", tmp_path / "key.txt"
+    first.write_text("old", encoding="utf-8")
+    second.write_text("old", encoding="utf-8")
+    calls = _spy_fsync(monkeypatch, second)
+
+    atomic_write_texts([(first, "new"), (second, "new")], fsync=False)
+    assert calls == []
+
+    first.write_text("old", encoding="utf-8")
+    second.write_text("old", encoding="utf-8")
+    atomic_write_texts([(first, "new"), (second, "new")], fsync=True)
+    assert calls == [("file", "old"), ("file", "old"), ("folder", "new")]
+
+
+def test_a_pair_in_two_folders_syncs_each_folder_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    calls = _spy_fsync(monkeypatch, tmp_path / "a" / "key.json")
+    atomic_write_texts(
+        [(tmp_path / "a" / "key.json", "x"), (tmp_path / "b" / "key.txt", "x")], fsync=True
+    )
+    assert [kind for kind, _ in calls] == ["file", "file", "folder", "folder"]
 
 
 def test_the_file_is_written_as_utf8_whatever_the_locale_is(tmp_path: Path) -> None:
