@@ -10,7 +10,7 @@ description: >
   or text, when an existing caption file has to stand in for a transcript, or when
   swear words or other listed words have to be bleeped out of a recording.
 metadata:
-  version: 0.4.2
+  version: 0.5.0
   tier: portable
   owner: moiz
   requires_bins: dsj, ffmpeg, jq, uv

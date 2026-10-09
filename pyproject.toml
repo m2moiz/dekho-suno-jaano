@@ -1,6 +1,6 @@
 [project]
 name = "dsj"
-version = "0.4.2"
+version = "0.5.0"
 description = "Make a long screen recording answerable: a timestamped transcript indexes the video, frames are retrieved on demand."
 readme = "README.md"
 # Capped, not open-ended, and the reason is measured rather than assumed.
