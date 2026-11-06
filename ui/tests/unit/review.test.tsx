@@ -382,7 +382,9 @@ describe("Review mode, fix round 1", () => {
       fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
     });
     await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Keys in Review" })).toBeNull());
-    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+    // The sheet hands focus back in finalFocus, after its exit transition; on a
+    // loaded runner that outran waitFor's default second once (#311).
+    await vi.waitFor(() => expect(document.activeElement).toBe(field), { timeout: 5000 });
     expect(went).toEqual([]);
   });
 
