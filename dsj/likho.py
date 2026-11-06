@@ -114,7 +114,65 @@ def _cues(payload: Payload) -> list[_Cue]:
         cues.append(
             _Cue(start, max(end, start), labels.pop() if len(labels) == 1 else None, group)
         )
-    return cues
+    return [piece for cue in cues for piece in _split(cue)]
+
+
+# The most a player shows well, as #177 puts it: two lines of about 42
+# characters, and no cue on screen past 7 seconds. A 40-word sentence that
+# stayed one cue covered a third of the screen for 15 seconds.
+MAX_CUE_CHARS = 84
+MAX_CUE_S = 7.0
+
+
+def _split(cue: _Cue) -> list[_Cue]:
+    """Cut a cue past MAX_CUE_CHARS or MAX_CUE_S into cues at word boundaries (#177).
+
+    Each piece starts on its first word's `t` and ends on its last word's `e`,
+    so no word is shown outside its own time; a cut falls only before a token
+    that opens with a space, so punctuation and word pieces stay with their
+    word. A cue whose tokens do not all carry `t`, `e` and `w`, or do not spell
+    its sentences' text (transcripts from before #106 and #200), stays whole:
+    nothing says where a cut would land.
+    """
+    tokens: list[dict[str, Any]] = []
+    for sentence in cue.sentences:
+        toks = cast("list[dict[str, Any]]", sentence.get("tokens", []))
+        timed = toks and all("t" in tok and "e" in tok and "w" in tok for tok in toks)
+        if not timed or "".join(str(tok["w"]) for tok in toks) != sentence["text"]:
+            return [cue]
+        tokens += toks
+    if len(cue.text) <= MAX_CUE_CHARS and cue.end_ms - cue.start_ms <= _ms(MAX_CUE_S):
+        return [cue]
+    pieces: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for tok in tokens:
+        grown = [*current, tok]
+        text = "".join(str(t["w"]) for t in grown).strip()
+        span = _ms(float(tok["e"])) - _ms(float(grown[0]["t"]))
+        opens_word = str(tok["w"])[:1] == " "
+        if current and opens_word and (len(text) > MAX_CUE_CHARS or span > _ms(MAX_CUE_S)):
+            pieces.append(current)
+            current = [tok]
+        else:
+            current = grown
+    pieces.append(current)
+    out: list[_Cue] = []
+    for piece in pieces:
+        start = _ms(float(piece[0]["t"]))
+        end = max(start, *(_ms(float(tok["e"])) for tok in piece))
+        sentence: Sentence = {
+            "start": piece[0]["t"],
+            "end": max(float(tok["e"]) for tok in piece),
+            "text": "".join(str(tok["w"]) for tok in piece),
+            "tokens": piece,
+        }
+        out.append(_Cue(start, end, cue.speaker, [sentence]))
+    # Still one timeline: a piece ends no later than the next begins.
+    return [
+        _Cue(c.start_ms, min(c.end_ms, out[i + 1].start_ms), c.speaker, c.sentences)
+        if i + 1 < len(out) else c
+        for i, c in enumerate(out)
+    ]
 
 
 def _stamp(ms: int, sep: str) -> str:
