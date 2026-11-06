@@ -13,7 +13,7 @@ const fetchMock = vi.hoisted(() => {
 
 import { dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
-import { KeySheet } from "../../src/features/shell/KeySheet";
+import { hideKeys, KeySheet } from "../../src/features/shell/KeySheet";
 import { SWIPE_PX } from "../../src/features/review/swipe";
 import { stubMatchMedia } from "./media";
 import { box, contentWith, hidePage, items, key, longContent, serveReview, server, showPage, start } from "./reviewServer";
@@ -26,6 +26,8 @@ const NARROW = (query: string) => query.includes("max-width") || query.includes(
 beforeEach(() => serveReview(fetchMock, PHONE));
 
 afterEach(() => {
+  // The sheet is module state: one left open by a test would greet the next (#329).
+  act(() => hideKeys());
   showPage();
   cleanup();
   act(() => dismissError());
