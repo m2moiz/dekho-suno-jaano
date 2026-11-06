@@ -166,3 +166,21 @@ whitelist.output  # dsj/ui/schemas.py RenderJob
 # as a write to an attribute nobody reads, because the gate scans only the
 # files a branch changed and the reader is in another one.
 whitelist._last  # tests/test_ui_server.py
+
+# The whole-tree sweep `just check` runs (#289) sees the same reflection the
+# per-branch gate does, over every file at once. Route handlers are reached by
+# FastAPI through their decorator, never by name.
+whitelist.export  # dsj/ui/routes/marks.py
+whitelist.retitle  # dsj/ui/routes/recording.py
+whitelist.write_reference  # dsj/ui/routes/review.py
+# pydantic fields: read by the client from the JSON, never by Python code.
+whitelist.cloud  # dsj/ui/jobs.py, dsj/ui/schemas.py
+whitelist.usd_per_hour  # dsj/ui/jobs.py, dsj/ui/schemas.py
+whitelist.language_tag  # dsj/ui/schemas.py
+whitelist.review_checked  # dsj/ui/schemas.py
+whitelist.review_total  # dsj/ui/schemas.py
+whitelist.words_hash  # dsj/ui/schemas.py
+# A pydantic model_validator, called by pydantic through its decorator.
+whitelist._saved_before_hashes  # dsj/ui/schemas.py
+# A fixture, injected by pytest by name.
+whitelist.private_temp_folder  # tests/conftest.py

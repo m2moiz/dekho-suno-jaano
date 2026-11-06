@@ -34,6 +34,7 @@ typecheck:
 # Browsers are not here; they are in `verify`.
 check: ui-fresh typecheck ui-typecheck api-fresh
     uv run ruff check .
+    uv run vulture dsj tests vulture_whitelist.py --min-confidence 60
     {{ quote(just_executable()) }} ui-test
     uv run pytest
 
@@ -54,6 +55,7 @@ check: ui-fresh typecheck ui-typecheck api-fresh
 # not cover), and the frame-time check.
 verify: ui-fresh typecheck ui-typecheck api-fresh urdu-fixture
     uv run ruff check .
+    uv run vulture dsj tests vulture_whitelist.py --min-confidence 60
     {{ quote(just_executable()) }} ui-test
     uv run pytest -m "slow or not slow" --cov=dsj --cov-report=term-missing:skip-covered --cov-fail-under=90
     {{ quote(just_executable()) }} ui-e2e
