@@ -243,6 +243,78 @@ source_paths = ["dsj"]
 # ordinary reason: their tests are integration-shaped and mutants time out
 # rather than inform.
 only_mutate = ["dsj/merge.py", "dsj/checkpoint.py", "dsj/atomic.py"]
+# mutmut runs the suite inside its mutants/ copy, so a test that reads a repo
+# file by path finds nothing there. The first mutate.yml run (42273716577,
+# 2026-11-06) collected zero mutants for exactly that: test_agents_ui_rules
+# reads ui/package.json at import. These are the repo files the tests read;
+# mutmut copies each into mutants/ (copy_also_copy_files in its __main__).
+# Every tracked top-level entry of ui/ and scratch/ (not node_modules, not the
+# data folders), directories first: mutmut copies a file with shutil.copy2,
+# which does not create mutants/ui/, and a directory with copytree, which does.
+# Regenerate with git ls-files when a top-level file is added to either.
+also_copy = [
+    "ui/src",
+    "ui/tests",
+    "ui/.npmrc",
+    "ui/components.json",
+    "ui/index.html",
+    "ui/package-lock.json",
+    "ui/package.json",
+    "ui/playwright.config.ts",
+    "ui/tsconfig.json",
+    "ui/vite.config.ts",
+    "ui/vitest.config.ts",
+    "scratch/datasets",
+    "scratch/vlm",
+    "scratch/build_urdu_fixture.py",
+    "scratch/click_check.py",
+    "scratch/confidence_cutoff.py",
+    "scratch/diarize_cache_cost.py",
+    "scratch/diarize_crash_loop.py",
+    "scratch/diarize_gate.py",
+    "scratch/fetch_guiworld.py",
+    "scratch/gate.sh",
+    "scratch/guiworld_eval.py",
+    "scratch/hash_probe.py",
+    "scratch/loop_runs.py",
+    "scratch/make_reference_draft.py",
+    "scratch/mark_eval.py",
+    "scratch/marks_resume_probe.py",
+    "scratch/mavils_eval.py",
+    "scratch/merge_probe.py",
+    "scratch/merge_probe_deixis.py",
+    "scratch/order_probe.py",
+    "scratch/prof.py",
+    "scratch/real_bench.py",
+    "scratch/real_run.sh",
+    "scratch/redecode_probe.py",
+    "scratch/resume_gate.py",
+    "scratch/retry_loops_run.py",
+    "scratch/roman_urdu_probe.py",
+    "scratch/run_guiworld.sh",
+    "scratch/run_mavils_after.sh",
+    "scratch/seam_probe.py",
+    "scratch/seam_replay.py",
+    "scratch/seam_replay_anchored.py",
+    "scratch/seam_twice.py",
+    "scratch/senko_gate.py",
+    "scratch/skip_probe.py",
+    "scratch/speech_loudness.py",
+    "scratch/sweep.sh",
+    "scratch/tile_probe.py",
+    "scratch/token_lengths.py",
+    "scratch/transcript_invariants.py",
+    "scratch/ui_manifest.py",
+    "scratch/ui_shots.py",
+    "scratch/urdu_script_share.py",
+    "scratch/whisper_sweep.py",
+    "scratch/wordlist_crosscheck.py",
+    "scratch/meeting.wav",
+    "AGENTS.md",
+    ".agents",
+    "README.md",
+    "pyproject.toml",
+]
 
 # Explicit, not inherited. Whether mutmut's fork-based runner picks up pytest's
 # addopts is documented nowhere either way, and the whole tractability argument
