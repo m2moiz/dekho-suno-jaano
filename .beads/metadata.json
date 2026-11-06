@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "deixis",
-  "project_id": "d278d71e-f812-406e-b196-a8c2d7e5487c"
-}
