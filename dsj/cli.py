@@ -274,6 +274,7 @@ def suno(
     try:
         held = runlock.acquire(
             {
+                "kind": "transcription",
                 "pid": os.getpid(),
                 "out": str(out.absolute()),
                 "status": str(status.absolute()) if status else None,

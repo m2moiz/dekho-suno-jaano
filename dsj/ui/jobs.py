@@ -408,6 +408,7 @@ class Jobs:
             # worker when the run is over.
             held = runlock.acquire(
                 {
+                    "kind": "transcription",
                     "pid": os.getpid(),
                     "out": str(out),
                     "status": str(status_path),
@@ -485,7 +486,9 @@ class Jobs:
         assert found is not None  # open_edits found it a moment ago
         out = render_path(media)
         with self._start_lock:
-            held = runlock.acquire({"pid": os.getpid(), "out": str(out), "media": str(media)})
+            held = runlock.acquire(
+                {"kind": "render", "pid": os.getpid(), "out": str(out), "media": str(media)}
+            )
             render = Render(
                 id=len(self._renders) + 1,
                 transcript_id=transcript_id,

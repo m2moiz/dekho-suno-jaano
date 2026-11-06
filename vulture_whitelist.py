@@ -197,3 +197,8 @@ whitelist.relink  # dsj/ui/store.py
 whitelist.refresh_missing  # dsj/ui/store.py
 whitelist.last_edited_at  # dsj/ui/store.py
 whitelist.urdu_share  # dsj/ui/store.py
+# Jobs.view, Render.view, Jobs.renders and Jobs.start_render are called from
+# dsj/ui/routes; the per-branch gate sees only jobs.py when a change touches it.
+whitelist.view  # dsj/ui/jobs.py
+whitelist.renders  # dsj/ui/jobs.py
+whitelist.start_render  # dsj/ui/jobs.py
