@@ -249,3 +249,9 @@ whitelist.kept  # dsj/ui/schemas.py
 # A route handler, reached by FastAPI through its decorator.
 whitelist.models_memory  # dsj/ui/routes/jobs.py
 whitelist.mark_edited  # dsj/ui/store.py, called from the marks route
+# Jobs.all is called from dsj/ui/routes/jobs.py; the per-branch gate sees only
+# jobs.py when a change touches it.
+whitelist.all  # dsj/ui/jobs.py
+# Signature fidelity for the caffeinate stand-in: Popen.wait takes a timeout,
+# and awake._stop passes one, so the stub accepts it and ignores it.
+whitelist.timeout  # tests/test_awake.py

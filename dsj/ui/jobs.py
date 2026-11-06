@@ -54,7 +54,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from dsj import hatao, runlock, suno
+from dsj import awake, hatao, runlock, suno
 from dsj.asr import ENGINES, EngineUnavailable, get_engine
 from dsj.atomic import atomic_write_text
 from dsj.filetag import source_sidecar_for
@@ -524,7 +524,7 @@ class Jobs:
 
         error: str | None = None
         try:
-            with self._hold():
+            with self._hold(), awake.held("render"):
                 rendered = hatao.render(doc, media, render.out, on_progress=progress)
                 capped = rendered.capped
                 self._log(render, doc, media, transcript, rendered.spans, capped)
@@ -624,7 +624,7 @@ class Jobs:
         transcript_id: int | None = None
         error: str | None = None
         try:
-            with self._hold():
+            with self._hold(), awake.held("transcription"):
                 if job.roman_twin is not None:
                     keep_earlier_roman_run(job.out, job.roman_twin)
                 # Looked up at call time, so a test can stand in for it.
