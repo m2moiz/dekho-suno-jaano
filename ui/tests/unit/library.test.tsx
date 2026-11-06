@@ -13,6 +13,7 @@ import { currentError, dismissError } from "../../src/features/errors/appError";
 import {
   durationLabel,
   engineLabel,
+  versionLabel,
   marksLabel,
   pictureNote,
   sizeLabel,
@@ -470,6 +471,13 @@ describe("the words for each value", () => {
   it("never guesses an engine", () => {
     expect(engineLabel(transcript({ engine: null }))).toBe("unknown");
     expect(engineLabel(transcript({ engine: "sherpa" }))).toBe("sherpa");
+  });
+
+  it("says an imported transcript was imported, not which model made it (#211)", () => {
+    expect(engineLabel(transcript({ engine: "import" }))).toBe("imported");
+    expect(versionLabel(transcript({ engine: "import", finished_at: "2026-10-02T18:05:00Z" }))).toMatch(
+      /· imported$/,
+    );
   });
 
   it("keeps a scan that never ran apart from one that found nothing", () => {

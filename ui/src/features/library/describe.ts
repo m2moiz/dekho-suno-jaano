@@ -15,8 +15,14 @@ export function speakersLabel(t: TranscriptRow): string {
   return t.speaker_count === null ? "speakers labelled" : plural(t.speaker_count, "speaker", "speakers");
 }
 
+// A `dsj parho` import is recorded under the engine "import" (#211): not a
+// model, so the page says what happened rather than naming one.
+function engineWord(engine: string | null): string | null {
+  return engine === "import" ? "imported" : engine;
+}
+
 export function engineLabel(t: TranscriptRow): string {
-  return t.engine ?? "unknown";
+  return engineWord(t.engine) ?? "unknown";
 }
 
 export function marksLabel(t: TranscriptRow): string {
@@ -68,7 +74,7 @@ export function pictureNote(videoCodec: string | null): string | null {
 
 /** "2 Oct 2026, 18:05 · whisper": how the version picker tells one transcript of a recording from another. */
 export function versionLabel(t: TranscriptRow): string {
-  return `${whenLabel(t.finished_at)} · ${t.engine ?? "unknown engine"}`;
+  return `${whenLabel(t.finished_at)} · ${engineWord(t.engine) ?? "unknown engine"}`;
 }
 
 const LANGUAGES = { urdu: "Urdu", mixed: "Mixed", english: "English" } as const;

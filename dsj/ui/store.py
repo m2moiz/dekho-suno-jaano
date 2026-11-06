@@ -329,6 +329,11 @@ def _describe(media: Path) -> _Described:
     return _Described(duration, audio, video, unreadable)
 
 
+# The engine a `dsj parho` import is recorded under (#211): not a speech
+# model, so the app can say "imported" rather than a model's name or "unknown".
+IMPORT_ENGINE = "import"
+
+
 def _engine_of(payload: dict[str, Any]) -> str | None:
     """The engine the transcript names (#172), or None.
 
@@ -680,8 +685,10 @@ class Library:
         A run writing over a transcript the library already has replaces that
         row's recording, finish time, engine and language: it is a new run.
         """
-        if engine not in ENGINES:
-            raise ValueError(f"engine must be one of {', '.join(ENGINES)}, not {engine!r}")
+        if engine not in (*ENGINES, IMPORT_ENGINE):
+            raise ValueError(
+                f"engine must be one of {', '.join(ENGINES)} or {IMPORT_ENGINE!r}, not {engine!r}"
+            )
         path = transcript.expanduser().resolve()
         payload = _read_payload(path)
         with self._db:
