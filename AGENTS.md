@@ -68,8 +68,8 @@ stale-build check, and `just verify` adds Playwright on chromium and webkit.
    as `Cannot find module '@base-ui-components/react'`, which reads like a broken install
    and is not one.
 5. **Never hand-write a UI primitive, and never type a `@base-ui/react/*` import from
-   memory.** Run `npx shadcn@4.21.0 add <name>` from `ui/` and let it write the file and
-   the import (`npx shadcn@4.21.0 add button --dry-run` shows what it would write).
+   memory.** Run `npx shadcn@4.23.0 add <name>` from `ui/` and let it write the file and
+   the import (`npx shadcn@4.23.0 add button --dry-run` shows what it would write).
 
 ## Citing code in issues and docs
 
