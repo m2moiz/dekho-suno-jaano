@@ -1,0 +1,287 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit settings for dekho-suno-jaano. docs/review-bots.md explains the
+# setup in plain English, including the steps only the owner can do.
+#
+# Every key below is in the configuration reference:
+#   https://docs.coderabbit.ai/reference/configuration
+# Each setting that differs from the default names the page it came from.
+# Schema (the yaml-language-server line above) is the one the configuration
+# overview names: https://docs.coderabbit.ai/guides/configuration-overview
+
+# Not default (en-US). The repo writes British English ("colours", "behaviour").
+# https://docs.coderabbit.ai/reference/configuration#param-language
+language: en-GB
+
+# Not default (empty). 250 characters at most.
+# https://docs.coderabbit.ai/reference/configuration#param-tone-instructions
+tone_instructions: >-
+  Plain English, short sentences. Never use em or en dashes. Lead each finding
+  with what breaks and for whom. Cite code by an rg pattern, not a line number.
+  No praise, no filler.
+
+reviews:
+  # Not default (chill). Agents write most of the code here and read every
+  # finding, so a missed bug costs more than an extra comment.
+  # https://docs.coderabbit.ai/reference/configuration#param-reviews-profile
+  profile: assertive
+
+  # Not default (false). CodeRabbit requests changes while it has open
+  # findings, and approves once they are resolved and no pre-merge check fails.
+  # https://docs.coderabbit.ai/pr-reviews/request-changes-workflow
+  request_changes_workflow: true
+
+  # Not default (false). Keeps the summary out of the PR description the owner
+  # or the agent wrote, and puts it in the walkthrough comment instead.
+  # https://docs.coderabbit.ai/pr-reviews/summaries
+  high_level_summary_in_walkthrough: true
+
+  # Not default (empty). Keep the summary short.
+  # https://docs.coderabbit.ai/reference/configuration#param-reviews-high-level-summary-instructions
+  high_level_summary_instructions: >-
+    At most five bullets, one sentence each, in plain English with no em or en
+    dashes. Say what the change does for the person using dsj, then anything
+    that could lose or overwrite their transcripts, corrections or answer keys.
+
+  # Not default (true). Sequence diagrams made PR #280's walkthrough long and
+  # are rarely read on a one-person project.
+  # https://docs.coderabbit.ai/pr-reviews/walkthroughs
+  sequence_diagrams: false
+
+  # Not default (true). One maintainer: there is nobody else to suggest.
+  # https://docs.coderabbit.ai/pr-reviews/walkthroughs
+  suggested_reviewers: false
+
+  # Not default (true). Drops the fortune message shown while a review runs.
+  # https://docs.coderabbit.ai/reference/configuration#param-reviews-in-progress-fortune
+  in_progress_fortune: false
+
+  # Not default (empty). Skip tracked files that are not code or prose a
+  # reviewer should read. The built page (dsj/ui/static) and the generated
+  # types are NOT filtered here: the pre-merge check below needs to see them.
+  # https://docs.coderabbit.ai/configuration/path-instructions#path-filters
+  path_filters:
+    - "!.impeccable/**"
+    - "!.beads/**"
+
+  # Not default (empty). The repo's own rules, from AGENTS.md and
+  # docs/runbook.md, scoped to the files they govern.
+  # https://docs.coderabbit.ai/configuration/path-instructions
+  path_instructions:
+    - path: "**/*.md"
+      instructions: |
+        Prose here is read by the owner in a terminal and by coding agents.
+        - Plain English, short sentences, no jargon a newcomer would not follow.
+        - No em dash (U+2014) or en dash (U+2013) anywhere. Flag every one.
+        - Code is cited by an rg pattern that finds it, for example
+          `rg -n 'def write_status' dsj/suno.py`, with a line number only as a
+          hint beside it. Flag a bare `file.py:123` or "line 123" citation,
+          because lines move and a stale number still lands on plausible code.
+        - Run any rg pattern the change adds against the PR's tree when you can,
+          and flag one that no longer matches.
+        - A number stated as fact needs the command or issue that measured it.
+    - path: "{dsj,tests,scratch}/**/*.py"
+      instructions: |
+        Python 3, checked by ruff (config in pyproject.toml) and by pyright in
+        strict mode against two configs, pyrightconfig.json and
+        pyrightconfig.tests.json. `uv run just check` is the gate; a green
+        pytest alone is not evidence (issue #96).
+        - Flag silent fallbacks: `except: pass`, `except Exception` that
+          swallows, `or {}`, `|| true`, defaults that hide a failure.
+        - Flag `# type: ignore` and `# noqa` without a reason on the same line.
+        - A new constant needs a comment naming the measurement and the
+          command that produced it (AGENTS.md, "Driving dsj itself", rule 1).
+        - dsj runs on macOS only (MLX, Metal). Do not suggest Linux-only fixes.
+    - path: "dsj/**/*.py"
+      instructions: |
+        Data safety is the first thing to check. The owner's transcripts, the
+        edit lists that hold their corrections (dsj/ui/edits.py), their reviews,
+        and the answer keys those corrections become (`<name>.reference.json`
+        and `.reference.txt`, dsj/ui/review.py) are hours of human work, and
+        answer keys are what later models are scored against.
+        - Treat as high severity any path that can delete, truncate, overwrite
+          or rename one of those files without keeping the old copy, or that can
+          leave one half written. Writes go through dsj/atomic.py; ask whether
+          `fsync=True` is needed for files whose loss costs real work.
+        - A corrupted or wrong answer key is worse than a missing one: flag any
+          change that lets unchecked or page-supplied values reach it (#257).
+        - Never suggest deleting a transcript to force a re-run; retries write
+          to a new path and replace the old file once the new one exists (#137).
+        - Library schema upgrades are one way; check that a backup is kept
+          before an upgrade and that a failed upgrade leaves the old file whole.
+    - path: "dsj/ui/**/*.py"
+      instructions: |
+        FastAPI server for the page. dsj/ui/schemas.py is the shape of
+        everything the server sends. If this PR changes schemas.py or a route,
+        it must also change ui/src/api/schema.d.ts, regenerated with `just api`
+        (#155). Flag the PR if it does not.
+    - path: "tests/**"
+      instructions: |
+        Tests come first. For a bug fix, check that the PR adds a test that
+        would fail without the fix; say so if the test looks like it would pass
+        either way (issue #51 asserted on words that appeared elsewhere).
+        - Flag a `skipif` whose condition is the very failure the test guards:
+          absence must fail, not skip.
+        - Flag tests that touch the real home directory, the real library, or
+          real recordings instead of a temporary path.
+        - Tests are under pyright strict too; annotations are required.
+    - path: "ui/src/**"
+      instructions: |
+        React and TypeScript page, served by `dsj ui`.
+        - TypeScript is pinned to 6.0.3; flag any move to 7.x.
+        - The package is `@base-ui/react`. Flag any import of the old name
+          `@base-ui-components/react`.
+        - UI primitives are added with `npx shadcn@4.21.0 add <name>` from ui/,
+          never hand-written. Flag a new hand-written primitive under
+          ui/src/components/ui/.
+        - Urdu text is shown right to left in a Nastaliq font; flag layout
+          changes that would break right-to-left text.
+        - A change here needs `just ui-build` and the rebuilt dsj/ui/static/
+          committed in the same PR (#114, #203). Flag the PR if it is missing.
+    - path: "ui/package.json"
+      instructions: |
+        Every version is exact (ui/.npmrc has save-exact=true). Flag any `^` or
+        `~`. TypeScript stays at 6.0.3.
+    - path: "ui/tests/**"
+      instructions: |
+        vitest unit tests in ui/tests/unit, Playwright end to end tests in
+        ui/tests/e2e on chromium and webkit. A waived browser needs an open
+        issue number in the waiver.
+    - path: "dsj/ui/static/**"
+      instructions: |
+        Built output from `just ui-build`. Never hand-edited. Do not review its
+        contents. Only check that the same PR changes the sources it is built
+        from (ui/src/, ui/index.html, ui/vite.config.ts, ui/tsconfig.json or the
+        two package files).
+    - path: "ui/src/api/schema.d.ts"
+      instructions: |
+        Generated by `just api` from dsj/ui/schemas.py. Never hand-edited. Do
+        not review its contents. Only check that the same PR changes
+        dsj/ui/schemas.py or a route under dsj/ui/routes/.
+    - path: ".github/workflows/**"
+      instructions: |
+        CI is the gate. Flag any step that skips tests, weakens `just check`,
+        or adds `continue-on-error`. Actions are pinned to exact release tags.
+    - path: "{AGENTS.md,.agents/skills/dsj/SKILL.md}"
+      instructions: |
+        The skill is held against the CLI by tests/test_skill_gate.py. If the
+        PR changes CLI verbs or flags, check the skill and README changed too.
+
+  # Not default for drafts, base_branches and the pause count. Review every PR,
+  # drafts included, whatever branch it targets, and every push to it.
+  # https://docs.coderabbit.ai/configuration/auto-review
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    # 0 turns the pause off. Every push is reviewed, and every review counts
+    # against the hourly allowance (warning on the page above).
+    auto_pause_after_reviewed_commits: 0
+    drafts: true
+    base_branches:
+      - ".*"
+
+  # https://docs.coderabbit.ai/pr-reviews/pre-merge-checks
+  pre_merge_checks:
+    # Not default (warning). ruff already enforces docstrings in Python (rule
+    # set D in pyproject.toml), so this would only double count, and it would
+    # demand JSDoc on React components the repo does not ask for.
+    docstrings:
+      mode: "off"
+    # Not default (empty). Custom checks need the Team plan or above, which the
+    # open source plan includes (https://docs.coderabbit.ai/management/plans).
+    # https://docs.coderabbit.ai/pr-reviews/custom-checks
+    custom_checks:
+      - name: "Generated files match their sources"
+        mode: "error"
+        instructions: |
+          Fail if the PR changes any file under dsj/ui/static/ and changes none
+          of: anything under ui/src/, ui/index.html, ui/vite.config.ts,
+          ui/tsconfig.json, ui/package.json, ui/package-lock.json.
+          Fail if the PR changes ui/src/api/schema.d.ts and changes neither
+          dsj/ui/schemas.py nor any file under dsj/ui/routes/.
+          Fail if the PR changes dsj/ui/schemas.py and does not change
+          ui/src/api/schema.d.ts.
+          Pass otherwise. Changes only under ui/tests/ need no rebuild.
+      - name: "Behaviour changes ship with a test"
+        mode: "warning"
+        instructions: |
+          Fail if the PR changes a .py file under dsj/ or a .ts or .tsx file
+          under ui/src/ in a way that changes behaviour, and adds or changes no
+          file under tests/ or ui/tests/, unless the PR description says why
+          no test is needed. Pure renames, comments, docstrings and formatting
+          do not count as behaviour changes. Pass otherwise.
+      - name: "No em or en dashes in added prose"
+        mode: "warning"
+        instructions: |
+          Search the lines this PR adds, in .md files and in Python or
+          TypeScript comments and docstrings, for the characters U+2014 (em
+          dash) and U+2013 (en dash). Fail and list each file and the text
+          around each one found. Ignore files under dsj/ui/static/ and
+          ui/src/api/schema.d.ts. Pass if there are none.
+      - name: "Code cited by rg pattern, not line"
+        mode: "warning"
+        instructions: |
+          In lines this PR adds to .md files, find citations of code that give
+          only a file and line number, such as `dsj/suno.py:120` or "line 120
+          of dsj/suno.py", with no rg pattern beside them. Fail and list them.
+          A line number next to an rg pattern such as
+          `rg -n 'def write_status' dsj/suno.py` passes. Pass if there are none.
+
+  # Tools that match this stack. All are on by default; they are listed so the
+  # choice is visible. Each one skips itself when it has nothing to read.
+  # https://docs.coderabbit.ai/tools/list
+  tools:
+    # Reads the [tool.ruff] table in pyproject.toml by closest-config discovery.
+    # https://docs.coderabbit.ai/tools/ruff
+    ruff:
+      enabled: true
+    # Secret scanning (Betterleaks, configured under the gitleaks key).
+    # https://docs.coderabbit.ai/tools/betterleaks
+    gitleaks:
+      enabled: true
+    # ui/ has no ESLint config today, so ESLint skips itself until one exists.
+    # https://docs.coderabbit.ai/tools/eslint
+    eslint:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/biome
+    biome:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/react-doctor
+    reactDoctor:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/osv-scanner
+    osvScanner:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/opengrep
+    opengrep:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/shellcheck
+    shellcheck:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/actionlint
+    actionlint:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/zizmor
+    zizmor:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/markdownlint
+    markdownlint:
+      enabled: true
+    # https://docs.coderabbit.ai/tools/yamllint
+    yamllint:
+      enabled: true
+    # Reads CI results so a red check gets a fix suggestion on the PR.
+    # https://docs.coderabbit.ai/tools/github-checks
+    github-checks:
+      enabled: true
+
+knowledge_base:
+  code_guidelines:
+    # AGENTS.md is picked up on its own. Not default (empty): also apply the
+    # runbook to everything, and DESIGN.md to the page.
+    # https://docs.coderabbit.ai/knowledge-base/code-guidelines
+    filePatterns:
+      - files: "docs/runbook.md"
+        applyTo: "**"
+      - files: "DESIGN.md"
+        applyTo: "ui/src/**"

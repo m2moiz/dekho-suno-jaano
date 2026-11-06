@@ -27,6 +27,7 @@ a fully green test suite.
 | [resume-gate-design.md](resume-gate-design.md) | How you test a resume that silently restarts, given it produces byte-identical output either way. |
 | [mutmut-triage.md](mutmut-triage.md) | Every mutant the suite fails to kill, and why each one is accepted. Read this before adding a suppression. |
 | [runbook.md](runbook.md) | How a session executes a milestone end to end, from its plan issue to the release, and the traps earlier sessions fell into. |
+| [review-bots.md](review-bots.md) | The two AI reviewers on every PR, CodeRabbit and Macroscope: what each one checks, what the owner has to switch on, and how to turn either off. |
 
 ## The one idea they share
 

@@ -1,0 +1,86 @@
+name: claude
+
+# Claude on demand: the "fix it" tool, never an automatic reviewer.
+# docs/review-bots.md explains the roles and the owner-only setup.
+#
+# Write `@claude` and a request in a PR comment, an inline review comment or
+# a review, for example "@claude fix the bug CodeRabbit found in
+# dsj/ui/review.py and push it". Claude replies on the PR and can push a
+# commit to the PR branch. Agents (Claude among them) write most of the code
+# here, so Claude does not also review it automatically; CodeRabbit,
+# Macroscope and Bugbot are the independent reviewers.
+#
+# Docs, fetched 2026-10-09: https://code.claude.com/docs/en/github-actions
+#
+# Cost. Authenticates with CLAUDE_CODE_OAUTH_TOKEN, a token from
+# `claude setup-token` that "authenticates with your Claude subscription"
+# (https://code.claude.com/docs/en/authentication#generate-a-long-lived-token),
+# so each run uses the owner's Claude Max allowance, not API billing. Runs
+# happen only when someone with write access types @claude, and each is
+# capped below. GitHub Actions minutes are free on public repos with
+# standard runners
+# (https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+# One Claude run per PR or issue at a time. A second @claude waits for the
+# first instead of racing it on the same branch.
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    # Start a runner only for a comment that mentions @claude and comes from
+    # the owner or a collaborator. The action checks write access again
+    # itself, and rejects bot authors unless they are listed in allowed_bots,
+    # so another review bot cannot start Claude in a loop
+    # (https://code.claude.com/docs/en/github-actions#who-can-trigger-runs).
+    if: |
+      (
+        (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
+        contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      ) || (
+        github.event_name == 'pull_request_review' &&
+        contains(github.event.review.body, '@claude') &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)
+      )
+    runs-on: ubuntu-latest
+    # The docs advise a job timeout and a turn cap to stop runaway runs
+    # (https://code.claude.com/docs/en/github-actions#manage-costs).
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      # For the action's GitHub App authentication.
+      id-token: write
+      # Lets Claude read CI results on the PR.
+      actions: read
+    steps:
+      # Exact tags, checked to resolve on 2026-10-09 (`gh api
+      # repos/actions/checkout/tags`, `gh api
+      # repos/anthropics/claude-code-action/tags`), for the reason ci.yml gives.
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+
+      # No github_token input: the action then acts as the Claude GitHub App,
+      # so CI runs on the commits Claude pushes. A push made with the default
+      # GITHUB_TOKEN would start no CI at all
+      # (https://code.claude.com/docs/en/github-actions#ci-not-running-on-claudes-commits).
+      #
+      # The runner is Linux, so Claude cannot run `just check` (MLX needs a
+      # Mac); ci.yml runs it on every commit Claude pushes.
+      - uses: anthropics/claude-code-action@v1.0.247
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --max-turns 15
