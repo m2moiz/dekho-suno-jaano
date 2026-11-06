@@ -49,6 +49,29 @@ describe("MuteGate in WebKit, which switches muted on each frame", () => {
     expect(fadesInWebAudio("")).toBe(true);
   });
 
+  it("in a hidden tab, mutes as far ahead as the next timeupdate can be (#218)", () => {
+    // Frames stop in a hidden tab and `timeupdate` comes about four times a
+    // second, so a span 200 ms away is reached before the gate is asked again.
+    const element = media();
+    const gate = new MuteGate(element, null, () => true);
+    gate.setSpans([[1, 2]]);
+    gate.update(0.5);
+    expect(element.muted).toBe(false);
+    gate.update(0.8);
+    expect(element.muted).toBe(true);
+    gate.update(2.0);
+    expect(element.muted).toBe(false);
+  });
+
+  it("in a hidden tab at 2x, looks twice as far ahead", () => {
+    const element = media();
+    element.playbackRate = 2;
+    const gate = new MuteGate(element, null, () => true);
+    gate.setSpans([[1, 2]]);
+    gate.update(0.5);
+    expect(element.muted).toBe(true);
+  });
+
   it("mutes from the frame before a span and unmutes once past it", () => {
     const element = media();
     const gate = new MuteGate(element, null);
