@@ -189,7 +189,7 @@
    "**Do** use Gold Ink (`gold-ink-light`) for gold text or a gold ring on the pale ground; plain gold only on the blue field, on the dark ground, and as a fill.",
    "**Do** set Urdu in the bundled Noto Nastaliq Urdu at about 1.3x and 2.1 leading, with `lang=\"ur\"` and `dir=\"auto\"`.",
    "**Do** make every target 44px where touch is the input, and keep the player rail at the bottom.",
-   "**Do** add a new control with `npx shadcn@4.21.0 add <name>` and theme it, never hand-built."
+   "**Do** add a new control with `npx shadcn@4.23.0 add <name>` and theme it, never hand-built."
   ],
   "donts": [
    "**Don't** use a cream or warm ground; the reading ground is cool.",

@@ -131,7 +131,7 @@ reviews:
         - TypeScript is pinned to 6.0.3; flag any move to 7.x.
         - The package is `@base-ui/react`. Flag any import of the old name
           `@base-ui-components/react`.
-        - UI primitives are added with `npx shadcn@4.21.0 add <name>` from ui/,
+        - UI primitives are added with `npx shadcn@4.23.0 add <name>` from ui/,
           never hand-written. Flag a new hand-written primitive under
           ui/src/components/ui/.
         - Urdu text is shown right to left in a Nastaliq font; flag layout

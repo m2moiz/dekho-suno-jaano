@@ -639,7 +639,7 @@ as the repo's `AGENTS.md`:
 4. The package is `@base-ui/react`, not `@base-ui-components/react`. It was renamed; the
    old name is frozen at `1.0.0-rc.0` and its import resolves to nothing.
 5. Never hand-write a UI primitive or type a `@base-ui/react/*` import from memory. Run
-   `npx shadcn@4.21.0 add <name>` from `ui/` and let it write the import.
+   `npx shadcn@4.23.0 add <name>` from `ui/` and let it write the import.
 
 ## References
 
