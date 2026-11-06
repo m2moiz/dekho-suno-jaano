@@ -1,0 +1,54 @@
+name: mutate
+
+# Weekly, report only (#289). `just mutate` runs mutmut over the three modules
+# [tool.mutmut] in pyproject names and prints the survivors; docs/mutmut-triage.md
+# holds the triage of the 13 that survived on 2026-10-09. This job never fails
+# the repo: a new survivor is a finding to triage, not a broken build, so the
+# result is an artifact and the summary, and nothing here is a required check.
+#
+# macos-15, like ci.yml: the suite imports MLX-backed packages that a Linux
+# runner cannot import, and the three mutated modules are tested through the
+# same conftest. Public repo, so the minutes are free.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # Mondays 04:17 UTC
+  workflow_dispatch:
+
+jobs:
+  mutate:
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+      - run: brew install ffmpeg
+      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
+      - run: uv tool install rust-just
+      # continue-on-error: mutmut exits non-zero when mutants survive, and
+      # survivors are the report, not a failure.
+      - name: mutate
+        id: mutate
+        continue-on-error: true
+        run: just mutate 2>&1 | tee mutate-report.txt
+      - name: summary
+        run: |
+          {
+            echo '## mutmut, weekly'
+            echo
+            echo '```'
+            uv run mutmut results 2>&1 | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: mutate-report
+          path: |
+            mutate-report.txt
+            mutants/
+          if-no-files-found: warn
+          retention-days: 90

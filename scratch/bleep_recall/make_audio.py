@@ -175,7 +175,8 @@ def say(voice: str, text: str) -> np.ndarray:
             check=True,
         )
         with wave.open(str(path)) as f:
-            assert f.getframerate() == RATE and f.getnchannels() == 1
+            assert f.getframerate() == RATE
+            assert f.getnchannels() == 1
             raw = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
     return raw.astype(np.float32) / 32768
 

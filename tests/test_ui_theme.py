@@ -96,4 +96,5 @@ def test_the_dark_variant_follows_the_choice_and_the_mac() -> None:
     css = built_css()
     assert ":where([data-theme=dark],[data-theme=dark] *)" in css
     assert "@media (prefers-color-scheme:dark)" in css
-    assert ".dark " not in css and ".dark{" not in css, "a leftover .dark class selector"
+    assert ".dark " not in css, "a leftover .dark class selector"
+    assert ".dark{" not in css, "a leftover .dark class selector"

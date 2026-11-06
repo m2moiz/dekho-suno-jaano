@@ -451,7 +451,8 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
         con.execute("PRAGMA user_version = 3")
     with Library.open() as library:
         found = library.recording(rid)
-        assert found is not None and found.title is None
+        assert found is not None
+        assert found.title is None
         assert library.set_title(rid, "Kept").title == "Kept"
     with sqlite3.connect(store.library_path()) as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
@@ -481,7 +482,8 @@ def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
         assert con.execute("SELECT id FROM recordings").fetchall() == [(rid,)]
     said = capsys.readouterr().err.splitlines()
     assert len(said) == 1, said
-    assert str(backup) in said[0] and "0.4" in said[0]
+    assert str(backup) in said[0]
+    assert "0.4" in said[0]
     # Opened again it is version 5: nothing is copied, nothing said.
     with Library.open():
         pass
@@ -580,7 +582,8 @@ def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
         con.execute("PRAGMA user_version = 4")
     with Library.open() as library:
         found = library.recording(rid)
-        assert found is not None and found.title == "Kept"
+        assert found is not None
+        assert found.title == "Kept"
         (row,) = library.transcripts(rid)
         assert row.urdu_share is None
         assert library.backfill_urdu_share() == 1
