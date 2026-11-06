@@ -230,7 +230,8 @@ def test_the_cache_follows_the_contents_not_the_path(
     page()[0].get(f"/api/recording/{rid}/waveform")
     with Library.open() as library:
         found = library.recording(rid)
-    assert found is not None and found.content_id is not None
+    assert found is not None
+    assert found.content_id is not None
     assert waveform_cache(found.content_id).is_file()
 
     # Renamed and pointed at again: the same contents, so the same envelope file.

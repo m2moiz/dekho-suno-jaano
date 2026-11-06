@@ -145,7 +145,8 @@ def test_a_patch_outside_the_list_is_refused_naming_the_numbers(
     )
     assert reply.status_code == 422, reply.text
     message = reply.json()["message"]
-    assert f"start {start}" in message and f"delete {delete}" in message
+    assert f"start {start}" in message
+    assert f"delete {delete}" in message
     assert str(len(body["content"])) in message
     assert not edits_path(seeded["json"]).exists()
 
@@ -401,7 +402,8 @@ def test_a_review_patch_that_breaks_the_review_is_refused_by_name(seeded: dict[s
     kept = review_path(seeded["json"]).read_bytes()
     out = page().patch(route, json=review_patch(seeded, saved["review_sha"], start=3))
     assert out.status_code == 422, out.text
-    assert "start 3" in out.json()["message"] and "of 2" in out.json()["message"]
+    assert "start 3" in out.json()["message"]
+    assert "of 2" in out.json()["message"]
     overlap = review_patch(seeded, saved["review_sha"])
     overlap["insert"][0]["end"] = 1.4
     broken = page().patch(route, json=overlap)

@@ -86,7 +86,8 @@ def test_hatao_mutes_the_listed_words_and_logs_each_one(
     out = tmp_path / "clean.wav"
     assert main(["hatao", str(recording), "-t", str(transcript), "-o", str(out)]) == 0
     assert _sha(recording) == before
-    assert _peak(out, 1.0, 1.4) == 0 and _peak(out, 2.6, 3.0) == 0
+    assert _peak(out, 1.0, 1.4) == 0
+    assert _peak(out, 2.6, 3.0) == 0
     assert _peak(out, 1.6, 2.4) == _peak(recording, 1.6, 2.4) > 0  # between them, untouched
     log = json.loads((tmp_path / "clean.bleeps.json").read_text())
     assert log["muted"] == [
@@ -218,7 +219,8 @@ def test_kill_stops_a_render_and_leaves_no_file(
     assert proc.stderr is not None
     deadline = time.monotonic() + 60
     while "rendering" not in proc.stderr.readline():
-        assert time.monotonic() < deadline and proc.poll() is None, "no progress line"
+        assert time.monotonic() < deadline, "no progress line"
+        assert proc.poll() is None, "no progress line"
     proc.send_signal(signal.SIGTERM)
     assert proc.wait(timeout=60) == 143
     # ffmpeg was stopped with it, not left writing a file nobody will rename.

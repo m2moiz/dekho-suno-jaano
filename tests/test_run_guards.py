@@ -69,9 +69,9 @@ def no_stub_outlives_the_module(tmp_path_factory: pytest.TempPathFactory) -> Ite
     yield
     pattern = f"{STUB} {tmp_path_factory.getbasetemp()}"
     found = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
-    assert found.returncode == 1 and not found.stdout.strip(), (
-        f"stub processes outlived their tests: pids {found.stdout.split()}"
-    )
+    outlived = f"stub processes outlived their tests: pids {found.stdout.split()}"
+    assert found.returncode == 1, outlived
+    assert not found.stdout.strip(), outlived
 
 
 def launch(
