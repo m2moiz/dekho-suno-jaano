@@ -11,17 +11,22 @@ import dataclasses
 import json
 import struct
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from dsj.alignment import AlignedToken
+from dsj.asr import Transcription
 from dsj.checkpoint import (
     SCHEMA,
     Fingerprint,
     checkpoint_path_for,
     fingerprint,
     read_checkpoint,
+    read_transcription,
+    whisper_fingerprint,
     write_checkpoint,
+    write_transcription,
 )
 from dsj.identity import content_id
 
@@ -433,3 +438,73 @@ def test_a_sherpa_checkpoint_from_before_measured_times_does_not_resume(
 
     assert read_checkpoint(p, before) is not None  # the checkpoint itself is sound
     assert read_checkpoint(p, now) is None
+
+
+# The whisper bank (#171): the same file shape, a different fingerprint. These
+# read what write_transcription wrote, because until #320 nothing did, and
+# eight mutants of its payload and its fsync survived.
+
+
+def _bank(tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+    media = tmp_path / "in.wav"
+    media.write_bytes(b"RIFF")
+    fp = whisper_fingerprint(media, "mlx-community/whisper-large-v3-turbo", {"language": "ur"})
+    return tmp_path / "out.json.ckpt", media, fp
+
+
+def test_the_whisper_fingerprint_names_the_recording_by_its_contents(tmp_path: Path) -> None:
+    _, media, fp = _bank(tmp_path)
+    assert fp == {
+        "schema": SCHEMA,
+        "content_id": content_id(media),
+        "model_id": "mlx-community/whisper-large-v3-turbo",
+        "language": "ur",
+    }
+
+
+def test_the_whisper_bank_records_the_media_and_is_written_with_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The media path is a note for a person, the fsync is the point (#171)."""
+    bank, media, fp = _bank(tmp_path)
+    seen: list[bool] = []
+
+    def spy(path: Path, text: str, *, fsync: bool = False) -> None:
+        seen.append(fsync)
+        path.write_text(text)
+
+    monkeypatch.setattr("dsj.checkpoint.atomic_write_text", spy)
+    write_transcription(bank, fp, media, Transcription(text="salam", sentences=[], language="ur"))
+
+    assert seen == [True]
+    payload = json.loads(bank.read_text())
+    assert payload["media"] == str(media.resolve())
+    assert payload["fingerprint"] == fp
+    found = read_transcription(bank, fp)
+    assert found is not None
+    assert found.text == "salam"
+
+
+def test_no_whisper_bank_at_all_is_not_a_rejection(tmp_path: Path) -> None:
+    bank, _, fp = _bank(tmp_path)
+    reasons: list[str] = []
+    assert read_transcription(bank, fp, on_reject=reasons.append) is None
+    assert reasons == []
+
+
+def test_a_whisper_bank_of_the_wrong_shape_says_so(tmp_path: Path) -> None:
+    bank, _, fp = _bank(tmp_path)
+    bank.write_text(json.dumps({"fingerprint": fp, "transcription": "nope"}))
+    reasons: list[str] = []
+    assert read_transcription(bank, fp, on_reject=reasons.append) is None
+    assert reasons == ["the file is not a checkpoint this dsj can read"]
+
+
+def test_a_whisper_bank_that_differs_twice_names_both_reasons(tmp_path: Path) -> None:
+    """Two categories, one clause each, joined so a person can read them (#320)."""
+    bank, media, fp = _bank(tmp_path)
+    write_transcription(bank, fp, media, Transcription(text="", sentences=[], language="ur"))
+    reasons: list[str] = []
+    other = fp | {"model_id": "other", "language": "hi"}
+    assert read_transcription(bank, other, on_reject=reasons.append) is None
+    assert reasons == ["the model changed (model_id); the language changed (language)"]
