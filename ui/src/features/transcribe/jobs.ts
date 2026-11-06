@@ -11,6 +11,7 @@ import { useSyncExternalStore } from "react";
 import { api } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ApiError, fromBody } from "@/features/errors/appError";
+import { notifyFinished } from "@/features/shell/notify";
 
 export type Job = components["schemas"]["Job"];
 export type Engine = components["schemas"]["Engine"];
@@ -37,14 +38,25 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
+/** What a notification calls a job: the engine and how much audio, or what went wrong. */
+export function describeJob(job: Job): string {
+  if (job.state === "failed") return job.error ?? `${job.engine}: failed`;
+  const minutes = Math.round(job.audio_total_s / 60);
+  return `${job.engine}, ${minutes} min of audio`;
+}
+
 function take(next: Job[]) {
   const before = new Map(jobs.map((j) => [j.id, j]));
-  const ended = next.some((j) => {
+  const ended = next.filter((j) => {
     const was = before.get(j.id);
     return was !== undefined && !isFinished(was) && isFinished(j);
   });
   jobs = next;
-  if (ended) finishedCount += 1;
+  if (ended.length > 0) finishedCount += 1;
+  // Told once per job, here, where every poll lands (#130).
+  for (const job of ended) {
+    notifyFinished({ kind: "transcription", name: describeJob(job), outcome: job.state === "done" ? "done" : "failed" });
+  }
   emit();
   schedule();
 }
