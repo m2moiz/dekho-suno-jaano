@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 from conftest import FakeToken
 
+from dsj.cli import main as cli_main
 from dsj.suno import main, transcribe
 from dsj.ui.store import LIBRARY_ENV, Library, library_path
 
@@ -187,3 +188,57 @@ def test_a_run_records_itself_without_the_ui_extra(tmp_path: Path) -> None:
         [transcript] = library.transcripts(recording.id)
     assert recording.path == media.resolve()
     assert transcript.json_path == out.resolve()
+
+
+# --------------------------------------------------------------------------
+# #211: an imported transcript is in the library too
+# --------------------------------------------------------------------------
+
+_SRT = "1\n00:00:00,000 --> 00:00:01,000\nhello there\n"
+
+
+def test_an_imported_transcript_is_in_the_library(fake_media: Path, tmp_path: Path) -> None:
+    """`dsj parho` writes a transcript as `dsj suno` does, so it is listed as one (#211)."""
+    captions = tmp_path / "captions.srt"
+    captions.write_text(_SRT)
+    out = tmp_path / "imported.json"
+
+    assert cli_main(["parho", str(fake_media), str(captions), "-o", str(out)]) == 0
+
+    with Library.open() as library:
+        [recording] = library.recordings()
+        [transcript] = library.transcripts(recording.id)
+    assert recording.path == fake_media.resolve()
+    assert transcript.json_path == out.resolve()
+    # Not a speech model: the app says "imported", never a model's name.
+    assert transcript.engine == "import"
+    assert transcript.language is None
+
+
+@pytest.mark.parametrize(
+    ("make", "named"),
+    [(_a_file_where_the_folder_should_be, "FileExistsError"),
+     (_a_library_from_a_newer_dsj, "LibraryError")],
+)
+def test_a_library_that_cannot_record_never_fails_an_import(
+    fake_media: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    make: Callable[[Path], Path],
+    named: str,
+) -> None:
+    broken = make(tmp_path)
+    monkeypatch.setenv(LIBRARY_ENV, str(broken))
+    captions = tmp_path / "captions.srt"
+    captions.write_text(_SRT)
+    out = tmp_path / "imported.json"
+
+    code = cli_main(["parho", str(fake_media), str(captions), "-o", str(out)])
+
+    assert code == 0
+    assert out.exists()
+    err = capsys.readouterr().err
+    warning = next(line for line in err.splitlines() if str(broken) in line)
+    assert "not added to the library" in warning
+    assert named in warning

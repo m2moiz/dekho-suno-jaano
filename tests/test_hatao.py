@@ -407,13 +407,19 @@ def test_the_user_list_sits_beside_the_library(monkeypatch: pytest.MonkeyPatch) 
         ('[[entry]]\nname = "x"\n', "needs at least one spelling"),
         ('[[entry]]\nname = "x"\nroman = ["..."]\n', "is all punctuation"),
         ("[[entry]\n", "is not valid TOML"),
+        # #220: lists that parse and would mute nothing, refused with an example.
+        ('[[word]]\nname = "x"\nroman = ["x"]\n', r"has tables \['word'\], not \[\[entry\]\]"),
+        ("# nothing yet\n", r"has no \[\[entry\]\] table"),
+        ('[[entry]]\nname = "x"\nroman = []\nscript = []\n', "needs at least one spelling"),
     ],
 )
 def test_a_broken_user_list_is_named(text: str, message: str) -> None:
     user = hatao.user_words_path()
     user.write_text(text)
-    with pytest.raises(hatao.WordListError, match=message):
+    with pytest.raises(hatao.WordListError, match=message) as refused:
         hatao.load_words(hatao.word_lists())
+    assert str(user) in str(refused.value)
+    assert "[[entry]]" in str(refused.value)
 
 
 def test_every_shipped_list_loads_and_ships_inside_the_package() -> None:
