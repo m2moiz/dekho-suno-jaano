@@ -35,6 +35,7 @@ typecheck:
 check: ui-fresh typecheck ui-typecheck api-fresh
     uv run ruff check .
     uv run vulture dsj tests vulture_whitelist.py --min-confidence 60
+    {{ quote(just_executable()) }} ui-lint
     {{ quote(just_executable()) }} ui-test
     uv run pytest
 
@@ -56,6 +57,7 @@ check: ui-fresh typecheck ui-typecheck api-fresh
 verify: ui-fresh typecheck ui-typecheck api-fresh urdu-fixture
     uv run ruff check .
     uv run vulture dsj tests vulture_whitelist.py --min-confidence 60
+    {{ quote(just_executable()) }} ui-lint
     {{ quote(just_executable()) }} ui-test
     uv run pytest -m "slow or not slow" --cov=dsj --cov-report=term-missing:skip-covered --cov-fail-under=90
     {{ quote(just_executable()) }} ui-e2e
@@ -159,6 +161,17 @@ ui-typecheck: _ui-modules
 # fails too.
 ui-test: _ui-modules
     cd ui && ./node_modules/.bin/vitest run
+
+# ESLint over the unit tests (every test asserts something, ui/eslint.config.js)
+# and knip over the sources (no unused export, file or dependency, ui/knip.json).
+# knip's ignore list is deliberate: the shadcn primitives export more than the
+# app uses by design (never hand-edited, AGENTS.md), the fonts and tw-animate-css
+# are imported from CSS which knip does not follow, shadcn and openapi-typescript
+# are run as commands (`npx shadcn`, `just api`), and ffmpeg and uv are
+# binaries the e2e tests shell out to (#289).
+ui-lint: _ui-modules
+    cd ui && ./node_modules/.bin/eslint tests/unit
+    cd ui && ./node_modules/.bin/knip
 
 # Playwright on chromium and webkit against the real `dsj ui --print-url`,
 # started by ui/tests/e2e/global-setup.ts. In `verify`, not `check`. A fresh
