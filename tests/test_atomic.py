@@ -275,3 +275,24 @@ def test_two_threads_writing_one_file_never_take_each_others_temp(tmp_path: Path
         thread.join()
     assert failures == []
     assert sorted(p.name for p in tmp_path.iterdir()) == ["key.json", "key.txt"]
+
+
+def test_a_pair_write_is_not_synced_unless_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same asymmetry as the single writer's, asserted for the pair (#320).
+
+    The mutant that flips the pair writer's default to fsync=True survived:
+    every caller that wants the sync passes it, and no test wrote a pair
+    without asking.
+    """
+    from dsj import atomic
+
+    synced: list[int] = []
+
+    def record_fsync(fd: int) -> None:
+        synced.append(fd)
+
+    monkeypatch.setattr(atomic.os, "fsync", record_fsync)
+    atomic_write_texts([(tmp_path / "a.json", "{}"), (tmp_path / "a.txt", "")])
+    assert synced == []

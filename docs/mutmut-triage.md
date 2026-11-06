@@ -5,14 +5,24 @@
 Coverage proves a line executed. This proves something asserted on what it did.
 
 ```
-192 mutants   179 killed   13 survived
+331 mutants   306 killed   25 survived
 ```
 
-All 13 survivors are accepted. Each is either **provably equivalent** — the
-mutated program cannot behave differently from the original — or **untestable
+(9 Oct 2026: `192 mutants   179 killed   13 survived`. 6 Nov 2026, after
+#284, #285 and the whisper bank grew the three modules: `331 mutants   293
+killed   38 survived` before the tests below, then the line above.)
+
+Every survivor is accepted. Each is either **provably equivalent**, meaning the
+mutated program cannot behave differently from the original, or **untestable
 on this platform** without machinery that costs more than it protects. A
 survivor with neither justification is a missing test, and the first run had
-16 of those. They are now tests.
+16 of those; the 6 Nov rerun (#320) had 13 more. They are now tests.
+
+mutmut numbers mutants per function, so a function that grows renumbers its
+survivors: the `atomic_write_text` unlink mutants were 18 and 19 on 9 Oct and
+are 19 and 20 now, and `read_checkpoint`'s cast mutants moved into
+`_matching` when the whisper bank split it out. The reasoning is by shape of
+the mutation, not by number.
 
 Re-read this file before adding a suppression. "Chasing 100%" is how mutation
 testing turns into busywork; the point is the triage, not the number.
@@ -80,7 +90,45 @@ injection at that precision costs more than the bug it would catch: the worst
 case is a `FileNotFoundError` masking the original exception during cleanup of
 a write that already failed.
 
+**`atomic.atomic_write_texts` mutants 12, 14, 18 (encoding) and 26, 27
+(unlink)**: the pair writer's copies of the two groups above, same reasoning.
+
+**`atomic.atomic_write_texts` mutants 6, 9, 10**: `zip(temps, files,
+strict=True)` becomes `strict=None`, dropped, or `strict=False`.
+
+`temps` is built from `files` one entry each, a few lines up, so the two are
+the same length by construction and `strict` can never fire. It stays because
+the next edit to that loop is where a length mismatch would come from.
+
+**`atomic._temp` mutant 2**: the temp name's random suffix grows from 12 hex
+digits to 13. Any unique suffix works; nothing reads its length.
+
+**`checkpoint._matching` mutants 5, 9, 10, 11, 22, 26, 27, 28**: the string
+argument of `typing.cast` rewritten (`None`, `XX...XX`, lowercase, uppercase),
+in both calls. `cast` returns its second argument unchanged at runtime; the
+first is for pyright. These are `read_checkpoint`'s mutants 5, 9, 10, 11 from
+9 Oct, renumbered when the matching moved into its own function.
+
+**`merge.label_sentence` mutant 13** stays as triaged on 9 Oct.
+
 ---
+
+## What the 6 Nov 2026 rerun bought (#320)
+
+Thirteen survivors that were not equivalent, all on the whisper bank (#171)
+and the pair writer, which nothing had read back. Each is now a test in
+`tests/test_checkpoint.py` or `tests/test_atomic.py`:
+
+| Mutant | The gap |
+|---|---|
+| `write_transcription` `"media"` renamed, `str(None)` | the bank's media note was never read back |
+| `write_transcription` `fsync=False` / `None` / dropped | the call-site witness that `write_checkpoint` already had, missing for the bank |
+| `whisper_fingerprint` `"content_id"` renamed | the key a banked result is matched on, never asserted; renaming it would silently stop every reuse |
+| `read_transcription` `and` to `or` | a missing bank with `on_reject` set called it with `None` |
+| `read_transcription` `_UNREADABLE` to `None` | a bank of the wrong shape rejected silently |
+| `read_transcription` `text=None` | the banked text was never compared after a round trip |
+| `_mismatch` `"; "` join | two categories of change joined with a marker nobody read |
+| `atomic_write_texts` `fsync=True` default | the pair writer's default was assumed, the single writer's asserted |
 
 ## What the first run actually bought
 
