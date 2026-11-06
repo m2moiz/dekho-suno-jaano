@@ -162,7 +162,11 @@ def from_tokens(tokens: list[str], starts: list[float], text: str, offset: float
             words.append((piece, offset + t))
         else:
             words[-1] = (words[-1][0] + piece, words[-1][1])
-    if not tokens or len(tokens) != len(starts) or [w for w, _ in words] != text.split():
+    # `not words` on its own: a clip whose tokens are all blank (silence, or a
+    # model emitting only word boundaries) has no words to time, and the empty
+    # `ends` built below would still hold the clip's end (#281, Dolphin on
+    # podcast and urdu, 6 Nov 2026).
+    if not tokens or not words or len(tokens) != len(starts) or [w for w, _ in words] != text.split():
         return spread(text, offset, end), "spread evenly over the clip"
     ends = [t for _, t in words[1:]] + [end]
     return [(w, t, max(t, e)) for (w, t), e in zip(words, ends, strict=True)], "token starts"
