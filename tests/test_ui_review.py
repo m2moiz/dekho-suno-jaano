@@ -411,10 +411,13 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
 
     def watched(transcript_id: int) -> tuple[dict[str, Any], str, tuple[int, int]]:
         # Another thread can take the lock while the transcript is being read.
+        # The wait outlasts a worker's slowed save: a lock another thread holds
+        # for a moment is waited out, and only a lock this thread holds, which
+        # the join below never releases, times out (#305).
         got: list[bool] = []
 
         def other() -> None:
-            got.append(edits.WRITING.acquire(timeout=0))
+            got.append(edits.WRITING.acquire(timeout=1))
             if got[0]:
                 edits.WRITING.release()
 
