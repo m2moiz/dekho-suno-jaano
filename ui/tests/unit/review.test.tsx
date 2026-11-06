@@ -374,6 +374,9 @@ describe("Review mode, fix round 1", () => {
     render(<KeySheet />);
     const went: string[] = [];
     const field = await start((href) => went.push(href));
+    // Review focuses the box in an effect after the render; pressed before
+    // it runs, Ctrl+/ finds nothing to hand focus back to (#313).
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
     key(field, { key: "/", code: "Slash", ctrlKey: true });
     // Before the sheet has drawn: no key can reach the box behind it.
     expect(document.activeElement).not.toBe(field);
