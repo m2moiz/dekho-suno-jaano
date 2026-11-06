@@ -640,3 +640,39 @@ def test_an_earlier_roman_run_never_replaces_a_later_one(
 
     assert roman.read_text(encoding="utf-8") == "later"
     assert roman.with_name(f"{roman.stem}-2.json").read_text(encoding="utf-8") == before
+
+
+# --------------------------------------------------------------------------
+# #133: a model that ran out of memory is remembered, and the page can ask
+# --------------------------------------------------------------------------
+
+
+def test_a_run_that_ran_out_of_memory_is_remembered_for_its_model(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int]
+) -> None:
+    engine(load_raises=MemoryError("[metal] Attempting to allocate 14.5 GB: out of memory"))
+    client = page()
+    client.post(f"/api/recordings/{recording[1]}/transcribe", json={"diarize": False})
+    job = last_job(client, finished)
+    assert job["state"] == "failed"
+    [remembered] = client.get("/api/models/memory").json()
+    assert remembered["model"] == job["model"]
+    assert "out of memory" in remembered["error"]
+    os.close(runlock.acquire({"pid": os.getpid()}))
+
+
+def test_a_run_that_failed_for_another_reason_is_not_remembered_as_memory(
+    engine: Callable[..., StubEngine], recording: tuple[Path, int]
+) -> None:
+    engine(load_raises=RuntimeError("model exploded"))
+    client = page()
+    client.post(f"/api/recordings/{recording[1]}/transcribe", json={"diarize": False})
+    last_job(client, finished)
+    assert client.get("/api/models/memory").json() == []
+    os.close(runlock.acquire({"pid": os.getpid()}))
+
+
+def test_looks_like_oom_reads_the_known_wordings() -> None:
+    assert jobs_mod.looks_like_oom("MemoryError: [metal] out of memory")
+    assert jobs_mod.looks_like_oom("RuntimeError: Failed to allocate memory for the model")
+    assert not jobs_mod.looks_like_oom("RuntimeError: model exploded")

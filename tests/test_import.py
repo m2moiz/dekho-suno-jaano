@@ -377,7 +377,7 @@ def test_a_version_1_library_gains_the_unreadable_column_and_keeps_its_rows(
     assert found is not None
     assert (found.path, found.unreadable) == (media.resolve(), None)
     with sqlite3.connect(db) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store_mod.SCHEMA_VERSION == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store_mod.SCHEMA_VERSION == 6
 
 
 def test_a_reader_waiting_on_a_migration_finds_it_done(tmp_path: Path) -> None:

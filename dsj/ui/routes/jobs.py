@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse
 
 from dsj.ui.jobs import Jobs, engine_choices
 from dsj.ui.routes.marks import entries
-from dsj.ui.schemas import Engine, Job, ListContent, RenderJob, TranscribeRequest
+from dsj.ui.schemas import Engine, Job, ListContent, ModelMemory, RenderJob, TranscribeRequest
+from dsj.ui.store import Library
 
 router = APIRouter(prefix="/api")
 
@@ -34,6 +35,13 @@ def engines() -> list[Engine]:
     and reopening the picker should show it, with no restart.
     """
     return [Engine.model_validate(asdict(choice)) for choice in engine_choices()]
+
+
+@router.get("/models/memory")
+def models_memory() -> list[ModelMemory]:
+    """Every model that ran out of memory on this machine, so the picker warns first (#133)."""
+    with Library.open() as library:
+        return [ModelMemory.model_validate(asdict(m)) for m in library.oom_memory()]
 
 
 @router.get("/jobs")

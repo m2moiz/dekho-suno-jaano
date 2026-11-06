@@ -455,7 +455,7 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
         assert found.title is None
         assert library.set_title(rid, "Kept").title == "Kept"
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
 
 
 def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
@@ -595,7 +595,7 @@ def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
     assert after["recordings"] == before["recordings"]
     assert [r[:-1] for r in after["transcripts"]] == [r[:-1] for r in before["transcripts"]]
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
 
 
 def test_a_new_transcript_row_carries_its_script_share(tmp_path: Path) -> None:
@@ -614,3 +614,40 @@ def test_a_new_transcript_row_carries_its_script_share(tmp_path: Path) -> None:
 def test_a_title_for_a_recording_the_library_lacks_is_refused(library: Library) -> None:
     with pytest.raises(LibraryError, match="no recording with id 7"):
         library.set_title(7, "x")
+
+
+# --------------------------------------------------------------------------
+# #133: a model that ran out of memory here is remembered
+# --------------------------------------------------------------------------
+
+
+def test_an_out_of_memory_model_is_remembered_across_opens(tmp_path: Path) -> None:
+    with Library.open() as library:
+        assert library.oom_memory() == []
+        first = library.remember_oom("mlx-community/big", "MemoryError: [metal] out of memory")
+        assert first.model == "mlx-community/big"
+        assert first.error == "MemoryError: [metal] out of memory"
+    # Survives a restart: it is in the file, not the process.
+    with Library.open() as library:
+        [found] = library.oom_memory()
+        assert found == first
+        # A second failure of the same model replaces the first record.
+        again = library.remember_oom("mlx-community/big", "MemoryError: again")
+        assert [m.error for m in library.oom_memory()] == ["MemoryError: again"]
+        assert again.failed_at >= first.failed_at
+
+
+def test_a_version_5_library_gains_the_memory_table_and_keeps_its_rows(tmp_path: Path) -> None:
+    """Schema 6 adds model_memory (#133); a version 5 file is upgraded in place."""
+    media = _wav(tmp_path / "old.wav")
+    with Library.open() as library:
+        rid = library.add_recording(media).id
+    with sqlite3.connect(store.library_path()) as con:
+        con.execute("DROP TABLE model_memory")
+        con.execute("PRAGMA user_version = 5")
+    with Library.open() as library:
+        assert library.recording(rid) is not None
+        assert library.oom_memory() == []
+        library.remember_oom("m", "MemoryError")
+    with sqlite3.connect(store.library_path()) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6

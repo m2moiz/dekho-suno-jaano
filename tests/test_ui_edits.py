@@ -17,7 +17,7 @@ from conftest import page, rename, update
 
 from dsj import hatao
 from dsj.ui.edits import edits_path
-from dsj.ui.store import Library, library_path
+from dsj.ui.store import SCHEMA_VERSION, Library, library_path
 
 
 def test_an_untouched_list_is_built_from_the_transcripts_own_word_ends(
@@ -291,7 +291,7 @@ def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
     assert again is not None
     assert again.last_edited_at == "2026-10-03T00:00:00+00:00"
     with sqlite3.connect(library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
 
 
 # -- speaker names (#243) ---------------------------------------------------------

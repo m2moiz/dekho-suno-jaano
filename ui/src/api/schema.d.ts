@@ -190,6 +190,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/models/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Models Memory
+         * @description Every model that ran out of memory on this machine, so the picker warns first (#133).
+         */
+        get: operations["models_memory_api_models_memory_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -736,6 +756,18 @@ export interface components {
             lists: string[];
             /** Recall */
             recall: string;
+        };
+        /**
+         * ModelMemory
+         * @description A model that ran out of memory on this machine, so the picker can warn (#133).
+         */
+        ModelMemory: {
+            /** Model */
+            model: string;
+            /** Failed At */
+            failed_at: string;
+            /** Error */
+            error: string;
         };
         /**
          * NamesUpdate
@@ -1293,6 +1325,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Engine"][];
+                };
+            };
+        };
+    };
+    models_memory_api_models_memory_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelMemory"][];
                 };
             };
         };

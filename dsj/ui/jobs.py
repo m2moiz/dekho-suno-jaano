@@ -333,6 +333,20 @@ class _Notes(logging.StreamHandler[TextIO]):
             self.job.notes.append(record.getMessage())
 
 
+# What an out-of-memory failure says, from the exceptions seen so far: Python's
+# MemoryError, MLX's "[metal] ... out of memory" and ONNX Runtime's "Failed to
+# allocate memory". Unmeasured whether every MLX OOM reaches dsj as an
+# exception rather than killing the process (#133); a run that dies with the
+# server cannot be recorded by it.
+_OOM_WORDS = ("out of memory", "memoryerror", "insufficient memory", "failed to allocate", "oom")
+
+
+def looks_like_oom(error: str) -> bool:
+    """Whether a job's error text says the machine ran out of memory (#133)."""
+    said = error.lower()
+    return any(word in said for word in _OOM_WORDS)
+
+
 class Jobs:
     """Every job this server has started, and the one thread that runs them."""
 
@@ -593,6 +607,15 @@ class Jobs:
         while True:
             self._queue.get()()
 
+    def _remember_oom(self, model: str, error: str) -> None:
+        """Keep the failure so the picker can warn next time (#133); never fails the job."""
+        try:
+            with Library.open() as library:
+                library.remember_oom(model, error)
+        except Exception as exc:
+            print(f"the out-of-memory failure of {model} was not recorded in the library: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+
     def _run(self, job: Job, arguments: dict[str, Any], held: int) -> None:
         notes = _Notes(job)
         log = logging.getLogger("dsj.suno")
@@ -615,6 +638,8 @@ class Jobs:
             error = f"{type(exc).__name__}: {exc}"
             # On the terminal, as an exception in a route reaches it (#82).
             traceback.print_exception(exc, file=sys.stderr)
+            if looks_like_oom(error):
+                self._remember_oom(job.model, error)
         finally:
             log.removeHandler(notes)
             os.close(held)

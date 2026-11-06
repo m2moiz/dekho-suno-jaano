@@ -206,6 +206,49 @@ whitelist.untagged  # dsj/hatao.py
 whitelist.view  # dsj/ui/jobs.py
 whitelist.renders  # dsj/ui/jobs.py
 whitelist.start_render  # dsj/ui/jobs.py
+
+# pydantic fields of dsj/ui/schemas.py: the shape of what the server sends,
+# read by the page over JSON and by the route handlers that fill them; the
+# per-branch gate sees only schemas.py when a change touches it (#133 added
+# ModelMemory and the gate listed every field in the file).
+whitelist.audio_total_s  # dsj/ui/schemas.py
+whitelist.speed  # dsj/ui/schemas.py
+whitelist.speaker  # dsj/ui/schemas.py
+whitelist.sourceStart  # dsj/ui/schemas.py
+whitelist.length  # dsj/ui/schemas.py
+whitelist.confidence  # dsj/ui/schemas.py
+whitelist.names  # dsj/ui/schemas.py
+whitelist.pad_s  # dsj/ui/schemas.py
+whitelist.edited_at  # dsj/ui/schemas.py
+whitelist.unrenderable  # dsj/ui/schemas.py
+whitelist.replaced  # dsj/ui/schemas.py
+whitelist.list_sha  # dsj/ui/schemas.py
+whitelist.delete  # dsj/ui/schemas.py
+whitelist.insert  # dsj/ui/schemas.py
+whitelist.stop  # dsj/ui/schemas.py
+whitelist.entry  # dsj/ui/schemas.py
+whitelist.matches  # dsj/ui/schemas.py
+whitelist.words_searched  # dsj/ui/schemas.py
+whitelist.lists  # dsj/ui/schemas.py
+whitelist.added  # dsj/ui/schemas.py
+whitelist.end  # dsj/ui/schemas.py
+whitelist.flags  # dsj/ui/schemas.py
+whitelist.edited  # dsj/ui/schemas.py
+whitelist.at  # dsj/ui/schemas.py
+whitelist.review_pass  # dsj/ui/schemas.py
+whitelist.cursor_s  # dsj/ui/schemas.py
+whitelist.updated_at  # dsj/ui/schemas.py
+whitelist.segments  # dsj/ui/schemas.py
+whitelist.corrections  # dsj/ui/schemas.py
+whitelist.document  # dsj/ui/schemas.py
+whitelist.review_sha  # dsj/ui/schemas.py
+whitelist.allow_partial  # dsj/ui/schemas.py
+whitelist.files  # dsj/ui/schemas.py
+whitelist.unchecked  # dsj/ui/schemas.py
+whitelist.kept  # dsj/ui/schemas.py
+# A route handler, reached by FastAPI through its decorator.
+whitelist.models_memory  # dsj/ui/routes/jobs.py
+whitelist.mark_edited  # dsj/ui/store.py, called from the marks route
 # Jobs.all is called from dsj/ui/routes/jobs.py; the per-branch gate sees only
 # jobs.py when a change touches it.
 whitelist.all  # dsj/ui/jobs.py
