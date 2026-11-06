@@ -59,6 +59,7 @@ from typing import Annotated
 
 import typer
 
+from dsj import awake
 from dsj.asr import EngineUnavailable
 
 # Module level, not lazy. These are DEFAULTS, and a lazily-resolved default
@@ -289,20 +290,22 @@ def suno(
 
     started = time.monotonic()
     try:
-        result = run_transcribe(
-            media,
-            out,
-            model,
-            status_path=status,
-            on_progress=show,
-            resume=not no_resume,
-            diarize=not no_diarize,
-            require_diarize=require_diarize,
-            engine=engine,
-            language=language,
-            prompt=prompt,
-            anchor_s=anchor_s,
-        )
+        # The Mac stays awake for the run, and not a second longer (#89).
+        with awake.held("transcription"):
+            result = run_transcribe(
+                media,
+                out,
+                model,
+                status_path=status,
+                on_progress=show,
+                resume=not no_resume,
+                diarize=not no_diarize,
+                require_diarize=require_diarize,
+                engine=engine,
+                language=language,
+                prompt=prompt,
+                anchor_s=anchor_s,
+            )
     except Terminated:
         # transcribe() has already written `interrupted` to --status (#103), as
         # it writes `failed` for an exception, which passes through untouched.
@@ -524,8 +527,9 @@ def hatao(
     if sigterm_installed:
         signal.signal(signal.SIGTERM, _raise_terminated)
     try:
-        rendered = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
-                                on_progress=show)
+        with awake.held("render"):
+            rendered = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
+                                    on_progress=show)
     except Terminated:
         raise SystemExit(143) from None
     finally:
@@ -609,6 +613,7 @@ def parho(
     """Read: import an SRT, WebVTT or JSON transcript instead of running ASR."""
     from dsj.atomic import atomic_write_text
     from dsj.parho import parse
+    from dsj.ui.store import IMPORT_ENGINE
 
     # The recording is never opened, only named, but a transcript naming one
     # that is not there is an index into nothing; dekho would fail on it later
@@ -619,6 +624,9 @@ def parho(
     # recording by its absolute path, as `dsj suno` names it (#201).
     payload = parse(source.read_text(encoding="utf-8-sig"), str(media.resolve()))
     atomic_write_text(out, json.dumps(payload))
+    # Listed by the app like a run's transcript (#211); the import is written
+    # and is the truth whether or not the library takes the row.
+    _record_in_library(out, engine=IMPORT_ENGINE, language=None)
     return 0
 
 
