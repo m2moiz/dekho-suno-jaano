@@ -161,3 +161,8 @@ whitelist.start_s  # dsj/ui/schemas.py Match
 whitelist.end_s  # dsj/ui/schemas.py Match
 whitelist.recall  # dsj/ui/schemas.py Matches
 whitelist.output  # dsj/ui/schemas.py RenderJob
+# Heartbeat._last is read by idle_s() in dsj/ui/server.py; two tests wind it
+# back with `beats._last -= 100`, and vulture reads that augmented assignment
+# as a write to an attribute nobody reads, because the gate scans only the
+# files a branch changed and the reader is in another one.
+whitelist._last  # tests/test_ui_server.py
