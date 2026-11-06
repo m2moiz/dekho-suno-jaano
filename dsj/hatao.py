@@ -533,6 +533,17 @@ class WordList:
     files: tuple[Path, ...]
 
 
+# What one correct entry looks like, printed under every refusal of a word list
+# (#220): the person fixing the file should not have to open a shipped one.
+_ENTRY_EXAMPLE = (
+    "one correct entry:\n"
+    "[[entry]]\n"
+    'name = "example"\n'
+    'roman = ["example", "egzample"]\n'
+    'script = ["\u0645\u062b\u0627\u0644"]'
+)
+
+
 def load_words(paths: Sequence[Path]) -> WordList:
     """Read word list files into one lookup, earlier files winning a shared spelling.
 
@@ -551,23 +562,38 @@ def load_words(paths: Sequence[Path]) -> WordList:
         try:
             raw = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
-            raise WordListError(f"{path} is not valid TOML: {exc}") from exc
+            raise WordListError(f"{path} is not valid TOML: {exc}\n{_ENTRY_EXAMPLE}") from exc
+        # A list that parses and mutes nothing is refused, not accepted in
+        # silence (#220): a file of [[word]] tables, or one with no [[entry]]
+        # at all, read as "nothing to mute" on 3 Oct 2026 with no word said.
+        other = sorted(set(raw) - {"entry"})
+        if other:
+            raise WordListError(
+                f"{path} has tables {other}, not [[entry]]; every entry is a "
+                f"[[entry]] table\n{_ENTRY_EXAMPLE}"
+            )
         entries = raw.get("entry", [])
         if not isinstance(entries, list):
-            raise WordListError(f"{path}: `entry` must be a list of [[entry]] tables")
+            raise WordListError(
+                f"{path}: `entry` must be a list of [[entry]] tables\n{_ENTRY_EXAMPLE}"
+            )
+        if not entries:
+            raise WordListError(
+                f"{path} has no [[entry]] table, so it names no word\n{_ENTRY_EXAMPLE}"
+            )
         for index, item in enumerate(cast("list[Any]", entries)):
             where = f"{path}, entry {index}"
             if not isinstance(item, dict):
-                raise WordListError(f"{where} is not a table")
+                raise WordListError(f"{where} is not a table\n{_ENTRY_EXAMPLE}")
             fields = cast("dict[str, Any]", item)
             name = fields.get("name")
             if not isinstance(name, str) or not name:
-                raise WordListError(f"{where} has no `name`")
+                raise WordListError(f"{where} has no `name`\n{_ENTRY_EXAMPLE}")
             unknown = sorted(set(fields) - {"name", *_SPELLING_KEYS})
             if unknown:
                 raise WordListError(
                     f"{where} ({name}) has keys {unknown}; an entry takes `name` and "
-                    f"any of {list(_SPELLING_KEYS)}"
+                    f"any of {list(_SPELLING_KEYS)}\n{_ENTRY_EXAMPLE}"
                 )
             found = [
                 spelling
@@ -575,15 +601,20 @@ def load_words(paths: Sequence[Path]) -> WordList:
                 for spelling in cast("list[Any]", fields.get(key, []))
             ]
             if not found or not all(isinstance(x, str) for x in found):
-                raise WordListError(f"{where} ({name}) needs at least one spelling, all strings")
+                raise WordListError(
+                    f"{where} ({name}) needs at least one spelling, all strings\n{_ENTRY_EXAMPLE}"
+                )
             for spelling in cast("list[str]", found):
                 parts = [part for part in map(normalize, spelling.split()) if part]
                 if not parts:
-                    raise WordListError(f"{where} ({name}): {spelling!r} is all punctuation")
+                    raise WordListError(
+                        f"{where} ({name}): {spelling!r} is all punctuation\n{_ENTRY_EXAMPLE}"
+                    )
                 if len(parts) > MAX_PHRASE_WORDS:
                     raise WordListError(
                         f"{where} ({name}): {spelling!r} is {len(parts)} words; a "
-                        f"spelling is a word or a phrase of up to {MAX_PHRASE_WORDS}"
+                        f"spelling is a word or a phrase of up to {MAX_PHRASE_WORDS}\n"
+                        f"{_ENTRY_EXAMPLE}"
                     )
                 spellings.setdefault(" ".join(parts), f"{label}:{name}")
                 # The same phrase written run together, as a recogniser also
