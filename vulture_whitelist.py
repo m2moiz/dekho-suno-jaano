@@ -189,3 +189,9 @@ whitelist.private_temp_folder  # tests/conftest.py
 whitelist.view  # dsj/ui/jobs.py
 whitelist.renders  # dsj/ui/jobs.py
 whitelist.start_render  # dsj/ui/jobs.py
+# Jobs.all is called from dsj/ui/routes/jobs.py; the per-branch gate sees only
+# jobs.py when a change touches it.
+whitelist.all  # dsj/ui/jobs.py
+# Signature fidelity for the caffeinate stand-in: Popen.wait takes a timeout,
+# and awake._stop passes one, so the stub accepts it and ignores it.
+whitelist.timeout  # tests/test_awake.py
