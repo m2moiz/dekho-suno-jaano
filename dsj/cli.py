@@ -59,6 +59,7 @@ from typing import Annotated
 
 import typer
 
+from dsj import awake
 from dsj.asr import EngineUnavailable
 
 # Module level, not lazy. These are DEFAULTS, and a lazily-resolved default
@@ -289,20 +290,22 @@ def suno(
 
     started = time.monotonic()
     try:
-        result = run_transcribe(
-            media,
-            out,
-            model,
-            status_path=status,
-            on_progress=show,
-            resume=not no_resume,
-            diarize=not no_diarize,
-            require_diarize=require_diarize,
-            engine=engine,
-            language=language,
-            prompt=prompt,
-            anchor_s=anchor_s,
-        )
+        # The Mac stays awake for the run, and not a second longer (#89).
+        with awake.held("transcription"):
+            result = run_transcribe(
+                media,
+                out,
+                model,
+                status_path=status,
+                on_progress=show,
+                resume=not no_resume,
+                diarize=not no_diarize,
+                require_diarize=require_diarize,
+                engine=engine,
+                language=language,
+                prompt=prompt,
+                anchor_s=anchor_s,
+            )
     except Terminated:
         # transcribe() has already written `interrupted` to --status (#103), as
         # it writes `failed` for an exception, which passes through untouched.
@@ -524,8 +527,9 @@ def hatao(
     if sigterm_installed:
         signal.signal(signal.SIGTERM, _raise_terminated)
     try:
-        rendered = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
-                                on_progress=show)
+        with awake.held("render"):
+            rendered = bleep.render(bleep.flag(doc, found), media, out, replace=overwrite,
+                                    on_progress=show)
     except Terminated:
         raise SystemExit(143) from None
     finally:
