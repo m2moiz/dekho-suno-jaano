@@ -62,9 +62,10 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 # an older dsj refuses a library a newer one wrote instead of misreading it.
 # Version 2 added `recordings.unreadable` (#110), version 3
 # `transcripts.last_edited_at` (#83), version 4 `recordings.title` and version 5
-# `transcripts.urdu_share` (#245); _MIGRATIONS brings an older library up to
-# date in place, one version at a time.
-SCHEMA_VERSION = 5
+# `transcripts.urdu_share` (#245), version 6 the `model_memory` table (#133);
+# _MIGRATIONS brings an older library up to date in place, one version at a
+# time.
+SCHEMA_VERSION = 6
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -110,6 +111,11 @@ CREATE TABLE IF NOT EXISTS transcripts (
   urdu_share    REAL
 );
 CREATE INDEX IF NOT EXISTS transcripts_by_recording ON transcripts(recording_id);
+CREATE TABLE IF NOT EXISTS model_memory (
+  model      TEXT PRIMARY KEY,
+  failed_at  TEXT NOT NULL,
+  error      TEXT NOT NULL
+);
 PRAGMA user_version = {SCHEMA_VERSION};
 COMMIT;
 """
@@ -132,6 +138,13 @@ _MIGRATIONS = {
     # library row's language tag reads (#245). NULL until the list fills it
     # in (Library.backfill_urdu_share), once per transcript.
     4: "ALTER TABLE transcripts ADD COLUMN urdu_share REAL",
+    # A model that ran out of memory on this machine, so the app warns before
+    # the same run crashes the same way again (#133). One row per model, the
+    # latest failure; empty until one happens.
+    5: (
+        "CREATE TABLE IF NOT EXISTS model_memory ("
+        "model TEXT PRIMARY KEY, failed_at TEXT NOT NULL, error TEXT NOT NULL)"
+    ),
 }
 
 _RECORDING_COLUMNS = (
@@ -142,6 +155,15 @@ _TRANSCRIPT_COLUMNS = (
     "id, recording_id, json_path, finished_at, engine, model, diarized, speaker_count, "
     "mark_count, language, last_edited_at, urdu_share"
 )
+
+
+@dataclass(frozen=True)
+class ModelMemory:
+    """A model that ran out of memory on this machine, and when (#133)."""
+
+    model: str
+    failed_at: str
+    error: str
 
 
 class LibraryError(RuntimeError):
@@ -519,6 +541,25 @@ class Library:
         self.close()
 
     # -- reading ------------------------------------------------------------
+
+    def remember_oom(self, model: str, error: str) -> ModelMemory:
+        """Record that `model` ran out of memory here, replacing an older record (#133)."""
+        with self._db:
+            self._db.execute(
+                "INSERT INTO model_memory (model, failed_at, error) VALUES (?, ?, ?) "
+                "ON CONFLICT(model) DO UPDATE SET failed_at = excluded.failed_at, "
+                "error = excluded.error",
+                (model, _now(), error),
+            )
+        found = self.oom_memory()
+        return next(m for m in found if m.model == model)
+
+    def oom_memory(self) -> list[ModelMemory]:
+        """Every model that ran out of memory on this machine, latest failure first."""
+        rows = self._db.execute(
+            "SELECT model, failed_at, error FROM model_memory ORDER BY failed_at DESC, model"
+        ).fetchall()
+        return [ModelMemory(model=r[0], failed_at=r[1], error=r[2]) for r in rows]
 
     def recordings(self) -> list[Recording]:
         """Every recording, the one with the newest transcript first.

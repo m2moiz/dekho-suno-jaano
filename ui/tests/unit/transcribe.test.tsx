@@ -108,11 +108,12 @@ afterEach(() => {
 });
 
 describe("the Transcribe dialog", () => {
-  async function open(engines: Engine[] = ENGINES): Promise<Request[]> {
+  async function open(engines: Engine[] = ENGINES, memory: object[] = []): Promise<Request[]> {
     const posted: Request[] = [];
     serve({
       "GET /api/jobs": () => Response.json([]),
       "GET /api/engines": () => Response.json(engines),
+      "GET /api/models/memory": () => Response.json(memory),
       "POST /api/recordings/4/transcribe": (request) => {
         posted.push(request.clone());
         return Response.json(job({ engine: "whisper" }), { status: 202 });
@@ -123,6 +124,21 @@ describe("the Transcribe dialog", () => {
     await screen.findByRole("radiogroup", { name: "What's spoken?" });
     return posted;
   }
+
+  it("warns when the model it would load ran out of memory here before (#133)", async () => {
+    await open(ENGINES, [
+      { model: "mlx-community/whisper-large-v3-turbo", failed_at: "2026-11-01T10:00:00Z", error: "MemoryError: out of memory" },
+    ]);
+    // "mixed" picks whisper, whose default model is the remembered one.
+    const warning = await screen.findByRole("alert");
+    expect(warning.textContent).toContain("mlx-community/whisper-large-v3-turbo ran out of memory on this Mac");
+    expect(warning.textContent).toContain("MemoryError: out of memory");
+    // The start is still allowed: the person decides.
+    expect((screen.getByRole("button", { name: "Start" }) as HTMLButtonElement).disabled).toBe(false);
+    // Another answer loads another model: no warning.
+    fireEvent.click(screen.getByRole("radio", { name: "English or European languages" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 
   it("asks what is spoken first, says how long and what it will use, and runs it", async () => {
     const posted = await open();

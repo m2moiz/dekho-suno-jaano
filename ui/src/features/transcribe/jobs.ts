@@ -14,6 +14,7 @@ import { ApiError, fromBody } from "@/features/errors/appError";
 
 export type Job = components["schemas"]["Job"];
 export type Engine = components["schemas"]["Engine"];
+export type ModelMemory = components["schemas"]["ModelMemory"];
 export type TranscribeRequest = components["schemas"]["TranscribeRequest"];
 
 const JOBS = "/api/jobs";
@@ -83,6 +84,24 @@ export async function startJob(recordingId: number, request: TranscribeRequest):
     throw new ApiError(fromBody(error, response, `/api/recordings/${recordingId}/transcribe`));
   }
   take([...jobs.filter((j) => j.id !== data.id), data]);
+  return data;
+}
+
+/**
+ * Every model that ran out of memory on this Mac (#133), so the dialog can warn
+ * before a run repeats the crash. A read that fails is an empty list with a
+ * console line: a missing warning must never keep the dialog from opening.
+ */
+export async function loadModelMemory(): Promise<ModelMemory[]> {
+  const path = "/api/models/memory";
+  const { data, error, response } = await api.GET(path).catch((thrown: unknown) => {
+    console.warn("dsj ui could not read the models' memory", thrown);
+    return { data: undefined, error: undefined, response: undefined };
+  });
+  if (data === undefined) {
+    if (response !== undefined) console.warn("dsj ui could not read the models' memory", fromBody(error, response, path));
+    return [];
+  }
   return data;
 }
 

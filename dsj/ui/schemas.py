@@ -134,6 +134,14 @@ class TitleUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
+class ModelMemory(BaseModel):
+    """A model that ran out of memory on this machine, so the picker can warn (#133)."""
+
+    model: str
+    failed_at: str
+    error: str
+
+
 class Engine(BaseModel):
     """One engine the picker offers, and whether it can run on this machine."""
 

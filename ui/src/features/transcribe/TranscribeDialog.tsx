@@ -23,7 +23,7 @@ import type { RecordingRow } from "@/features/library/types";
 import { TOUCH, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { type Advanced, CHOICES, type ChoiceId, costLabel, expectedLabel, requestFor, speedFor } from "./choices";
-import { type Engine, loadEngines, startJob } from "./jobs";
+import { type Engine, loadEngines, loadModelMemory, type ModelMemory, startJob } from "./jobs";
 
 type EngineName = Engine["name"];
 
@@ -55,6 +55,12 @@ const RECOMMENDED: Record<ChoiceId, string> = {
   unsure: "Recommended when not sure",
 };
 
+/** The day a model last ran out of memory, in the person's locale; the stamp as it is if it will not parse. */
+function whenRemembered(stamp: string): string {
+  const when = new Date(stamp);
+  return Number.isNaN(when.getTime()) ? stamp : when.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
 const PLAIN: Advanced = { engine: null, model: "", prompt: "", diarize: true, requireDiarize: false, startOver: false };
 
 // A chosen radio in ink, not the primitive's gold: gold is this dialog's one
@@ -75,6 +81,8 @@ const ROW = "flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-2 hov
  */
 export function TranscribeDialog({ recording, onClose }: { recording: RecordingRow; onClose: () => void }) {
   const [engines, setEngines] = useState<Engine[] | null>(null);
+  // Models that ran out of memory on this Mac before (#133); empty until read.
+  const [memory, setMemory] = useState<ModelMemory[]>([]);
   const [answer, setAnswer] = useState<ChoiceId>("mixed");
   const [advanced, setAdvanced] = useState<Advanced>(PLAIN);
   const [sending, setSending] = useState(false);
@@ -83,6 +91,9 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
 
   useEffect(() => {
     let live = true;
+    void loadModelMemory().then((listed) => {
+      if (live) setMemory(listed);
+    });
     loadEngines().then(
       (listed) => {
         if (live) setEngines(listed);
@@ -108,6 +119,9 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
   const blocked = engine === undefined || engine.reason !== null ? request.engine : null;
   const unavailable = engines.filter((e) => e.reason !== null && e.name !== blocked);
   const canStart = !sending && blocked === null;
+  // The model this run would load: the typed one, else the engine's default.
+  const model = advanced.model || engine?.default_model || "";
+  const remembered = memory.find((m) => m.model === model) ?? null;
   const speed = speedFor(choice, advanced);
   const expected = speed === null ? null : expectedLabel(recording.duration_s, speed);
   const title = displayTitle(recording);
@@ -264,6 +278,12 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
             <Blocked name={blocked} reason={engine?.reason ?? null} others={runnable.map((e) => e.name)} />
           )}
         </div>
+        {remembered !== null && (
+          <p role="alert" className="text-sm">
+            {remembered.model} ran out of memory on this Mac on {whenRemembered(remembered.failed_at)} ({remembered.error}).
+            Pick another model, or run it knowing it may crash the same way.
+          </p>
+        )}
 
         <Collapsible>
           <CollapsibleTrigger className="group flex min-h-11 items-center gap-1 text-sm font-medium underline-offset-4 hover:underline">
