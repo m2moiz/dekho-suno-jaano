@@ -7,6 +7,7 @@ import { api } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ApiError, fromBody } from "@/features/errors/appError";
 import { sessionToken } from "@/features/session/session";
+import { notifyFinished } from "@/features/shell/notify";
 import { type Content, itemsIn } from "@/lib/editOps";
 import type { Match } from "./matches";
 
@@ -59,6 +60,14 @@ export function useRender(started: RenderJob | null): RenderJob | null {
       const now = data?.find((r) => r.id === started.id);
       if (!live) return;
       if (now !== undefined) setJob(now);
+      if (now !== undefined && isOver(now)) {
+        // Told once, here, when the poll first sees it over (#130).
+        notifyFinished({
+          kind: "render",
+          name: now.state === "done" ? now.output.split("/").pop() ?? now.output : now.error ?? "failed",
+          outcome: now.state === "done" ? "done" : "failed",
+        });
+      }
       if (now === undefined || !isOver(now)) timer = setTimeout(look, POLL_MS);
     };
     let timer = setTimeout(look, POLL_MS);

@@ -23,6 +23,8 @@ import type { RecordingRow } from "@/features/library/types";
 import { TOUCH, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { type Advanced, CHOICES, type ChoiceId, costLabel, expectedLabel, requestFor, speedFor } from "./choices";
+import { askToNotify } from "@/features/shell/notify";
+
 import { type Engine, loadEngines, loadModelMemory, type ModelMemory, startJob } from "./jobs";
 
 type EngineName = Engine["name"];
@@ -143,6 +145,8 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
   const start = () => {
     if (!canStart) return;
     setSending(true);
+    // Asked now, while the person is here to answer, so the finish can be told (#130).
+    void askToNotify();
     startJob(recording.id, request).then(
       () => onClose(),
       (thrown: unknown) => {

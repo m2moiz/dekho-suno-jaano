@@ -9,6 +9,13 @@ const fetchMock = vi.hoisted(() => {
   return mock;
 });
 
+// The notifier is stood in for whole: jsdom has no Notification and no audio.
+const notified = vi.hoisted(() => vi.fn());
+vi.mock("../../src/features/shell/notify", () => ({
+  notifyFinished: notified,
+  askToNotify: async () => undefined,
+}));
+
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import type { RecordingRow } from "../../src/features/library/types";
 import { takeToken } from "../../src/features/session/session";
@@ -331,6 +338,25 @@ describe("a job on its recording's row", () => {
       expect(screen.getByText("diarization skipped: x")).toBeTruthy();
       await act(() => vi.advanceTimersByTimeAsync(5000));
       expect(sent("GET", "/api/jobs")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells the person once when a polled job finishes (#130)", async () => {
+    vi.useFakeTimers();
+    notified.mockClear();
+    try {
+      const replies = [[job({ fraction: 1 / 3 })], [job({ state: "done", fraction: 1, transcript_id: 9 })], []];
+      serve({ "GET /api/jobs": () => Response.json(replies.shift() ?? []) });
+      render(<TranscribeControl recording={RECORDING} />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(notified).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(notified).toHaveBeenCalledTimes(1);
+      expect(notified.mock.calls[0]?.[0]).toMatchObject({ kind: "transcription", outcome: "done" });
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(notified).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
