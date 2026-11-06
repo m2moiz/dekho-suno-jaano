@@ -15,7 +15,7 @@ own are the ones from other vendors, and Claude is kept for fixing, on request.
 | CodeRabbit | On its own, every push, drafts too | Line by line review, 50+ linters, the repo's rules, prose, the PR summary, pre-merge checks | Nothing; it is the broad pass |
 | Macroscope | On its own, every push (once Correctness is set to Always run) | Hunts correctness bugs in `dsj/` and `ui/src/` | Tests, Markdown, `scratch/`, the built page |
 | Cursor Bugbot | On its own, once per PR, when it is not a draft; `bugbot run` for another pass | A second bug hunt from another vendor, aimed where Macroscope does not look: tests that cannot fail, lost work, security, workflows and `just` scripts | Style, the summary, fixes |
-| Claude | Only when the owner writes `@claude` | The "fix it" tool: explain a finding, push a fix to the PR branch | Reviewing; it wrote the code |
+| Claude | Only when the owner, a member or a collaborator writes `@claude`; the action checks for write access | The "fix it" tool: explain a finding, push a fix to the PR branch | Reviewing; it wrote the code |
 | Codecov | On its own, every push | Coverage of the lines the PR changes, and of the package; one PR comment, only when coverage drops | Judging the code |
 
 How to read a PR with all five on it:
@@ -53,10 +53,10 @@ Volume: 12 PRs were merged in the 30 days to 2026-10-09 (`gh pr list --state mer
 
 | Tool | How it bills | Already paid | Expected per month here | The one cap |
 |---|---|---|---|---|
-| CodeRabbit | A plan per developer, no usage charge ([plans](https://docs.coderabbit.ai/management/plans)) | Trial (PR #280 showed `Plan: Advanced`) | $0 on the open source tier, where a repo under 10 stars is reviewed only when asked; $24 a month billed yearly, or $30 monthly, for Essentials | Which plan is chosen at [app.coderabbit.ai/settings/subscription](https://app.coderabbit.ai/settings/subscription) |
+| CodeRabbit | A plan per developer, no usage charge ([plans](https://docs.coderabbit.ai/management/plans)) | Trial (PR #280 showed `Plan: Advanced`) | $0 on the open-source tier, where a repo under 10 stars is reviewed only when asked; $24 a month billed yearly, or $30 monthly, for Essentials | Which plan is chosen at [app.coderabbit.ai/settings/subscription](https://app.coderabbit.ai/settings/subscription) |
 | Macroscope | $0.05 per KB of diff reviewed ([pricing](https://docs.macroscope.com/pricing)) | $100 free usage for a new workspace ([llms.txt](https://macroscope.com/llms.txt)) | About $60 for one pass over each PR, more when pushes are re-reviewed. Estimate: the 12 PRs above had 1,225 KB of changed code lines, counting `gh pr diff` output with tests, Markdown, `scratch/`, the built page, JSON and lock files left out. PR #280 alone was 518 KB, about $26 | Monthly spend limit, Settings, Billing ([spend controls](https://docs.macroscope.com/pricing#spend-controls)) |
 | Cursor Bugbot | Usage: "for Individuals, it will bill from included usage"; the average run is $1.00 to $1.50 ([May 2026 Bugbot changes](https://cursor.com/blog/may-2026-bugbot-changes)). Included usage goes first, then on-demand spend ([Bugbot](https://cursor.com/docs/bugbot)) | The Cursor subscription | $12 to $18 of the plan's included usage at one run per PR for 12 PRs. That usage is shared with work in the editor. No new money unless on-demand usage is on | `triggers.frequency: oncePerPr` in the repo; and if on-demand usage is on, a Monthly Limit on the Spending tab at [cursor.com/dashboard/spending](https://cursor.com/dashboard/spending) ([spend limits](https://cursor.com/help/account-and-billing/spend-limits)) |
-| Claude | The OAuth token "authenticates with your Claude subscription" ([authentication](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)); "runs use your Claude subscription instead of API billing" ([manage costs](https://code.claude.com/docs/en/github-actions#manage-costs)) | Claude Max | $0 new money. Each `@claude` run uses the Max weekly allowance, so it only runs when asked | Runs only on `@claude` from the owner, `--max-turns 15`, 20 minute job timeout, one run per PR at a time (`.github/workflows/claude.yml`) |
+| Claude | The OAuth token "authenticates with your Claude subscription" ([authentication](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)); "runs use your Claude subscription instead of API billing" ([manage costs](https://code.claude.com/docs/en/github-actions#manage-costs)) | Claude Max | $0 new money. Each `@claude` run uses the Max weekly allowance, so it runs when asked | Runs on `@claude` from the owner, a member or a collaborator (write access checked by the action), `--max-turns 15`, 20-minute job timeout, one run per PR at a time (`.github/workflows/claude.yml`) |
 | Codecov | Free: the Developer plan "is best for open-source projects and offers unlimited uploads" ([pricing](https://about.codecov.io/pricing/)) | Nothing to pay | $0 | Nothing to cap |
 | GitHub Actions | "free ... for public repositories that use standard GitHub-hosted runners" ([Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)) | | $0 | |
 
@@ -83,15 +83,18 @@ usage.
 3. **Request changes workflow on.** CodeRabbit marks the PR "changes requested" while it has
    open findings and approves once they are resolved and no pre-merge check fails
    ([request changes workflow](https://docs.coderabbit.ai/pr-reviews/request-changes-workflow)).
-   The `main` ruleset requires 0 approvals. Whether GitHub then still lets a PR merge past a
-   CodeRabbit "changes requested" review has not been tested here.
+   The `main` ruleset requires 0 approvals (`gh api repos/m2moiz/dekho-suno-jaano/rulesets/20801675
+   --jq '.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count'`,
+   read 2026-11-06). GitHub still refuses the merge while a CodeRabbit "changes requested"
+   review stands: this PR was blocked that way on 2026-11-06 with every check green
+   (`gh pr merge 286` said "the base branch policy prohibits the merge").
 4. **Path instructions** carrying the rules from `AGENTS.md` and this folder's `runbook.md`:
    data safety for transcripts, corrections and answer keys; `just check` as the gate; tests
    first; the generated `dsj/ui/static/` and `ui/src/api/schema.d.ts` never hand-edited; the
    TypeScript pin and the `@base-ui/react` name.
 5. **Four custom pre-merge checks:** generated files match their sources (error), behaviour
    changes ship with a test, no em or en dashes in added prose, code cited by `rg` pattern
-   (warnings). The built-in docstring check is off, because ruff already enforces docstrings.
+   (warnings). The built-in docstring check is off because ruff already enforces docstrings.
 6. **Short walkthrough:** summary moved out of the PR description into the walkthrough,
    five bullets at most, no sequence diagrams, no suggested reviewers.
 7. **Code guidelines:** `AGENTS.md` is read automatically
@@ -115,7 +118,7 @@ letting them in here is the owner's call, so this PR does not carry them. Until 
 Bugbot runs on the dashboard settings in the owner-only steps, which give the same once per
 PR behaviour.
 
-1. `config/bugbot.yaml`: one review per PR (`triggers.frequency: oncePerPr`), drafts
+1. `.cursor/config/bugbot.yaml`: one review per PR (`triggers.frequency: oncePerPr`), drafts
    skipped, default effort, the PR summary off (CodeRabbit writes it), Autofix off. Bugbot
    reads this file from the PR's **base** branch, so it takes effect once it is on `main`.
    The PR author's personal settings outrank it ([Bugbot](https://cursor.com/docs/bugbot)).
@@ -169,8 +172,9 @@ PR behaviour.
    ([codecov.yml](https://docs.codecov.com/docs/codecov-yaml)). Neither status is a required
    check.
 
-These are configuration changes; no Python or `ui/` source changed, so `just check` was not
-run for them. CI runs it on the push, which is also the first real run of the coverage step.
+These are configuration changes; `uv run just check` was still run on the branch on
+2026-11-06 (its last line is on the PR), and CI runs it on every push, which is also the
+first real run of the coverage step.
 
 ## Owner-only steps
 
@@ -185,14 +189,15 @@ secret, but the token has to come from the owner's own `claude setup-token`.
   click **Save**. "All repositories" also covers repos made later
   ([GitHub install](https://docs.coderabbit.ai/platforms/github-com)).
 - [ ] **Check which plan the account is on.** The review on PR #280 says
-  `Plan: Advanced`. New accounts start on a 14 day Advanced trial and drop to Free unless
+  `Plan: Advanced`. New accounts start on a 14-day Advanced trial and drop to Free unless
   they subscribe ([plans](https://docs.coderabbit.ai/management/plans)). Look at
   [app.coderabbit.ai/settings/subscription](https://app.coderabbit.ai/settings/subscription).
-- [ ] **Decide what happens after the trial.** On the open source tier, public repos with
+- [ ] **Decide what happens after the trial.** On the open-source tier, public repos with
   fewer than 10 stars are only reviewed when asked: click **Trigger review** in the
   CodeRabbit status comment, or comment `@coderabbitai review`
   ([plans, rate limits](https://docs.coderabbit.ai/management/plans#rate-limits)). This repo
-  has 0 stars. Automatic review of every push needs a paid plan (Essentials is $24 a month
+  has 0 stars (`gh api repos/m2moiz/dekho-suno-jaano --jq .stargazers_count`, 2026-11-06).
+  Automatic review of every push needs a paid plan (Essentials is $24 a month
   billed yearly, or $30 monthly, per the same page).
 
 **Macroscope**
@@ -202,9 +207,9 @@ secret, but the token has to come from the owner's own `claude setup-token`.
   GitHub, and pick the repositories (choose all)
   ([getting started](https://docs.macroscope.com/setup-instructions)).
 - [ ] **Pay or apply.** Setup ends with a Stripe checkout; new workspaces get $100 of usage
-  free ([llms.txt](https://macroscope.com/llms.txt)). Free credits for non-commercial open
-  source projects: apply on [macroscope.com/open-source](https://macroscope.com/open-source)
-  (the form is [here](https://form.typeform.com/to/F5TAQUxn)). The licence here is AGPL and
+  free ([llms.txt](https://macroscope.com/llms.txt)). Free credits for non-commercial
+  open-source projects: apply on [macroscope.com/open-source](https://macroscope.com/open-source)
+  (the [open-source application form](https://form.typeform.com/to/F5TAQUxn)). The licence here is AGPL and
   the project is personal and non-commercial; they say they prioritise projects with an
   active community, so approval is not certain.
 - [ ] **Turn review on.** In Settings, Repos, Features, set **Correctness** to **Always run**
@@ -228,7 +233,7 @@ secret, but the token has to come from the owner's own `claude setup-token`.
 - [ ] **Make the token, in your own terminal.** Run `claude setup-token`, approve in the
   browser, and copy the token it prints. It lasts one year and can only make model requests
   ([long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)).
-  Put a reminder for next October.
+  Put a reminder for one year from the day the token was made.
 - [ ] **Store it as a repository secret.** Run
   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo m2moiz/dekho-suno-jaano` and paste the token
   when asked, or add it on
@@ -388,7 +393,7 @@ number alone.
 |---|---|---|
 | lovable.dev | No. It syncs a Lovable project with one GitHub repo and can open PRs ([GitHub integration](https://docs.lovable.dev/integrations/github)) | The page names no charge for the GitHub connection, which is "available on all plans" |
 | Runpod | No. It builds a container image from a repo and deploys it to a Runpod endpoint ([GitHub integration](https://docs.runpod.io/serverless/workers/github-integration)) | The page has no billing information; it acts only on repos linked to an endpoint |
-| Vercel | Not here. It deploys repos connected to a Vercel project, and its Agent Code Review is "available on Enterprise and Pro plans" and reviews "repositories connected to your Vercel projects" ([Vercel for GitHub](https://vercel.com/docs/git/vercel-for-github), [Code Review](https://vercel.com/docs/agent/pr-review)). dsj is a Mac tool, not deployed to Vercel | The pages name no charge for the install; Agent reviews are billed per token |
+| Vercel | Not here. It deploys repos connected to a Vercel project, and its Agent Code Review is "available on Enterprise and Pro plans" and reviews "repositories connected to your Vercel projects" ([Vercel for GitHub](https://vercel.com/docs/git/vercel-for-github), [Code Review](https://vercel.com/docs/agent/pr-review)). dsj is a Mac tool, not deployed to Vercel | The pages name no charge for the installation; Agent reviews are billed per token |
 
 Nothing was uninstalled.
 
@@ -424,4 +429,4 @@ Nothing was uninstalled.
 | One PR | Comment `@coderabbitai pause`, or put `@coderabbitai ignore` in the PR description ([commands](https://docs.coderabbit.ai/reference/review-commands)) | Add a skip label set in Settings, Repos ([PR labels](https://docs.macroscope.com/bug-detection-and-fixes#pr-labels)) | Keep the PR a draft (`drafts: false`) | Do not write `@claude` | Nothing to do; its statuses are not required |
 | One repo | Set `reviews.auto_review.enabled: false` in `.coderabbit.yaml` ([auto review](https://docs.coderabbit.ai/configuration/auto-review)) | Settings, Repos, Features: **Manual invocation only** or **Never run** ([settings](https://docs.macroscope.com/settings)) | Disable the repo in the installations list at [cursor.com/automations/from-cursor/bugbot](https://cursor.com/automations/from-cursor/bugbot) | Delete `.github/workflows/claude.yml` and the `CLAUDE_CODE_OAUTH_TOKEN` secret ([uninstall](https://code.claude.com/docs/en/github-actions#uninstall)) | Delete the upload step from `ci.yml` and delete `codecov.yml` |
 | Repo config only | Delete `.coderabbit.yaml`; the account defaults apply again | Delete `.macroscope/`; Macroscope's built-in skip list applies again | Not committed yet; once it is, delete `.cursor/config/bugbot.yaml` and `.cursor/BUGBOT.md` | Not applicable | Delete `codecov.yml`; Codecov's defaults apply |
-| Everywhere | Remove the app at [github.com/settings/installations](https://github.com/settings/installations) | Same page, Macroscope | Turn Bugbot off in the Cursor dashboard; the Cursor app may serve other features | Remove the secret from each repo. Uninstall the Claude app only if no other Claude feature uses it. A deleted secret's token stays valid | Same page, Codecov |
+| Everywhere | Remove the app at [github.com/settings/installations](https://github.com/settings/installations) | Same page, Macroscope | Turn Bugbot off in the Cursor dashboard; the Cursor app may serve other features | Remove the secret from each repo, then revoke the token from the Claude account, because deleting the secret leaves the token valid until it expires a year after it was made. Uninstall the Claude app only if no other Claude feature uses it | Same page, Codecov |
