@@ -184,3 +184,8 @@ whitelist.words_hash  # dsj/ui/schemas.py
 whitelist._saved_before_hashes  # dsj/ui/schemas.py
 # A fixture, injected by pytest by name.
 whitelist.private_temp_folder  # tests/conftest.py
+# Jobs.view, Render.view, Jobs.renders and Jobs.start_render are called from
+# dsj/ui/routes; the per-branch gate sees only jobs.py when a change touches it.
+whitelist.view  # dsj/ui/jobs.py
+whitelist.renders  # dsj/ui/jobs.py
+whitelist.start_render  # dsj/ui/jobs.py
