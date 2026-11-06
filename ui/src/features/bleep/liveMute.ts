@@ -21,7 +21,7 @@
 // element's `muted`, a frame early: it asks whether the stretch until the next
 // frame reaches a span, not only whether now is inside one. Each span already
 // reaches PAD_S (0.1 s) past its word, so a frame's lateness on the way out
-// stays inside the pad.
+// stays inside the pad. In a hidden tab it asks HIDDEN_AHEAD_S ahead (#218).
 
 import type { Span } from "@/features/edit/editing";
 
@@ -89,6 +89,14 @@ export function fades(spans: readonly Span[]): Span[] {
 
 // One display frame, in seconds of the recording at 1x.
 const FRAME_S = 1 / 60;
+
+// How far the WebKit frame gate looks ahead in a hidden tab, in seconds at 1x
+// (#218). Frames stop there and `timeupdate` is all it gets, about four times
+// a second, so a word up to 250 ms away was reached before the gate was asked
+// again. A span is muted up to this early instead: sound in a hidden tab has
+// no picture to be early against. Chromium's fades are scheduled AHEAD_S on
+// the audio clock and need none of this.
+const HIDDEN_AHEAD_S = 0.3;
 
 /** The span that [from, to] reaches into, or -1. `spans` are in order and do not overlap. */
 export function spanReached(spans: readonly Span[], from: number, to: number): number {
@@ -180,13 +188,17 @@ export class MuteGate {
   private readonly media: HTMLMediaElement;
   // Null where the gate switches `muted` on each frame instead (`fadesInWebAudio`).
   private readonly makeRoute: ((media: HTMLMediaElement) => Route) | null;
+  // Whether the tab is hidden, asked on each frame-gate update (#218).
+  private readonly hidden: () => boolean;
 
   constructor(
     media: HTMLMediaElement,
     makeRoute: ((media: HTMLMediaElement) => Route) | null = fadesInWebAudio() ? webAudioRoute : null,
+    hidden: () => boolean = () => document.hidden,
   ) {
     this.media = media;
     this.makeRoute = makeRoute;
+    this.hidden = hidden;
   }
 
   setSpans(spans: readonly Span[]): void {
@@ -237,9 +249,10 @@ export class MuteGate {
     this.schedule(seconds + AHEAD_S * rate);
   }
 
-  /** Mute or unmute the element for the recording at `seconds`, and the frame to come. */
+  /** Mute or unmute the element for the recording at `seconds`, and the frame (or hidden-tab gap) to come. */
   private switchMuted(seconds: number): void {
-    const ahead = this.media.paused ? 0 : FRAME_S * (this.media.playbackRate || 1);
+    const gap = this.hidden() ? HIDDEN_AHEAD_S : FRAME_S;
+    const ahead = this.media.paused ? 0 : gap * (this.media.playbackRate || 1);
     const inside = spanReached(this.spans, seconds, seconds + ahead) >= 0;
     if (inside && !this.muting) {
       // A person's own mute is theirs: the gate leaves it, and never undoes it.
