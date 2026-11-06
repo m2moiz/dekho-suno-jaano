@@ -184,3 +184,16 @@ whitelist.words_hash  # dsj/ui/schemas.py
 whitelist._saved_before_hashes  # dsj/ui/schemas.py
 # A fixture, injected by pytest by name.
 whitelist.private_temp_folder  # tests/conftest.py
+# Library methods and two Transcript fields in dsj/ui/store.py, called from
+# dsj/ui/routes, dsj/ui/jobs.py and dsj/cli.py; the per-branch gate sees only
+# store.py when a change touches it (every one has readers, grep -rn '\.<name>').
+whitelist.add_recording  # dsj/ui/store.py
+whitelist.set_title  # dsj/ui/store.py
+whitelist.backfill_urdu_share  # dsj/ui/store.py
+whitelist.adopt  # dsj/ui/store.py
+whitelist.move_transcript  # dsj/ui/store.py
+whitelist.mark_edited  # dsj/ui/store.py
+whitelist.relink  # dsj/ui/store.py
+whitelist.refresh_missing  # dsj/ui/store.py
+whitelist.last_edited_at  # dsj/ui/store.py
+whitelist.urdu_share  # dsj/ui/store.py
