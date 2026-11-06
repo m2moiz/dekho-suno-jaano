@@ -59,8 +59,16 @@ class AlreadyRunning(RuntimeError):
         """Say who holds the lock at `path`, from the `holder` it wrote there."""
         pid = holder.get("pid", "unknown")
         out = holder.get("out", "unknown")
+        # `kind` names what holds the lock (#217). A bleep render from the app
+        # takes the same lock as a transcription, and a refusal that calls it
+        # "another dsj suno" sends the reader looking for a run that is not
+        # there. A lock file from before kinds has none: that was a transcription.
+        if holder.get("kind") == "render":
+            who = f"a bleep render from dsj ui (pid {pid}) is running, writing {out}."
+        else:
+            who = f"another dsj suno is already running on this machine: pid {pid}, writing {out}."
         super().__init__(
-            f"another dsj suno is already running on this machine: pid {pid}, writing {out}.\n"
+            f"{who}\n"
             f"Two at once can exhaust this machine's memory (two froze the owner's Mac on "
             f"2026-09-19), so this one did not start. Wait for it to finish, which is when "
             f"`kill -0 {pid}` fails, or stop it with `kill {pid}`, then run this again.\n"
