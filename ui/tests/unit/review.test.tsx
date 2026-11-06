@@ -10,13 +10,15 @@ const fetchMock = vi.hoisted(() => {
 
 import { currentError, dismissError } from "../../src/features/errors/appError";
 import { ReviewPage } from "../../src/features/review/ReviewPage";
-import { KeySheet } from "../../src/features/shell/KeySheet";
+import { hideKeys, KeySheet } from "../../src/features/shell/KeySheet";
 import { wordsHash } from "../../src/features/review/model";
 import { audio, box, item, items, key, listChangedElsewhere, savedElsewhere, serveReview, server, start } from "./reviewServer";
 
 beforeEach(() => serveReview(fetchMock));
 
 afterEach(() => {
+  // The sheet is module state: one left open by a test would greet the next (#329).
+  act(() => hideKeys());
   cleanup();
   act(() => dismissError());
 });
@@ -368,6 +370,12 @@ describe("Review mode, fix round 1", () => {
     expect(sheet.textContent).toContain("On a tablet, tap the sentence once");
     // Ctrl+G's way back is on the sheet (UAT 5).
     expect(sheet.textContent).toMatch(/Ctrl\+G again/);
+  });
+
+  it("starts with no sheet open, whatever the test before it left (#329)", async () => {
+    render(<KeySheet />);
+    await start();
+    expect(screen.queryByRole("dialog", { name: "Keys in Review" })).toBeNull();
   });
 
   it("Ctrl+/ takes focus out of the box at once, and Esc closes the sheet and puts it back (UAT 4)", async () => {
