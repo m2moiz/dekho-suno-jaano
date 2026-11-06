@@ -184,3 +184,7 @@ whitelist.words_hash  # dsj/ui/schemas.py
 whitelist._saved_before_hashes  # dsj/ui/schemas.py
 # A fixture, injected by pytest by name.
 whitelist.private_temp_folder  # tests/conftest.py
+# Dataclass fields of hatao.Capped and hatao.Rendered (3 Oct 2026), read by the
+# render route and its tests; the per-branch gate sees only hatao.py.
+whitelist.muted_end  # dsj/hatao.py
+whitelist.untagged  # dsj/hatao.py
