@@ -197,6 +197,10 @@ whitelist.relink  # dsj/ui/store.py
 whitelist.refresh_missing  # dsj/ui/store.py
 whitelist.last_edited_at  # dsj/ui/store.py
 whitelist.urdu_share  # dsj/ui/store.py
+# Dataclass fields of hatao.Capped and hatao.Rendered (3 Oct 2026), read by the
+# render route and its tests; the per-branch gate sees only hatao.py.
+whitelist.muted_end  # dsj/hatao.py
+whitelist.untagged  # dsj/hatao.py
 # Jobs.view, Render.view, Jobs.renders and Jobs.start_render are called from
 # dsj/ui/routes; the per-branch gate sees only jobs.py when a change touches it.
 whitelist.view  # dsj/ui/jobs.py
