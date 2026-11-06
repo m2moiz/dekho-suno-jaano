@@ -134,6 +134,35 @@ class TitleUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
+class ToolCheck(BaseModel):
+    """A command a run shells out to, as the machine has it now (#70)."""
+
+    name: str
+    ok: bool
+    path: str | None
+    reason: str | None
+
+
+class ModelCheck(BaseModel):
+    """An engine's default model: present, missing, partial or unknown, and why (#70)."""
+
+    engine: str
+    model: str
+    state: str
+    reason: str
+
+
+class Readiness(BaseModel):
+    """Everything a first run needs, asked before it starts (#70)."""
+
+    tools: list[ToolCheck]
+    engines: list[Engine]
+    models: list[ModelCheck]
+    # True when ffmpeg and ffprobe are on PATH, at least one engine can run,
+    # and every runnable engine's default model is present or will resume.
+    ready: bool
+
+
 class ModelMemory(BaseModel):
     """A model that ran out of memory on this machine, so the picker can warn (#133)."""
 
