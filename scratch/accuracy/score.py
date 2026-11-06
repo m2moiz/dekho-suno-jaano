@@ -10,6 +10,11 @@
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py one RUN.json TRUTH.json
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py wall
     uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py english [--runs PATTERN]
+    uv run --with uroman --with rapidfuzz --with num2words python scratch/accuracy/score.py lane [--runs PATTERN]
+
+`lane` (#281) is `table` and `wall` in one row per run, read from each run's
+`.bench.json`, so a run stopped at the sanity cap (no transcript) is listed
+too, with the speed it had reached.
 
 `table` and `wall` take `--runs PATTERN` too (a name pattern such as
 `pakurdu_*` or `*roman_vad-r1`); with none they list every run there is,
@@ -663,6 +668,53 @@ def cmd_wall(pattern: str = "*") -> None:
         fh.write("\n## wall and gaps\n\n" + "\n".join(lines) + "\n")
 
 
+def cmd_lane(pattern: str = "*") -> None:
+    """One row per run with a bench file: error columns, loop seconds, speed, wall and load (#281).
+
+    x realtime is the recording's length over wall time, model load included;
+    for a stopped run it is the audio it had done over its wall time. Load is
+    the 1 minute load average before and after the run.
+    """
+    lines = ["| set | run | WER | miss | ins | sub | Urdu-ref err | Latin-ref err | loop s | x realtime | wall min | load |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
+    for set_name in ("podcast", "urdu", "earnings"):
+        duration = float(load(TRUTHS[set_name])["duration_s"])
+        ref: list[str] | None = None
+        for bench_path in sorted((RUNS / set_name).glob("*-r[0-9].bench.json")):
+            name = bench_path.name.removesuffix(".bench.json")
+            if not Path(name).match(pattern):
+                continue
+            bench = load(bench_path)
+            wall = float(bench["wall_s"])
+            before, after = bench.get("loadavg_before"), bench.get("loadavg_after")
+            loads = f"{before[0]:.0f} to {after[0]:.0f}" if before and after else "-"
+            transcript = bench_path.with_name(f"{name}.json")
+            stopped = bench.get("too_slow")
+            if stopped or not transcript.exists():
+                speed = f"{stopped['speed']:.2f}, stopped ({stopped['rule']})" if stopped else "no transcript"
+                lines.append(f"| {set_name} | {name} | - | - | - | - | - | - | - | {speed} | {wall / 60:.1f} | {loads} |")
+                print(lines[-1], flush=True)
+                continue
+            ref = ref if ref is not None else reference_words(load(TRUTHS[set_name]))
+            doc = load(transcript)
+            hyp = [w.text for w in transcript_words(doc["sentences"])]
+            s = score(hyp, ref)
+            scripts = by_script(s, ref)
+            loop_s = sum(u["end"] - u["start"] for u in doc.get("unclear", []) if u["reason"] == "repetition loop")
+
+            def share(k: str, scripts: dict[str, tuple[int, int]] = scripts) -> str:
+                e, n = scripts[k]
+                return f"{e / n:.0%}" + (f" of {n}" if n < 100 else "") if n else "-"
+
+            lines.append(
+                f"| {set_name} | {name} | {s.wer:.1%} | {s.miss / s.n:.1%} | {s.ins / s.n:.1%} | {s.sub / s.n:.1%} | "
+                f"{share('urdu')} | {share('latin')} | {loop_s:.0f} | {duration / wall:.2f} | {wall / 60:.1f} | {loads} |"
+            )
+            print(lines[-1], flush=True)
+    with OUT.open("a") as fh:
+        fh.write("\n## lane\n\n" + "\n".join(lines) + "\n")
+
+
 def cmd_english(pattern: str, show: int, seed: int) -> None:
     """On the podcast: what each English (Latin-script) reference word came out as (#235).
 
@@ -726,6 +778,8 @@ def main() -> int:
     e.add_argument("--runs", default="*", help="which runs, as a name pattern")
     e.add_argument("--show", type=int, default=20, help="Latin words replaced by an Urdu word, to read")
     e.add_argument("--seed", type=int, default=235)
+    la = sub.add_parser("lane")
+    la.add_argument("--runs", default="*", help="which runs, as a name pattern")
     o = sub.add_parser("one")
     o.add_argument("run", type=Path)
     o.add_argument("truth", type=Path)
@@ -746,6 +800,8 @@ def main() -> int:
         cmd_wall(args.runs)
     elif args.cmd == "english":
         cmd_english(args.runs, args.show, args.seed)
+    elif args.cmd == "lane":
+        cmd_lane(args.runs)
     else:
         cmd_one(args.run, args.truth)
     return 0

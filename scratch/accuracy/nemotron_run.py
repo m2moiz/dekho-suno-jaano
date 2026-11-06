@@ -5,6 +5,7 @@
         python scratch/accuracy/nemotron_run.py --language {hi-IN,auto,en-US} --set {podcast,urdu,earnings}
     ... nemotron_run.py --language hi-IN --audio scratch/clip45.wav --out /tmp/clip45-hi.json
     ... nemotron_run.py --model hinglish --language auto --set podcast
+    ... nemotron_run.py --language ur-PK --set urdu    # #281: the Urdu prompt slot
 
 `--model hinglish` runs `smajji/nemotron-hinglish-v4` instead, a fine-tune
 of the same model on English, Hindi and Hinglish whose card decodes with
@@ -37,6 +38,15 @@ imports and the model load, the way a `dsj suno` run's does:
    sentence per clip, and a .bench.json beside it: wall time from process
    start, load and decode seconds, realtime factor, model and revision, the
    mlx-audio commit, settings and the language tags.
+
+`ur-PK` (#281) is the prompt slot the model's dictionary holds (index 37)
+and its card does not list among its 40 locales; whether it was trained is
+what the run is for. Its runs are named `nemotron_ur`.
+
+The owner's ruling of 9 Oct (#281) replaces the floor below for that lane:
+`--max-wall-x` (2.5, the default) stops a run only once its wall clock passes
+2.5 times the recording's length, and `--min-speed` is off unless given.
+Time spent waiting for another job (`wait_turn`) is not counted.
 
 The owner's floor (6 Oct): 2x realtime or faster, model load included. As
 run.py's `slower_than` does for dsj runs, a run is stopped once 3 min of audio
@@ -87,7 +97,7 @@ HINGLISH_CONVERT = (
     "--mlx-path scratch/models/nemotron-hinglish-v4 --dtype bfloat16"
 )
 MLX_AUDIO_SHA = "70f4add32911bab6f869b824864ad9f1e24dcb97"
-MODES = {"hi-IN": "nemotron_hi", "auto": "nemotron_auto", "en-US": "nemotron_en"}
+MODES = {"hi-IN": "nemotron_hi", "auto": "nemotron_auto", "en-US": "nemotron_en", "ur-PK": "nemotron_ur"}
 SR = whisper.SAMPLE_RATE
 
 
@@ -96,6 +106,10 @@ def fetch() -> Path:
 
     repo, revision = MODEL
     target = DL / repo.replace("/", "--")
+    # Already downloaded: use it as it is, with no hub round trip in the timed
+    # run and nothing written into the folder (#281 links #240's copy in).
+    if (target / "config.json").exists() and (target / "model.safetensors").exists():
+        return target
     snapshot_download(repo_id=repo, revision=revision, local_dir=target)
     return target
 
@@ -130,7 +144,9 @@ def main() -> int:
     parser.add_argument("--run", type=int, default=1)
     parser.add_argument("--audio", type=Path, help="any recording instead of a set (a smoke run), with --out")
     parser.add_argument("--out", type=Path)
-    parser.add_argument("--min-speed", type=float, default=2.0, help="stop a run that cannot finish at this x realtime")
+    parser.add_argument("--min-speed", type=float, default=None, help="stop a run that cannot finish at this x realtime")
+    parser.add_argument("--max-wall-x", type=float, default=2.5,
+                        help="stop once wall time passes this many times the recording's length (#281)")
     args = parser.parse_args()
     if bool(args.set) == bool(args.audio) or bool(args.audio) != bool(args.out):
         parser.error("give --set, or --audio with --out")
@@ -162,7 +178,7 @@ def main() -> int:
 
     tokenizer.is_special_token = recorded
 
-    wait_turn()
+    waited = wait_turn()
     # Other work on this Mac shares the GPU; the load average says how busy it was.
     load_before = [round(x, 1) for x in os.getloadavg()]
     audio = args.audio or SETS[args.set]
@@ -193,22 +209,24 @@ def main() -> int:
         per_clip[clip_tags[0] if clip_tags else "none"] += 1
         if words:
             sentences.append({**sentence(a, b, words), **({"lang": clip_tags} if clip_tags else {})})
-        wall = time.monotonic() - STARTED
+        wall = time.monotonic() - STARTED - waited
         print(f"  clip {k}/{len(clips)} {a:.1f}-{b:.1f} s: {len(words)} words {clip_tags or ''} "
               f"({b / wall:.2f}x so far)", flush=True)
         # The owner's floor, as run.py's slower_than: own speed after 3 min of
         # audio, or a wall clock past the recording's length over the floor.
         projected = wall + (duration - b) * (time.monotonic() - decoding) / b
-        if b >= MIN_SPEED_AFTER_S and duration / projected < args.min_speed:
+        if args.min_speed and b >= MIN_SPEED_AFTER_S and duration / projected < args.min_speed:
             too_slow = {"rule": "speed", "projected_speed": round(duration / projected, 2),
                         "audio_done_s": round(b, 1), "wall_s": round(wall)}
-        elif wall > duration / args.min_speed:
+        elif args.min_speed and wall > duration / args.min_speed:
             too_slow = {"rule": "wall", "speed": round(b / wall, 2), "audio_done_s": round(b, 1), "wall_s": round(wall)}
+        elif args.max_wall_x and wall > duration * args.max_wall_x:
+            too_slow = {"rule": "cap", "speed": round(b / wall, 2), "audio_done_s": round(b, 1), "wall_s": round(wall)}
         if too_slow:
             print(f"  too slow: {too_slow}", flush=True)
             break
     decode_s = time.monotonic() - decoding
-    wall = time.monotonic() - STARTED
+    wall = time.monotonic() - STARTED - waited
 
     repo, revision = HINGLISH if args.model == "hinglish" else MODEL
     if not too_slow:
@@ -218,7 +236,7 @@ def main() -> int:
             "text": " ".join(s["text"] for s in sentences), "unclear": [], "sentences": sentences,
         }, ensure_ascii=False, indent=1) + "\n")
     meta = {
-        "wall_s": round(wall, 1), "audio_s": round(duration, 1),
+        "wall_s": round(wall, 1), "waited_s": round(waited, 1), "audio_s": round(duration, 1),
         # A stopped run did only part of the audio: its speed is what it did.
         "x_realtime": round((too_slow["audio_done_s"] if too_slow else duration) / wall, 2),
         "vad_s": round(vad_s, 1), "load_s": round(load_s, 1), "decode_s": round(decode_s, 1),

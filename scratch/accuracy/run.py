@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transcribe the public reference sets in every mode #184 compares, one run at a time.
 
-    uv run python scratch/accuracy/run.py [--plan 184|235|236|240] [--only SET/MODE/RUN ...] [--dry-run]
+    uv run python scratch/accuracy/run.py [--plan 184|235|236|240|281] [--only SET/MODE/RUN ...] [--dry-run]
 
 Each run is `dsj suno <set audio> -o scratch/accuracy/runs/<set>/<mode>-r<N>.json`
 with the mode's flags and `--no-diarize`, in a fresh process. Like
@@ -43,6 +43,21 @@ convert_finetunes.py apex) as `apex_en_vad`, the decode its card uses
 `apex_roman_vad`, turbo's best mixed-speech mode with the model swapped. Run 1
 only; a run 2 is asked for with `--also`.
 
+`--plan 281` runs #281's whisper cells: Apex in both modes on `urdu` and
+`earnings` (#240 left them open), then, only once their models are converted,
+Awaaz (`awaaz-se-alfaaz/whisper-turbo-v3-urdu`, a LoRA on turbo, convert_finetunes.py
+awaaz) as `awaaz_ur` and `awaaz_roman_vad`, and the ground-truth lane's full
+large-v3 (`mlx-community/whisper-large-v3-mlx` in scratch/models/dl) as
+`large_v3_ur`, the `ur` decode with the model swapped. Each set is checked
+for only when a cell needs it.
+
+`--max-wall-x 2.5` is the owner's ruling of 9 Oct for #281: run every model to
+completion and judge error rate and speed together at the end, so nothing is
+stopped for being slow except by this sanity cap, wall time past 2.5 times
+the recording's length (a run under 0.4x realtime). The stopped run's bench
+file records `too_slow` with the rule `cap` and the speed it had reached
+(audio done over wall time). The mode is not dropped: each set is its own cell.
+
 `--min-speed 2` is the owner's floor from 6 Oct: speed is paramount, so a run
 that cannot finish at 2x realtime or faster is stopped (by the pid its status
 file records) and recorded as too slow in its bench file, and its mode is
@@ -61,6 +76,7 @@ import signal
 import subprocess
 import sys
 import time
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +108,7 @@ MODES: dict[str, tuple[list[str], dict[str, Any]]] = {
 # `<name>_roman_vad` is `roman_vad` with the model swapped; `<name>_ur` is `ur`,
 # the decode the model cards use. VAD_SEGMENTS is pinned to its default
 # ("roman": the detector for --roman-urdu only) so the bench file records it.
-FINETUNES = ("kingabzpro", "pakurdu")
+FINETUNES = ("kingabzpro", "pakurdu", "awaaz")
 for _name in FINETUNES:
     _model = ["--model", str(REPO / "scratch" / "models" / _name)]
     MODES[f"{_name}_roman_vad"] = (["--roman-urdu", *_model], {"VAD_SEGMENTS": "roman"})
@@ -102,6 +118,12 @@ for _name in FINETUNES:
 _apex = ["--model", str(REPO / "scratch" / "models" / "apex")]
 MODES["apex_en_vad"] = (["--engine", "whisper", "--language", "en", *_apex], {"VAD_SEGMENTS": "all"})
 MODES["apex_roman_vad"] = (["--roman-urdu", *_apex], {"VAD_SEGMENTS": "roman"})
+# #281's ground-truth lane (owner, 9 Oct): full large-v3, no speed floor.
+# mlx-community's conversion, downloaded beside the others so it can be deleted
+# alone: `hf download mlx-community/whisper-large-v3-mlx --revision
+# 49e6aa286ad60c14352c404340ded53710378a11 --local-dir scratch/models/dl/mlx-community--whisper-large-v3-mlx`.
+LARGE_V3 = REPO / "scratch" / "models" / "dl" / "mlx-community--whisper-large-v3-mlx"
+MODES["large_v3_ur"] = (["--engine", "whisper", "--language", "ur", "--model", str(LARGE_V3)], {})
 # (set, mode, run). Run 1 of everything before any run 2, so a plan cut short
 # still has every cell once. parakeet reads Urdu as nothing useful; it runs on
 # the podcast only for #198's seam count.
@@ -134,7 +156,9 @@ PLAN_235 = [
 ]
 # #240: run 1 of both Apex modes on all three sets.
 PLAN_240 = [(s, m, 1) for m in ("apex_en_vad", "apex_roman_vad") for s in ("podcast", "urdu", "earnings")]
-PLANS = {"184": PLAN, "236": PLAN_236, "235": PLAN_235, "240": PLAN_240}
+# #281: the Apex cells #240 left open, run 1 of each.
+PLAN_281 = [(s, m, 1) for m in ("apex_en_vad", "apex_roman_vad") for s in ("urdu", "earnings")]
+PLANS = {"184": PLAN, "236": PLAN_236, "235": PLAN_235, "240": PLAN_240, "281": PLAN_281}
 
 # Runs inside the child: saves what _retried was handed, then retries as usual.
 WRAPPER = """
@@ -176,7 +200,14 @@ def commit() -> str:
     return git("rev-parse", "--short", "HEAD") + ("-dirty" if dirty else "")
 
 
-def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | None = None) -> bool:
+def audio_seconds(path: Path) -> float:
+    """A set's length from its wav header: the sanity cap needs it before the run reports any."""
+    with wave.open(str(path)) as fh:
+        return fh.getnframes() / fh.getframerate()
+
+
+def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | None = None,
+            max_wall_x: float | None = None) -> bool:
     """Run one cell; True when it was stopped for running under `min_speed` x realtime."""
     flags, overrides = MODES[mode]
     folder = RUNS / set_name
@@ -213,8 +244,13 @@ def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | No
             cwd=REPO, stdout=log, stderr=subprocess.STDOUT, env=env,
         )
         audio_s = 0.0
+        cap_s = audio_seconds(SETS[set_name]) * max_wall_x if max_wall_x else None
         while child.poll() is None:
             time.sleep(10)
+            if cap_s and too_slow is None and (wall_s := time.monotonic() - started) > cap_s:
+                too_slow = over_cap(status, wall_s, child.pid)
+                print(f"  past the {max_wall_x}x wall cap: {too_slow}, stopping pid {too_slow['pid']}", flush=True)
+                os.kill(too_slow["pid"], signal.SIGTERM)
             if min_speed and too_slow is None:
                 too_slow, audio_s = slower_than(status, min_speed, time.monotonic() - started, audio_s)
                 if too_slow:
@@ -229,6 +265,17 @@ def run_one(set_name: str, mode: str, run: int, dry: bool, min_speed: float | No
     (folder / f"{name}.bench.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(f"{set_name}/{name}: exit {rc} in {wall / 60:.1f} min", flush=True)
     return too_slow is not None
+
+
+def over_cap(status: Path, wall_s: float, fallback_pid: int) -> dict[str, Any]:
+    """What a run past the --max-wall-x cap had done: the pid to stop and the speed it reached."""
+    try:
+        st = json.loads(status.read_text())
+    except (OSError, ValueError):
+        st = {}
+    done = float(st.get("audio_done_s", 0.0))
+    return {"pid": int(st.get("pid", fallback_pid)), "rule": "cap", "state": st.get("state"),
+            "audio_done_s": round(done, 1), "speed": round(done / wall_s, 2), "wall_s": round(wall_s)}
 
 
 def slower_than(
@@ -267,10 +314,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--only", nargs="*", default=None, help="SET/MODE/RUN, e.g. urdu/roman/1")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--plan", choices=sorted(PLANS), default="184", help="whose runs: #184's, #235's, #236's or #240's")
+    parser.add_argument("--plan", choices=sorted(PLANS), default="184",
+                        help="whose runs: #184's, #235's, #236's, #240's or #281's")
     parser.add_argument("--also", nargs="*", default=[], help="SET/MODE/RUN to run after the plan, e.g. podcast/pakurdu_ur/2")
     parser.add_argument("--min-speed", type=float, default=None,
                         help="stop a run that cannot finish at this x realtime, and drop its mode (#235)")
+    parser.add_argument("--max-wall-x", type=float, default=None,
+                        help="stop a run once its wall time passes this many times the audio length (#281)")
     parser.add_argument("--drop", nargs="*", default=[], help="modes already dropped: skip them")
     args = parser.parse_args()
     plan = PLANS[args.plan]
@@ -282,7 +332,7 @@ def main() -> int:
         if set_name not in SETS or mode not in MODES:
             sys.exit(f"--also {extra}: no such set or mode")
         plan = [*plan, (set_name, mode, int(run))]
-    for missing in [s for s, path in SETS.items() if not path.exists()]:
+    for missing in sorted({s for s, _, _ in plan if not SETS[s].exists()}):
         sys.exit(f"{SETS[missing]} is missing: build it first (scratch/accuracy/build_refs.py)")
     dropped = set(args.drop)
     for set_name, mode, run in plan:
@@ -291,7 +341,8 @@ def main() -> int:
             continue
         # A `--language ur` run's speed depends on the audio (it loops on mixed
         # speech), so it is judged per set; any other mode too slow once is dropped.
-        if run_one(set_name, mode, run, args.dry_run, args.min_speed) and not mode.endswith("_ur"):
+        stopped = run_one(set_name, mode, run, args.dry_run, args.min_speed, args.max_wall_x)
+        if stopped and args.min_speed and not mode.endswith("_ur"):
             dropped.add(mode)
     return 0
 

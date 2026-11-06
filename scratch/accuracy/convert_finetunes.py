@@ -62,13 +62,20 @@ APEX = ("Oriserve/Whisper-Hindi2Hinglish-Apex", "f3214eed20b4e4d4144e739982d911f
 WEIGHTS_ONLY = ["*.json", "model.safetensors", "*.txt"]
 
 
-def wait_turn() -> None:
+def wait_turn() -> float:
+    """Wait for no `dsj suno` running and MIN_FREE_PCT memory free; the seconds waited.
+
+    A runner that times itself from process start subtracts them: waiting for
+    another job is not the model's cost (#281).
+    """
+    began = time.monotonic()
     while busy():
         print("  a dsj suno is running, waiting", flush=True)
         time.sleep(60)
     while (pct := free_pct()) < MIN_FREE_PCT:
         print(f"  {pct}% memory free, waiting for {MIN_FREE_PCT}%", flush=True)
         time.sleep(60)
+    return time.monotonic() - began
 
 
 def fetch(repo: str, revision: str, patterns: list[str]) -> Path:
