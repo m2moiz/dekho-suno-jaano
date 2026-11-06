@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/knip@6.44.1/schema.json",
+  "entry": ["tests/unit/**/*.{ts,tsx}", "tests/e2e/**/*.ts", "tests/perf/**/*.ts"],
+  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+  "ignore": ["src/components/ui/**"],
+  "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": ["ffmpeg", "uv"],
+  "ignoreDependencies": ["@fontsource-variable/literata", "@fontsource-variable/noto-nastaliq-urdu", "tailwindcss", "tw-animate-css", "shadcn", "openapi-typescript"]
+}

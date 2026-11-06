@@ -247,6 +247,7 @@ describe("resume (Review Focus 4)", () => {
     expect(document.segments.map((s) => s.state)).toEqual(["checked", "unchecked", "unchecked"]);
   });
 
+  // eslint-disable-next-line vitest/expect-expect -- the assertion is the @ts-expect-error: tsc fails if the call compiles
   it("takes only the current sha, never a saved document's (Task 11 carry d)", () => {
     const old = saved("a".repeat(64), [seg(0.2, 1.6)]);
     // @ts-expect-error: a saved document's sha is a plain string, not the transcript's sha as it is now.
