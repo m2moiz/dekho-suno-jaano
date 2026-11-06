@@ -66,6 +66,63 @@ def _old() -> dict[str, Any]:
     }
 
 
+def _ms(stamp: str) -> int:
+    """`HH:MM:SS,mmm` as milliseconds, for reading an SRT time back."""
+    h, m, rest = stamp.split(":")
+    sec, ms = rest.split(",")
+    return int(h) * 3_600_000 + int(m) * 60_000 + int(sec) * 1000 + int(ms)
+
+
+def _long() -> dict[str, Any]:
+    """One 40-word sentence over 20 s, every token timed: the cue #177 found too long."""
+    words = [f" w{i:02d}" for i in range(40)]
+    tokens = [_tok(10.0 + i * 0.5, w, 10.0 + i * 0.5 + 0.4) for i, w in enumerate(words)]
+    return {
+        "audio": "/recordings/talk.mov",
+        "model": "mlx-community/parakeet-tdt-0.6b-v3",
+        "text": "".join(words),
+        "sentences": [{"start": 10.0, "end": 30.0, "text": "".join(words), "tokens": tokens}],
+    }
+
+
+def test_a_long_sentence_is_split_into_cues_a_player_can_show() -> None:
+    """At most 84 characters (two lines of 42) and 7 seconds per cue (#177).
+
+    Every cue starts on its first word's `t` and ends on its last word's `e`, so
+    no word is shown at a time outside its own; read back, the words are the
+    sentence's words, in order, none lost or doubled.
+    """
+    srt = to_srt(_long())
+    blocks = [b for b in srt.split("\n\n") if b.strip()]
+    assert len(blocks) > 1
+    seen: list[str] = []
+    for block in blocks:
+        _, times, text = block.strip().split("\n")
+        start, end = times.split(" --> ")
+        assert len(text) <= 84, text
+        assert _ms(end) - _ms(start) <= 7_000, times
+        words = text.split()
+        first, last = int(words[0][1:]), int(words[-1][1:])
+        assert _ms(start) == 10_000 + first * 500, (times, text)
+        assert _ms(end) == 10_000 + last * 500 + 400, (times, text)
+        seen += words
+    assert seen == [f"w{i:02d}" for i in range(40)]
+
+
+def test_a_long_sentence_without_word_ends_stays_one_cue() -> None:
+    """Old transcripts time a word's start only; nothing says where a cut would land."""
+    payload = _long()
+    for tok in payload["sentences"][0]["tokens"]:
+        del tok["e"]
+    assert to_srt(payload).count(" --> ") == 1
+
+
+def test_vtt_cues_are_split_the_same_way() -> None:
+    vtt = to_vtt(_long())
+    assert vtt.count(" --> ") == to_srt(_long()).count(" --> ")
+    assert vtt.count(" --> ") > 1
+
+
 def test_srt_has_speaker_labels_and_no_overlapping_cues() -> None:
     assert to_srt(_diarized()) == (
         "1\n00:00:01,000 --> 00:00:02,500\nSPEAKER_00: See this.\n\n"
