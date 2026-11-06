@@ -61,7 +61,11 @@ stale-build check, and `just verify` adds Playwright on chromium and webkit.
    installs with a warning and then lints on a compiler the linter does not support. The
    `overrides` entry in `ui/package.json` is the same pin: openapi-typescript 7.13.0
    declares `typescript ^5.x`, and the override points it at this 6.0.3 instead of
-   letting npm refuse the install. Every version in `ui/package.json` is exact
+   letting npm refuse the install. The second `overrides` entry, `minimatch`
+   `11.0.1`, closes Dependabot alert 65 (GHSA-g3hv-75wg-m249) in the dev tools that
+   pin `minimatch` `^10` (eslint, typescript-eslint, shadcn's ts-morph); checked on
+   2026-11-07 that eslint, knip, tsc and `npx shadcn add --dry-run` all run on it.
+   Every version in `ui/package.json` is exact
    (`ui/.npmrc` has `save-exact=true`); never add a `^` or `~`.
 4. **The package is `@base-ui/react`, not `@base-ui-components/react`.** It was renamed.
    The old name is frozen at `1.0.0-rc.0`, is not installed here, and importing it fails
