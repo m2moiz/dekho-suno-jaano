@@ -493,7 +493,15 @@ def test_a_second_dsj_ui_prints_the_first_ones_url_and_binds_nothing(
         monkeypatch.setattr(dsj.ui.server, "create_app", no_second_app)
         opened: list[str] = []
         monkeypatch.setattr("webbrowser.open", opened.append)
-        capsys.readouterr()
+        # serve writes the lock file, which wait_for_url read, before it prints
+        # the URL, so wait for the print too: discarded too early, it lands in
+        # the second dsj ui's output on a slow runner (#310).
+        announced = ""
+        deadline = time.monotonic() + 10
+        while url not in announced and time.monotonic() < deadline:
+            announced += capsys.readouterr().out
+            time.sleep(0.05)
+        assert url in announced, "the first dsj ui never printed its URL"
         assert main(["ui"]) == 0
         assert capsys.readouterr().out.strip() == url
         assert opened == [url], "the second dsj ui should open the first one's page"

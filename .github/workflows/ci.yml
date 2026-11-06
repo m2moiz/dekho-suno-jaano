@@ -32,7 +32,11 @@ jobs:
   # Deliberately a CI job rather than only a `just verify` gate. verify is a
   # session-close ritual that can run AFTER a merge; CI runs before one.
   install-gate:
-    runs-on: macos-14
+    # macos-15, not macos-14: from 2026-10-30 every job asking for macos-14
+    # was cancelled before its first step with "The configuration
+    # 'macos-14-arm64-us-default' is not supported" (run 42216040446). The
+    # label was retired; the Apple Silicon image is now macos-15.
+    runs-on: macos-15
 
     steps:
       # fetch-depth: 0 because the gate installs from a git+file:// clone of
@@ -59,10 +63,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # macos-14 is the Apple Silicon runner. parakeet-mlx requires MLX, which is
-    # Metal-backed, so a Linux runner cannot even import the package. Confirmed
-    # still current and not deprecated.
-    runs-on: macos-14
+    # macos-15 is the Apple Silicon runner (macos-14 was retired, see
+    # install-gate above). parakeet-mlx requires MLX, which is Metal-backed, so
+    # a Linux runner cannot even import the package.
+    runs-on: macos-15
 
     steps:
       # Exact tags, both verified to resolve against the GitHub API. The first
@@ -82,7 +86,8 @@ jobs:
       # importlib.metadata.version("senko"), which needs real distribution
       # metadata and raises PackageNotFoundError. Observed locally on
       # 2026-08-06 when a plain `uv sync` silently uninstalled senko's tree.
-      # ffmpeg is NOT on the macos-14-arm64 runner image. Without it,
+      # ffmpeg was NOT on the macos-14-arm64 runner image, and this step does
+      # not assume macos-15 has it either. Without it,
       # tests/test_media.py skips at module level and two more tests skip
       # individually -- 14 in total, and the ENTIRE ffmpeg/ingestion boundary
       # goes unexercised while the run still reports success. Observed on the
