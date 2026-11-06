@@ -175,8 +175,10 @@ def test_transcribed_again_the_old_edit_list_is_moved_aside_not_applied(
 
     edits = client.get(f"{route}/edits").json()
     words = "".join(e["text"] for e in edits["content"] if e["kind"] == "item")
-    assert "world" in words and "their" not in words
-    assert edits["replaced"] is not None and "made again" in edits["replaced"]
+    assert "world" in words
+    assert "their" not in words
+    assert edits["replaced"] is not None
+    assert "made again" in edits["replaced"]
     listed = edits_path(seeded["json"])
     aside = listed.with_name(f"{listed.stem}.{old[:12]}.json")
     assert aside.is_file()
@@ -252,7 +254,8 @@ def test_a_page_loaded_before_the_transcript_was_made_again_cannot_save_over_it(
     # The new transcript's words open; the old ones were not saved over them.
     opened = client.get(route).json()
     words = "".join(e["text"] for e in opened["content"] if e["kind"] == "item")
-    assert "world" in words and "their" not in words
+    assert "world" in words
+    assert "their" not in words
     assert opened["transcript_sha"] == sha(seeded)
     # Nothing typed is lost: the saved list and the page's own copy are both kept aside.
     listed = edits_path(seeded["json"])
@@ -309,7 +312,8 @@ def test_a_list_put_aside_by_an_export_is_still_told_to_the_page_once(
     assert exported.status_code == 200
     assert "world" in exported.text
     told = client.get(f"{route}/edits").json()["replaced"]
-    assert told is not None and "made again" in told
+    assert told is not None
+    assert "made again" in told
     assert client.get(f"{route}/edits").json()["replaced"] is None
 
 
@@ -348,7 +352,8 @@ def test_an_answer_key_is_never_written_over_the_earlier_one_is_kept_beside_it(
     second = client.post(f"{route}/reference", json={})
     assert second.status_code == 200, second.text
     kept = second.json()["kept"]
-    assert len(kept) == 2 and EARLIER.fullmatch(kept[0]), kept
+    assert len(kept) == 2, kept
+    assert EARLIER.fullmatch(kept[0]), kept
     assert kept[1] == kept[0].removesuffix(".json") + ".txt"
     assert (folder / kept[0]).read_text() == earlier
     assert (folder / kept[1]).read_text() == earlier_text
@@ -466,7 +471,8 @@ def test_the_transcript_is_read_without_the_lock_and_saves_still_take_turns(
     for worker in workers:
         worker.join()
     assert most[0] == 1
-    assert reads_free and all(reads_free)
+    assert reads_free
+    assert all(reads_free)
     doc = hatao.load(edits_path(seeded["json"]))
     # A rename names the list it was made against (final review C1): landing
     # second, it finds the words saved since and is refused, writing nothing.
