@@ -248,6 +248,7 @@ whitelist.unchecked  # dsj/ui/schemas.py
 whitelist.kept  # dsj/ui/schemas.py
 # A route handler, reached by FastAPI through its decorator.
 whitelist.models_memory  # dsj/ui/routes/jobs.py
+whitelist.download_mb  # dsj/ui/schemas.py Job, a pydantic field (#337)
 whitelist.export_formats  # dsj/ui/schemas.py Settings, a pydantic field (#132)
 whitelist.export_overwrite  # dsj/ui/schemas.py Settings, a pydantic field (#132)
 whitelist.exports  # dsj/ui/schemas.py Job, a pydantic field (#132)

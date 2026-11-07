@@ -89,12 +89,15 @@ class StubEngine:
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, *, chunks: int = 1, held: bool = False,
-                 load_raises: Exception | None = None) -> None:
+                 load_raises: Exception | None = None,
+                 load_gate: threading.Event | None = None) -> None:
         self.gates = [threading.Event() for _ in range(chunks)]
         if not held:
             for gate in self.gates:
                 gate.set()
         self.load_raises = load_raises
+        # When given, `load` waits on it: the model is "downloading" until the test says.
+        self.load_gate = load_gate
         self.total = chunks * CHUNK * RATE
         # What each run handed the chunk loop (skip_before above all), for a resume to be seen.
         self.calls: list[dict[str, Any]] = []
@@ -112,6 +115,8 @@ class StubEngine:
         return asr.EngineSpec(name, "tests.test_jobs", "chunk"), self.module
 
     def load(self, _model_id: str) -> SimpleNamespace:
+        if self.load_gate is not None:
+            assert self.load_gate.wait(20), "the load was never released"
         if self.load_raises is not None:
             raise self.load_raises
         return SimpleNamespace(sample_rate=RATE, load_audio=self.load_audio)

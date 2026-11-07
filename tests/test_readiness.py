@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dsj.ui import readiness
+from dsj.ui import download, readiness
 from dsj.ui.server import create_app
 
 LOOPBACK = "http://127.0.0.1:8721"
@@ -90,7 +90,7 @@ def test_the_hub_cache_follows_hf_home_when_hf_hub_cache_is_unset(
 ) -> None:
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)
     monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
-    assert readiness._hub_cache() == tmp_path / "hf" / "hub"  # pyright: ignore[reportPrivateUsage]
+    assert download._hub_cache() == tmp_path / "hf" / "hub"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_sherpa_model_is_a_folder_on_disk(tmp_path: Path) -> None:
