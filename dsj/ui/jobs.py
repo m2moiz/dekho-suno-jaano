@@ -61,7 +61,7 @@ from dsj.atomic import atomic_write_text
 from dsj.filetag import source_sidecar_for
 from dsj.parakeet import DEFAULT_MODEL as PARAKEET_MODEL
 from dsj.sherpa import DEFAULT_MODEL as SHERPA_MODEL
-from dsj.ui import edits
+from dsj.ui import download, edits
 from dsj.ui.autoexport import ExportResult, auto_export
 from dsj.ui.review import review_path
 from dsj.ui.schemas import TranscribeRequest
@@ -234,9 +234,16 @@ class Job:
     waiting: contextlib.ExitStack | None = None
     # Set by a stop from the page (#72); the run sees it at its next report.
     cancel: threading.Event = field(default_factory=threading.Event)
+    # Set at the run's first report: the model is loaded, the download over (#337).
+    loaded: threading.Event = field(default_factory=threading.Event)
+    # How much of the model the hub cache held at the last look while it
+    # loaded (#337), in MB; None for an engine with no hub model, or before
+    # the first look.
+    download_mb: float | None = None
 
     def stop_point(self, _progress: object, _state: str) -> None:
         """The run's `on_progress`: raises Cancelled once a stop was asked for (#72)."""
+        self.loaded.set()
         if self.cancel.is_set():
             raise suno.Cancelled
 
@@ -283,6 +290,7 @@ class Job:
             # costs at most one chunk; whisper banks nothing until its decode is
             # over, so a stop before that starts over (dsj/suno.py).
             "resumable": self.engine != "whisper",
+            "download_mb": None if self.download_mb is None else round(self.download_mb, 1),
         }
 
 
@@ -371,6 +379,18 @@ class _Notes(logging.StreamHandler[TextIO]):
 # exception rather than killing the process (#133); a run that dies with the
 # server cannot be recorded by it.
 _OOM_WORDS = ("out of memory", "memoryerror", "insufficient memory", "failed to allocate", "oom")
+
+
+def _download_watcher(job: Job) -> download.Watcher | None:
+    """A watcher on the job's model in the hub cache (#337), started; None for sherpa's folder."""
+    if job.engine not in ("parakeet", "whisper"):
+        return None
+
+    def report(mb: float) -> None:
+        if not job.loaded.is_set():
+            job.download_mb = mb
+
+    return download.Watcher(job.model, report).__enter__()
 
 
 def looks_like_oom(error: str) -> bool:
@@ -711,10 +731,16 @@ class Jobs:
                     raise suno.Cancelled
                 if held is None:
                     held = self._take_turn(holder)
+                # While the engine loads, how much of its model has come (#337).
+                watcher = _download_watcher(job)
                 if job.roman_twin is not None:
                     keep_earlier_roman_run(job.out, job.roman_twin)
                 # Looked up at call time, so a test can stand in for it.
-                suno.transcribe(**arguments)
+                try:
+                    suno.transcribe(**arguments)
+                finally:
+                    if watcher is not None:
+                        watcher.stop()
                 with Library.open() as library:
                     row = library.record_run(job.out, engine=job.engine, language=job.language)
                 # Inside the hold: the copies are part of the run the person

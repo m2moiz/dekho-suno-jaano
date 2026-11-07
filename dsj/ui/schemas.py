@@ -316,6 +316,10 @@ class Job(BaseModel):
     # What became of each auto-export once the run was done (#132); empty
     # until then, and when none is turned on.
     exports: list[ExportResult]
+    # How much of the model the hub cache held while it loaded, in MB (#337):
+    # a first run's download, shown while the job is still starting. None for
+    # an engine with no hub model, or before the first look.
+    download_mb: float | None
     # Whether a stop costs at most one chunk (the chunk engines bank one after
     # each) or the whole decode (whisper banks nothing until it is over) (#72).
     resumable: bool

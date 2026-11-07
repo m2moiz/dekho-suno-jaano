@@ -938,6 +938,8 @@ export interface components {
             notes: string[];
             /** Exports */
             exports: components["schemas"]["ExportResult"][];
+            /** Download Mb */
+            download_mb: number | null;
             /** Resumable */
             resumable: boolean;
         };

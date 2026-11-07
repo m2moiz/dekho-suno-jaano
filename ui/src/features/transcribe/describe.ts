@@ -47,6 +47,10 @@ export function progressLine(job: Job): string {
   if (job.state === "running" && !job.reports_progress) {
     return `${job.engine} reports no progress until it is done.`;
   }
+  // A first run's model download, while the job is still loading (#337).
+  if (job.state === "starting" && job.download_mb !== null && job.download_mb > 0) {
+    return `Downloading the model: ${Math.round(job.download_mb)} MB so far`;
+  }
   if (!hasFraction(job)) return "";
   const parts = [
     `${durationLabel(job.audio_done_s) ?? "0:00"} of ${durationLabel(job.audio_total_s) ?? "0:00"}`,

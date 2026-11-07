@@ -15,11 +15,11 @@ from __future__ import annotations
 
 __all__ = ["ModelState", "ToolState", "model_state", "readiness", "tool_state"]
 
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from dsj.ui.download import hub_repo
 from dsj.ui.jobs import EngineChoice, engine_choices
 
 
@@ -60,21 +60,8 @@ def tool_state(name: str) -> ToolState:
     )
 
 
-def _hub_cache() -> Path:
-    # The same resolution huggingface_hub makes (HF_HUB_CACHE, else HF_HOME/hub,
-    # else ~/.cache/huggingface/hub), read here from the environment so this
-    # check costs no import of the hub on a machine without the extras, and
-    # a test that points the cache elsewhere is read the way the engine reads it.
-    configured = os.environ.get("HF_HUB_CACHE")
-    if configured:
-        return Path(configured).expanduser()
-    home = os.environ.get("HF_HOME")
-    base = Path(home).expanduser() if home else Path.home() / ".cache" / "huggingface"
-    return base / "hub"
-
-
 def _hub_state(model: str) -> tuple[str, str]:
-    repo = _hub_cache() / f"models--{model.replace('/', '--')}"
+    repo = hub_repo(model)
     if not repo.is_dir() or not any((repo / "snapshots").glob("*")):
         return "missing", f"{model} is not on this Mac yet; the first run downloads it"
     if any((repo / "blobs").glob("*.incomplete")):

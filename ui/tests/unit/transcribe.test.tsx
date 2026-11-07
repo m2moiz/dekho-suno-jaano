@@ -80,6 +80,7 @@ function job(overrides: Partial<Job>): Job {
     notes: [],
     exports: [],
     resumable: true,
+    download_mb: null,
     ...overrides,
   };
 }
@@ -320,6 +321,14 @@ describe("a job on its recording's row", () => {
     expect(status.textContent).toContain("Transcribing with parakeet");
     expect(status.textContent).toContain("1:45 of 5:15");
     expect(within(status).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("33");
+  });
+
+  it("says how much of the model has come while a first run loads it (#337)", async () => {
+    serve({ "GET /api/jobs": () => Response.json([job({ state: "starting", fraction: 0, download_mb: 312.4 })]) });
+    render(<TranscribeControl recording={RECORDING} />);
+    const status = await screen.findByRole("status", { name: "Transcription" });
+    expect(status.textContent).toContain("Loading the model with parakeet");
+    expect(status.textContent).toContain("Downloading the model: 312 MB so far");
   });
 
   it("says a queued job is waiting its turn, with Stop at hand (#90)", async () => {
