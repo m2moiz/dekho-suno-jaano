@@ -76,6 +76,8 @@ export type PlayerControls = {
   /** Play at `speed` and keep it for later launches (#81). */
   setSpeed: (speed: Speed) => void;
   speed: () => Speed;
+  /** Move the playhead by `seconds` (negative for back), kept inside the recording (#88). */
+  skip: (seconds: number) => void;
 };
 
 type Props = {
@@ -192,6 +194,12 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       isPlaying: () => media.current !== null && !media.current.paused,
       setSpeed: changeSpeed,
       speed: () => speedNow.current,
+      skip: (seconds) => {
+        const element = media.current;
+        if (element === null) return;
+        const end = Number.isFinite(element.duration) ? element.duration : Infinity;
+        scrubRef.current(Math.min(end, Math.max(0, element.currentTime + seconds)));
+      },
     };
     return () => {
       controls.current = null;

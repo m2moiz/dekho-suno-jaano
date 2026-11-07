@@ -3,20 +3,27 @@
 
 import { HISTORY_LIMIT } from "@/lib/editOps";
 
-export type Key = { keys: string[]; does: string };
+// `id` names the command for the palette behind ⌘K (#88); a key bound by
+// another component (the unsure-word arrows) has none and is listed only.
+export type Key = { id?: string; keys: string[]; does: string };
 export type Sheet = { title: string; keys: readonly Key[]; notes: readonly string[] };
 
 export const READER_SHEET: Sheet = {
   title: "Keys in the reader",
   keys: [
-    { keys: ["Space"], does: "Play or pause" },
-    { keys: ["R"], does: "Review this transcript, sentence by sentence" },
+    { id: "play", keys: ["Space"], does: "Play or pause" },
+    { id: "back", keys: ["←"], does: "Back 5 seconds" },
+    { id: "forward", keys: ["→"], does: "Forward 5 seconds" },
+    { id: "slower", keys: [","], does: "Slower (0.5x to 2x)" },
+    { id: "faster", keys: ["."], does: "Faster" },
+    { id: "review", keys: ["R"], does: "Review this transcript, sentence by sentence" },
     { keys: ["]"], does: "Next unsure word" },
     { keys: ["["], does: "Previous unsure word" },
     { keys: ["⌘", "Z"], does: "Undo the last edit" },
     { keys: ["⇧", "⌘", "Z"], does: "Redo" },
-    { keys: ["Esc"], does: "Let go of the selection" },
-    { keys: ["?"], does: "This sheet" },
+    { id: "release", keys: ["Esc"], does: "Let go of the selection" },
+    { id: "sheet", keys: ["?"], does: "This sheet" },
+    { id: "commands", keys: ["⌘", "K"], does: "Commands: this list, to search and run" },
   ],
   notes: [
     "Select words to correct, hear, re-time or mute them. On a phone, tap a word.",

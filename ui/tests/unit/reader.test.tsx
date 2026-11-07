@@ -482,3 +482,75 @@ describe("the reader", () => {
     act(() => hideKeys());
   });
 });
+
+
+describe("keyboard control of playback, from one list (#88)", () => {
+  type Controls = import("../../src/features/player/Player").PlayerControls;
+
+  function fakeControls() {
+    const calls: string[] = [];
+    let speed: Controls["speed"] extends () => infer S ? S : never = 1;
+    const controls: Controls = {
+      hear: () => calls.push("hear"),
+      toggle: () => calls.push("toggle"),
+      pause: () => calls.push("pause"),
+      isPlaying: () => false,
+      setSpeed: (s) => {
+        speed = s;
+        calls.push(`speed ${s}`);
+      },
+      speed: () => speed,
+      skip: (s) => calls.push(`skip ${s}`),
+    };
+    return { controls, calls };
+  }
+
+  async function bound() {
+    const { readerRunners, SKIP_S } = await import("../../src/features/transcript/readerKeys");
+    const { READER_SHEET } = await import("../../src/features/shell/keys");
+    const { controls, calls } = fakeControls();
+    const ref = { current: controls };
+    return { runners: readerRunners(ref, READER_SHEET, () => calls.push("review")), calls, READER_SHEET, SKIP_S };
+  }
+
+  it("every key with an id in the reader's list has a command behind it, and nothing else does", async () => {
+    const { runners, READER_SHEET } = await bound();
+    const ids = READER_SHEET.keys.flatMap((k) => (k.id === undefined ? [] : [k.id]));
+    expect(ids.length).toBeGreaterThan(5);
+    for (const id of ids) expect(runners[id]).toBeTypeOf("function");
+    expect(Object.keys(runners).sort()).toEqual([...ids].sort());
+  });
+
+  it("skips and changes speed through the player, stopping at the ends of the speed list", async () => {
+    const { runners, calls, SKIP_S } = await bound();
+    runners.back?.();
+    runners.forward?.();
+    runners.faster?.();
+    runners.faster?.();
+    runners.slower?.();
+    expect(calls).toEqual([`skip ${-SKIP_S}`, `skip ${SKIP_S}`, "speed 1.25", "speed 1.5", "speed 1.25"]);
+    for (let i = 0; i < 10; i += 1) runners.slower?.();
+    expect(calls.at(-1)).toBe("speed 0.5");
+  });
+
+  it("⌘K opens a palette listing the same keys as the sheet, and Enter runs the first match", async () => {
+    const { CommandPalette, hideCommands } = await import("../../src/features/shell/CommandPalette");
+    const { READER_SHEET } = await import("../../src/features/shell/keys");
+    const { readerRunners } = await import("../../src/features/transcript/readerKeys");
+    const { controls, calls } = fakeControls();
+    render(<CommandPalette />);
+    const runners = readerRunners({ current: controls }, READER_SHEET);
+    runners.commands?.();
+    const list = await screen.findByRole("list", { name: "Commands" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(READER_SHEET.keys.length);
+    // A key another component binds is listed, and cannot be run from here.
+    expect((within(list).getByRole("button", { name: /Next unsure word/ }) as HTMLButtonElement).disabled).toBe(true);
+    const box = screen.getByRole("textbox", { name: "Find a command" });
+    fireEvent.change(box, { target: { value: "forward" } });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(calls).toEqual(["skip 5"]);
+    expect(screen.queryByRole("list", { name: "Commands" })).toBeNull();
+    act(() => hideCommands());
+  });
+});
