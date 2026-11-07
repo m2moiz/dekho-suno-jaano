@@ -232,3 +232,26 @@ def test_review_progress_is_none_until_a_review_exists(two_recordings: dict[str,
     path.write_text(json.dumps({"segments": [{"state": state} for state in states]}))
     again = page().get("/api/recordings").json()[0]["transcripts"][0]
     assert (again["review_checked"], again["review_total"]) == (2, 3)
+
+
+# -- the playhead a recording was left at (#69) -----------------------------------
+
+
+def test_a_recording_remembers_where_it_was_left(two_recordings: dict[str, Path]) -> None:
+    client = page()
+    row = client.get("/api/recordings").json()[0]
+    assert row["playhead_s"] is None
+    reply = client.put(f"/api/recordings/{row['id']}/playhead", json={"seconds": 12.25})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["playhead_s"] == 12.25
+    # The next launch of `dsj ui` reads it from the library.
+    assert page().get("/api/recordings").json()[0]["playhead_s"] == 12.25
+
+
+def test_a_playhead_for_no_such_recording_is_404_and_a_negative_one_is_422(
+    two_recordings: dict[str, Path],
+) -> None:
+    client = page()
+    assert client.put("/api/recordings/999/playhead", json={"seconds": 1}).status_code == 404
+    rid = client.get("/api/recordings").json()[0]["id"]
+    assert client.put(f"/api/recordings/{rid}/playhead", json={"seconds": -1}).status_code == 422

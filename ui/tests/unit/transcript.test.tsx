@@ -168,6 +168,7 @@ describe("TranscriptPage", () => {
     first_seen: "2026-09-20T17:00:00+00:00",
     missing: false,
     unreadable: null,
+    playhead_s: null,
     title: null,
     transcripts: [
       {

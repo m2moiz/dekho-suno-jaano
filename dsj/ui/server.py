@@ -75,7 +75,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from dsj.ui import UIUnavailable
 from dsj.ui.errors import STATUS, describe
 from dsj.ui.jobs import Jobs
-from dsj.ui.routes import jobs, marks, media, recording, review
+from dsj.ui.routes import jobs, marks, media, recording, review, settings
 from dsj.ui.store import library_path
 from dsj.ui.tailnet import TAILNET_IDLE_S, Tailnet, TailnetUnavailable
 
@@ -325,6 +325,7 @@ def create_app(
     app.include_router(jobs.router)
     app.include_router(marks.router)
     app.include_router(review.router)
+    app.include_router(settings.router)
     app.add_api_route("/api/heartbeat", heartbeat, methods=["POST"], status_code=204)
     app.add_api_route("/api/bye", bye, methods=["POST"], status_code=204)
     # Last, so every /api route above wins over a file of the same name.

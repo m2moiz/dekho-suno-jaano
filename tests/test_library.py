@@ -326,7 +326,8 @@ def test_a_run_started_from_the_app_fills_every_column(tmp_path: Path, library: 
     assert recording.unreadable is None
     # `title` is None until a person types one in the app (#245).
     assert recording.title is None
-    assert None not in (vars(recording) | {"unreadable": "read", "title": "set"}).values()
+    filled = vars(recording) | {"unreadable": "read", "title": "set", "playhead_s": "kept"}
+    assert None not in filled.values()
 
 
 def test_adopting_again_keeps_what_the_run_recorded_and_reads_new_marks(
@@ -448,6 +449,7 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
     with sqlite3.connect(store.library_path()) as con:
         con.execute("ALTER TABLE recordings DROP COLUMN title")
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 3")
     with Library.open() as library:
         found = library.recording(rid)
@@ -455,7 +457,7 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
         assert found.title is None
         assert library.set_title(rid, "Kept").title == "Kept"
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
 
 
 def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
@@ -472,6 +474,7 @@ def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
     with sqlite3.connect(path) as con:
         con.execute("ALTER TABLE recordings DROP COLUMN title")
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 3")
     capsys.readouterr()
     with Library.open() as library:
@@ -497,6 +500,7 @@ def _downgrade_to_version_3(path: Path) -> Path:
     with sqlite3.connect(path) as con:
         con.execute("ALTER TABLE recordings DROP COLUMN title")
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 3")
     return path.with_name(f"{path.name}.v3.bak")
 
@@ -554,6 +558,7 @@ def test_a_library_backup_already_there_is_never_written_over(
     with sqlite3.connect(path) as con:
         con.execute("ALTER TABLE recordings DROP COLUMN title")
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 3")
     backup = path.with_name(f"{path.name}.v3.bak")
     backup.write_bytes(b"the first backup")
@@ -579,6 +584,7 @@ def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
     before = _rows(store.library_path())
     with sqlite3.connect(store.library_path()) as con:
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 4")
     with Library.open() as library:
         found = library.recording(rid)
@@ -595,7 +601,7 @@ def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
     assert after["recordings"] == before["recordings"]
     assert [r[:-1] for r in after["transcripts"]] == [r[:-1] for r in before["transcripts"]]
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
 
 
 def test_a_new_transcript_row_carries_its_script_share(tmp_path: Path) -> None:
@@ -644,10 +650,28 @@ def test_a_version_5_library_gains_the_memory_table_and_keeps_its_rows(tmp_path:
         rid = library.add_recording(media).id
     with sqlite3.connect(store.library_path()) as con:
         con.execute("DROP TABLE model_memory")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 5")
     with Library.open() as library:
         assert library.recording(rid) is not None
         assert library.oom_memory() == []
         library.remember_oom("m", "MemoryError")
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+
+
+def test_a_version_6_library_gains_the_playhead_column_and_keeps_its_rows(tmp_path: Path) -> None:
+    """Schema 7 adds recordings.playhead_s (#69); a version 6 file is upgraded in place."""
+    media = _wav(tmp_path / "old.wav")
+    with Library.open() as library:
+        rid = library.add_recording(media).id
+    with sqlite3.connect(store.library_path()) as con:
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
+        con.execute("PRAGMA user_version = 6")
+    with Library.open() as library:
+        found = library.recording(rid)
+        assert found is not None
+        assert found.playhead_s is None
+        assert library.set_playhead(rid, 3.5).playhead_s == 3.5
+    with sqlite3.connect(store.library_path()) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
