@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 import { type Advanced, CHOICES, type ChoiceId, costLabel, expectedLabel, requestFor, speedFor } from "./choices";
 import { askToNotify } from "@/features/shell/notify";
 
+import { loadSettings, saveSettings } from "@/features/shell/settings";
+
 import { type Engine, loadEngines, loadModelMemory, type ModelMemory, startJob } from "./jobs";
 
 type EngineName = Engine["name"];
@@ -96,9 +98,14 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
     void loadModelMemory().then((listed) => {
       if (live) setMemory(listed);
     });
-    loadEngines().then(
-      (listed) => {
-        if (live) setEngines(listed);
+    // The last answer and speaker choice open the dialog on them (#69): read
+    // with the engines, so the first paint already shows them.
+    Promise.all([loadEngines(), loadSettings()]).then(
+      ([listed, kept]) => {
+        if (!live) return;
+        setAnswer(kept.transcribe_answer);
+        setAdvanced((now) => ({ ...now, diarize: kept.transcribe_diarize }));
+        setEngines(listed);
       },
       (thrown: unknown) => {
         if (!live) return;
@@ -147,6 +154,8 @@ export function TranscribeDialog({ recording, onClose }: { recording: RecordingR
     setSending(true);
     // Asked now, while the person is here to answer, so the finish can be told (#130).
     void askToNotify();
+    // Kept for the next launch (#69); the run does not wait on it.
+    void saveSettings({ transcribe_answer: answer, transcribe_diarize: advanced.diarize });
     startJob(recording.id, request).then(
       () => onClose(),
       (thrown: unknown) => {

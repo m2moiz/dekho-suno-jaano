@@ -250,6 +250,9 @@ whitelist.kept  # dsj/ui/schemas.py
 whitelist.models_memory  # dsj/ui/routes/jobs.py
 whitelist.cancel_job  # dsj/ui/routes/jobs.py, a FastAPI route (#72)
 whitelist.resumable  # dsj/ui/schemas.py Job, a pydantic field (#72)
+whitelist.leave_playhead  # dsj/ui/routes/recording.py, a FastAPI route (#69)
+whitelist.change_settings  # dsj/ui/routes/settings.py, a FastAPI route (#69)
+whitelist.readiness_route  # dsj/ui/routes/jobs.py, a FastAPI route (#70)
 whitelist.mark_edited  # dsj/ui/store.py, called from the marks route
 # Jobs.all is called from dsj/ui/routes/jobs.py; the per-branch gate sees only
 # jobs.py when a change touches it.

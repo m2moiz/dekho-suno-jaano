@@ -62,10 +62,10 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 # an older dsj refuses a library a newer one wrote instead of misreading it.
 # Version 2 added `recordings.unreadable` (#110), version 3
 # `transcripts.last_edited_at` (#83), version 4 `recordings.title` and version 5
-# `transcripts.urdu_share` (#245), version 6 the `model_memory` table (#133);
-# _MIGRATIONS brings an older library up to date in place, one version at a
-# time.
-SCHEMA_VERSION = 6
+# `transcripts.urdu_share` (#245), version 6 the `model_memory` table (#133),
+# version 7 `recordings.playhead_s` (#69); _MIGRATIONS brings an older library
+# up to date in place, one version at a time.
+SCHEMA_VERSION = 7
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS recordings (
   missing       INTEGER NOT NULL DEFAULT 0,
   unreadable    TEXT,
   title         TEXT,
+  playhead_s    REAL,
   CHECK ((content_id IS NULL) = (size_bytes IS NULL))
 );
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -145,11 +146,14 @@ _MIGRATIONS = {
         "CREATE TABLE IF NOT EXISTS model_memory ("
         "model TEXT PRIMARY KEY, failed_at TEXT NOT NULL, error TEXT NOT NULL)"
     ),
+    # Where the recording was left playing, in seconds, so reopening it picks
+    # up there (#69). NULL until the app has played it once.
+    6: "ALTER TABLE recordings ADD COLUMN playhead_s REAL",
 }
 
 _RECORDING_COLUMNS = (
     "r.id, r.path, r.size_bytes, r.duration_s, r.content_id, r.audio_codec, r.video_codec, "
-    "r.first_seen, r.missing, r.unreadable, r.title"
+    "r.first_seen, r.missing, r.unreadable, r.title, r.playhead_s"
 )
 _TRANSCRIPT_COLUMNS = (
     "id, recording_id, json_path, finished_at, engine, model, diarized, speaker_count, "
@@ -196,6 +200,8 @@ class Recording:
     unreadable: str | None = None
     # The title a person gave it in the app (#245), else None: the page derives one.
     title: str | None = None
+    # Where the app last left it playing, in seconds (#69), else None.
+    playhead_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -474,6 +480,7 @@ def _recording(row: tuple[Any, ...]) -> Recording:
         missing=bool(row[8]),
         unreadable=row[9],
         title=row[10],
+        playhead_s=row[11],
     )
 
 
@@ -622,6 +629,20 @@ class Library:
         with self._db:
             changed = self._db.execute(
                 "UPDATE recordings SET title = ? WHERE id = ?", (title, recording_id)
+            ).rowcount
+        if changed == 0:
+            raise LibraryError(f"the library has no recording with id {recording_id}.")
+        return self._must_recording(recording_id)
+
+    def set_playhead(self, recording_id: int, seconds: float) -> Recording:
+        """Keep where the recording was left playing, so reopening it picks up there (#69).
+
+        Raises:
+            LibraryError: if there is no recording with this id.
+        """
+        with self._db:
+            changed = self._db.execute(
+                "UPDATE recordings SET playhead_s = ? WHERE id = ?", (seconds, recording_id)
             ).rowcount
         if changed == 0:
             raise LibraryError(f"the library has no recording with id {recording_id}.")

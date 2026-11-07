@@ -61,7 +61,7 @@ const OTHER = {
 const ROW = { finished_at: "x", diarized: true, speaker_count: 2, mark_count: null, language: null, last_edited_at: null, language_tag: "english", review_checked: null, review_total: null };
 const recording = (others: boolean) => ({
   id: 2, path: "/rec/a.wav", title: null, size_bytes: 1, duration_s: 5, content_id: "c", audio_codec: "pcm",
-  video_codec: null, first_seen: "x", missing: false, unreadable: null,
+  video_codec: null, first_seen: "x", missing: false, unreadable: null, playhead_s: null,
   transcripts: [
     { ...ROW, id: 7, engine: "parakeet", model: "parakeet" },
     ...(others ? [{ ...ROW, id: 8, engine: "whisper", model: "whisper" }] : []),

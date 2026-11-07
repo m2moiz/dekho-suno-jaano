@@ -15,8 +15,19 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from dsj.ui.jobs import AlreadyOver, Jobs, engine_choices
+from dsj.ui.readiness import readiness
 from dsj.ui.routes.marks import entries
-from dsj.ui.schemas import Engine, Job, ListContent, ModelMemory, RenderJob, TranscribeRequest
+from dsj.ui.schemas import (
+    Engine,
+    Job,
+    ListContent,
+    ModelCheck,
+    ModelMemory,
+    Readiness,
+    RenderJob,
+    ToolCheck,
+    TranscribeRequest,
+)
 from dsj.ui.store import Library
 
 router = APIRouter(prefix="/api")
@@ -35,6 +46,24 @@ def engines() -> list[Engine]:
     and reopening the picker should show it, with no restart.
     """
     return [Engine.model_validate(asdict(choice)) for choice in engine_choices()]
+
+
+@router.get("/readiness")
+def readiness_route() -> Readiness:
+    """ffmpeg, every engine and each engine's default model, read now (#70)."""
+    tools, engines, models = readiness()
+    listed = [Engine.model_validate(asdict(choice)) for choice in engines]
+    ready = (
+        all(t.ok for t in tools)
+        and any(e.reason is None for e in listed)
+        and all(m.state in ("present", "partial") for m in models)
+    )
+    return Readiness(
+        tools=[ToolCheck.model_validate(asdict(t)) for t in tools],
+        engines=listed,
+        models=[ModelCheck.model_validate(asdict(m)) for m in models],
+        ready=ready,
+    )
 
 
 @router.get("/models/memory")
