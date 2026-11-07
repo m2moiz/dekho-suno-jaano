@@ -16,6 +16,7 @@ import type { Content, Entry, Item } from "../../src/lib/editOps";
 import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights } from "./highlights";
 import { stubMatchMedia } from "./media";
+import { choose } from "./menus";
 
 function item(sourceStart: number, length: number, text: string, confidence: number | null = 0.95): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted: false, confidence };
@@ -365,6 +366,47 @@ describe("the reader", () => {
     // Enter hands focus back to the nameplate, for the next key.
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Ali, rename" }));
     expect(screen.getByRole("button", { name: "Speaker 2, rename" })).toBeTruthy();
+  });
+
+  it("gives one turn to another speaker from its margin menu, as one undo step (#71)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, speaker options" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByText("This turn was said by")).toBeTruthy();
+    expect(within(menu).getByRole("menuitemradio", { name: "Speaker 2" }).getAttribute("aria-checked")).toBe("true");
+    choose(within(menu).getByRole("menuitemradio", { name: "Speaker 1" }));
+    // Both turns are now Speaker 1's, so they read as one.
+    await vi.waitFor(() => expect(screen.getAllByRole("button", { name: /speaker options$/ })).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Speaker 1, rename" })).toBeTruthy();
+    await vi.waitFor(() => expect(saved.at(-1)?.filter((e) => e.kind === "paragraph").map((e) => e.kind === "paragraph" && e.speaker)).toEqual(["SPEAKER_00", "SPEAKER_00"]));
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    await vi.waitFor(() => expect(screen.getAllByRole("button", { name: /speaker options$/ })).toHaveLength(2));
+    expect(screen.getByRole("button", { name: "Speaker 2, rename" })).toBeTruthy();
+  });
+
+  it("gives one turn to someone new (#71)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, speaker options" }));
+    choose(await screen.findByRole("menuitem", { name: "Someone new" }));
+    expect(await screen.findByRole("button", { name: "Speaker 3, rename" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Speaker 1, rename" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Speaker 2, rename" })).toBeNull();
+    await vi.waitFor(() => expect(saved.at(-1)?.some((e) => e.kind === "paragraph" && e.speaker === "SPEAKER_02")).toBe(true));
+  });
+
+  it("merges one speaker into another from the margin, as one undo step (#71)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Speaker 2, speaker options" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByText("Merge Speaker 2 into")).toBeTruthy();
+    choose(within(menu).getByRole("menuitem", { name: "Speaker 1" }));
+    await vi.waitFor(() => expect(screen.getAllByRole("button", { name: /speaker options$/ })).toHaveLength(1));
+    // With one speaker left there is nobody to merge into.
+    fireEvent.click(screen.getByRole("button", { name: "Speaker 1, speaker options" }));
+    expect(within(await screen.findByRole("menu")).queryByText(/^Merge/)).toBeNull();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    await vi.waitFor(() => expect(screen.getAllByRole("button", { name: /speaker options$/ })).toHaveLength(2));
   });
 
   it("keeps a first rename when a second is made before the first is saved", async () => {

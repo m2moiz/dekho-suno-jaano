@@ -9,7 +9,7 @@
 // mark after it hands what follows back to the speaker it had. Each added
 // mark copies the language of the one it splits.
 
-import type { Content, Entry, Paragraph, SpeakerOp } from "@/lib/editOps";
+import type { Content, Editor, Entry, Paragraph, SpeakerOp } from "@/lib/editOps";
 
 /** The index of the paragraph mark governing entry `index`: the nearest at or before it, or -1. */
 export function governingParagraph(content: Content, index: number): number {
@@ -86,4 +86,38 @@ export function newSpeakerLabel(labels: readonly string[]): string {
     const label = `SPEAKER_${String(n).padStart(2, "0")}`;
     if (!labels.includes(label)) return label;
   }
+}
+
+/** One past the last entry a paragraph mark at `p` governs: the next mark, or the end. */
+function stretchEnd(content: Content, p: number): number {
+  for (let i = p + 1; i < content.length; i += 1) {
+    if (content[i]?.kind === "paragraph") return i;
+  }
+  return content.length;
+}
+
+/**
+ * Give every turn `from` says to `into` (#71): one person the diarizer split
+ * across two labels becomes one again. Each turn is one speaker edit, and all
+ * of them are one undo step. Returns how many turns moved; none when `from`
+ * says nothing, or is `into`, and then nothing is remembered either.
+ */
+export function mergeSpeakers(editor: Editor, from: string, into: string): number {
+  if (from === into) return 0;
+  let moved = 0;
+  editor.beginGesture();
+  // A mark's own turn is replaced in place by the edit, so the next search
+  // starts over; the bound is the number of marks, so a change that somehow
+  // kept the label could not loop for ever.
+  for (let guard = editor.content.length; guard > 0; guard -= 1) {
+    const content = editor.content;
+    const p = content.findIndex((e) => e.kind === "paragraph" && e.speaker === from);
+    if (p < 0) break;
+    const op = speakerChange(content, p + 1, stretchEnd(content, p), into);
+    if (op === null) break;
+    editor.applyEdit(op);
+    moved += 1;
+  }
+  editor.endGesture();
+  return moved;
 }
