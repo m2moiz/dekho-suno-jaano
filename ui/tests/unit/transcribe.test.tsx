@@ -78,6 +78,7 @@ function job(overrides: Partial<Job>): Job {
     error: null,
     transcript_id: null,
     notes: [],
+    resumable: true,
     ...overrides,
   };
 }
@@ -381,6 +382,62 @@ describe("a job on its recording's row", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("stopping a job from its row (#72)", () => {
+  it("asks the server to stop, shows Stopping until it lands, then Stopped with what the next run does", async () => {
+    vi.useFakeTimers();
+    notified.mockClear();
+    try {
+      const replies = [[job({ fraction: 1 / 3 })], [job({ state: "stopping", fraction: 1 / 3 })], [job({ state: "cancelled", fraction: 2 / 3 })], []];
+      serve({
+        "GET /api/jobs": () => Response.json(replies.shift() ?? []),
+        "POST /api/jobs/1/cancel": () => Response.json(job({ state: "stopping", fraction: 1 / 3 }), { status: 202 }),
+      });
+      render(<TranscribeControl recording={RECORDING} />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      const stop = screen.getByRole("button", { name: "Stop" });
+      expect(stop.getAttribute("title")).toContain("the next run picks up from there");
+      await act(async () => {
+        fireEvent.click(stop);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sent("POST", "/api/jobs/1/cancel")).toHaveLength(1);
+      const stopping = screen.getByRole("button", { name: "Stopping" }) as HTMLButtonElement;
+      expect(stopping.disabled).toBe(true);
+      expect(screen.getByRole("status", { name: "Transcription" }).textContent).toContain("Stopping with parakeet");
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+      expect(screen.queryByRole("status", { name: "Transcription" })).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("Stopped. The next run picks up where this one left off.");
+      // Back to a start button, and no notification for a stop the person asked for.
+      expect(screen.getByRole("button", { name: "Transcribe" })).toBeTruthy();
+      expect(notified).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says whisper starts again, before and after", async () => {
+    serve({ "GET /api/jobs": () => Response.json([job({ engine: "whisper", reports_progress: false, fraction: 0, resumable: false })]) });
+    render(<TranscribeControl recording={RECORDING} />);
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    expect(stop.getAttribute("title")).toContain("starts again");
+    cleanup();
+    act(() => forgetJobs());
+    serve({ "GET /api/jobs": () => Response.json([job({ engine: "whisper", state: "cancelled", resumable: false })]) });
+    render(<TranscribeControl recording={RECORDING} />);
+    expect((await screen.findByRole("status")).textContent).toBe("Stopped. The next whisper run starts again.");
+  });
+
+  it("puts a refused stop in the error dialog", async () => {
+    serve({
+      "GET /api/jobs": () => Response.json([job({})]),
+      "POST /api/jobs/1/cancel": () => Response.json({ error: "AlreadyOver", message: "job 1 is already done; there is nothing to stop.", request: "/api/jobs/1/cancel" }, { status: 409 }),
+    });
+    render(<TranscribeControl recording={RECORDING} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    await vi.waitFor(() => expect(currentError()?.message).toBe("job 1 is already done; there is nothing to stop."));
   });
 });
 

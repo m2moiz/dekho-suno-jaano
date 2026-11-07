@@ -96,6 +96,8 @@ class StubEngine:
                 gate.set()
         self.load_raises = load_raises
         self.total = chunks * CHUNK * RATE
+        # What each run handed the chunk loop (skip_before above all), for a resume to be seen.
+        self.calls: list[dict[str, Any]] = []
         self.module = SimpleNamespace(
             DEFAULT_MODEL="stub-model",
             MEASURES_END_AND_CONFIDENCE=True,
@@ -124,7 +126,8 @@ class StubEngine:
         for gate in self.gates:
             gate.set()
 
-    def transcribe_chunked(self, _engine: Any, _audio: Any, *, on_chunk: Any, **_: Any) -> Any:
+    def transcribe_chunked(self, _engine: Any, _audio: Any, *, on_chunk: Any, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
         for k, gate in enumerate(self.gates):
             assert gate.wait(20), f"chunk {k} was never released"
             done = (k + 1) * self.total // len(self.gates)
