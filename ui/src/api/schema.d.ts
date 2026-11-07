@@ -588,6 +588,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recordings/{recording_id}/highlights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Highlights
+         * @description Every mark on the recording, in the order of the recording.
+         */
+        get: operations["list_highlights_api_recordings__recording_id__highlights_get"];
+        put?: never;
+        /**
+         * Make Highlight
+         * @description Make a mark on the recording.
+         */
+        post: operations["make_highlight_api_recordings__recording_id__highlights_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/highlights/{highlight_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Highlight
+         * @description Take a mark away.
+         */
+        delete: operations["remove_highlight_api_highlights__highlight_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Change Highlight
+         * @description Change a mark's kind or note.
+         */
+        patch: operations["change_highlight_api_highlights__highlight_id__patch"];
+        trace?: never;
+    };
+    "/api/recordings/{recording_id}/highlights.md": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Highlights
+         * @description The marks as one Markdown list with timestamps: the one export format (README, Likho).
+         */
+        get: operations["export_highlights_api_recordings__recording_id__highlights_md_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -753,6 +821,57 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
+         * Highlight
+         * @description A mark on a stretch of a recording (#67): seconds, a kind, a note, the words under it.
+         */
+        Highlight: {
+            /** Id */
+            id: number;
+            /** Recording Id */
+            recording_id: number;
+            /** Start S */
+            start_s: number;
+            /** End S */
+            end_s: number;
+            kind: components["schemas"]["MarkKind"];
+            /** Note */
+            note: string;
+            /** Text */
+            text: string;
+            /** Made At */
+            made_at: string;
+        };
+        /**
+         * HighlightNew
+         * @description A mark to make: the stretch, its kind, and the words under it as the page read them.
+         */
+        HighlightNew: {
+            /** Start S */
+            start_s: number;
+            /** End S */
+            end_s: number;
+            kind: components["schemas"]["MarkKind"];
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
+        /**
+         * HighlightUpdate
+         * @description What a mark's kind or note becomes; a key left out keeps its value.
+         */
+        HighlightUpdate: {
+            kind?: components["schemas"]["MarkKind"] | null;
+            /** Note */
+            note?: string | null;
+        };
+        /**
          * ItemEntry
          * @description A stretch of one source's audio and the text said in it (dsj.hatao.Item).
          *
@@ -836,6 +955,8 @@ export interface components {
             /** Content */
             content: components["schemas"]["EditEntry"][];
         };
+        /** @enum {string} */
+        MarkKind: "key" | "question" | "todo" | "quote";
         /**
          * Match
          * @description One word, or phrase, a word list matched (dsj.hatao.Match).
@@ -2192,6 +2313,167 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_highlights_api_recordings__recording_id__highlights_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Highlight"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    make_highlight_api_recordings__recording_id__highlights_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HighlightNew"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Highlight"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_highlight_api_highlights__highlight_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                highlight_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_highlight_api_highlights__highlight_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                highlight_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HighlightUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Highlight"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_highlights_api_recordings__recording_id__highlights_md_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown": unknown;
                 };
             };
             /** @description Validation Error */

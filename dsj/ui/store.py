@@ -28,6 +28,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "URDU_SHARE",
     "Adoption",
+    "Highlight",
     "Library",
     "LibraryError",
     "NotATranscript",
@@ -63,9 +64,10 @@ LIBRARY_ENV = "DSJ_LIBRARY"
 # Version 2 added `recordings.unreadable` (#110), version 3
 # `transcripts.last_edited_at` (#83), version 4 `recordings.title` and version 5
 # `transcripts.urdu_share` (#245), version 6 the `model_memory` table (#133),
-# version 7 `recordings.playhead_s` (#69); _MIGRATIONS brings an older library
-# up to date in place, one version at a time.
-SCHEMA_VERSION = 7
+# version 7 `recordings.playhead_s` (#69), version 8 the `highlights` table
+# (#67); _MIGRATIONS brings an older library up to date in place, one version
+# at a time.
+SCHEMA_VERSION = 8
 
 # Two things differ from #105's first comment, both on purpose:
 #
@@ -112,6 +114,17 @@ CREATE TABLE IF NOT EXISTS transcripts (
   urdu_share    REAL
 );
 CREATE INDEX IF NOT EXISTS transcripts_by_recording ON transcripts(recording_id);
+CREATE TABLE IF NOT EXISTS highlights (
+  id            INTEGER PRIMARY KEY,
+  recording_id  INTEGER NOT NULL REFERENCES recordings(id),
+  start_s       REAL NOT NULL,
+  end_s         REAL NOT NULL,
+  kind          TEXT NOT NULL,
+  note          TEXT NOT NULL DEFAULT '',
+  text          TEXT NOT NULL DEFAULT '',
+  made_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS highlights_by_recording ON highlights(recording_id);
 CREATE TABLE IF NOT EXISTS model_memory (
   model      TEXT PRIMARY KEY,
   failed_at  TEXT NOT NULL,
@@ -149,6 +162,15 @@ _MIGRATIONS = {
     # Where the recording was left playing, in seconds, so reopening it picks
     # up there (#69). NULL until the app has played it once.
     6: "ALTER TABLE recordings ADD COLUMN playhead_s REAL",
+    # A mark on a stretch of a recording (#67): seconds, a kind, a note, and
+    # the words it covered when made. On the recording, so every transcript
+    # of it shows the same marks. Empty until someone makes one.
+    7: (
+        "CREATE TABLE IF NOT EXISTS highlights ("
+        "id INTEGER PRIMARY KEY, recording_id INTEGER NOT NULL REFERENCES recordings(id), "
+        "start_s REAL NOT NULL, end_s REAL NOT NULL, kind TEXT NOT NULL, "
+        "note TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', made_at TEXT NOT NULL)"
+    ),
 }
 
 _RECORDING_COLUMNS = (
@@ -168,6 +190,21 @@ class ModelMemory:
     model: str
     failed_at: str
     error: str
+
+
+@dataclass(frozen=True)
+class Highlight:
+    """A mark on a stretch of a recording (#67), as the library keeps it."""
+
+    id: int
+    recording_id: int
+    start_s: float
+    end_s: float
+    kind: str
+    note: str
+    # The words under it when it was made, for a list and an export to show.
+    text: str
+    made_at: str
 
 
 class LibraryError(RuntimeError):
@@ -565,6 +602,67 @@ class Library:
             )
         found = self.oom_memory()
         return next(m for m in found if m.model == model)
+
+    def highlights(self, recording_id: int) -> list[Highlight]:
+        """Every mark on the recording, in the order of the recording (#67)."""
+        rows = self._db.execute(
+            "SELECT id, recording_id, start_s, end_s, kind, note, text, made_at FROM highlights "
+            "WHERE recording_id = ? ORDER BY start_s, end_s, id",
+            (recording_id,),
+        ).fetchall()
+        return [Highlight(*r) for r in rows]
+
+    def highlight(self, highlight_id: int) -> Highlight | None:
+        """One mark by id, or None."""
+        row = self._db.execute(
+            "SELECT id, recording_id, start_s, end_s, kind, note, text, made_at FROM highlights "
+            "WHERE id = ?",
+            (highlight_id,),
+        ).fetchone()
+        return None if row is None else Highlight(*row)
+
+    def add_highlight(
+        self, recording_id: int, start_s: float, end_s: float, kind: str, note: str, text: str
+    ) -> Highlight:
+        """Make a mark on recording `recording_id` (#67).
+
+        Raises:
+            LibraryError: if there is no recording with this id.
+        """
+        if self.recording(recording_id) is None:
+            raise LibraryError(f"the library has no recording with id {recording_id}.")
+        with self._db:
+            cursor = self._db.execute(
+                "INSERT INTO highlights (recording_id, start_s, end_s, kind, note, text, made_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (recording_id, start_s, end_s, kind, note, text, _now()),
+            )
+        made = self.highlight(int(cursor.lastrowid or 0))
+        assert made is not None
+        return made
+
+    def set_highlight(
+        self, highlight_id: int, *, kind: str | None = None, note: str | None = None
+    ) -> Highlight | None:
+        """Change a mark's kind or note; None when there is no such mark."""
+        found = self.highlight(highlight_id)
+        if found is None:
+            return None
+        with self._db:
+            self._db.execute(
+                "UPDATE highlights SET kind = ?, note = ? WHERE id = ?",
+                (kind if kind is not None else found.kind,
+                 note if note is not None else found.note, highlight_id),
+            )
+        return self.highlight(highlight_id)
+
+    def remove_highlight(self, highlight_id: int) -> bool:
+        """Take a mark away; False when there was none."""
+        with self._db:
+            changed = self._db.execute(
+                "DELETE FROM highlights WHERE id = ?", (highlight_id,)
+            ).rowcount
+        return changed > 0
 
     def oom_memory(self) -> list[ModelMemory]:
         """Every model that ran out of memory on this machine, latest failure first."""

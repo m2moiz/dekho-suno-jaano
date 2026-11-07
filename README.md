@@ -555,6 +555,12 @@ dsj likho transcript.json -o transcript.srt [--format srt|vtt|txt]
 | `-o, --out PATH` | where the file goes; its suffix picks the format |
 | `--format FORMAT` | `srt`, `vtt` or `txt`, when the suffix does not say; wins over it |
 
+Marks made in the app (select words, Mark, pick a kind) export from the
+reader's menu as one Markdown list with timestamps, `recording.marks.md`:
+`- **1:05** question: why is it late`, the note on the line under it. Marks
+are kept on the recording by time, so a correction or a new run of the same
+recording leaves them on the same words.
+
 SRT is one cue per sentence, prefixed `SPEAKER_01: ` when speaker labelling
 ran. VTT is the same cues voiced with `<v SPEAKER_01>`, with a timestamp tag
 ahead of every word that starts later than the one before it, the only word

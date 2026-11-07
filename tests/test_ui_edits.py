@@ -292,7 +292,7 @@ def test_a_version_2_library_gains_last_edited_at_and_keeps_its_rows(
     assert again is not None
     assert again.last_edited_at == "2026-10-03T00:00:00+00:00"
     with sqlite3.connect(library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 8
 
 
 # -- speaker names (#243) ---------------------------------------------------------

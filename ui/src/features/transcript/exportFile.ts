@@ -7,6 +7,7 @@
 import { api } from "@/api/client";
 import { ApiError, fromBody } from "@/features/errors/appError";
 import { MEDIA } from "@/features/library/title";
+import { exportMarks } from "@/features/marks/marks";
 
 export type ExportFormat = "srt" | "vtt" | "txt";
 
@@ -36,11 +37,21 @@ export async function exportTranscript(transcriptId: number, format: ExportForma
   });
   if (!response.ok) throw new ApiError(fromBody(error, response, route));
   // A transcript with no words exports an empty file, and the client reads an empty body as no data.
-  const url = URL.createObjectURL(new Blob([data ?? ""], { type: "text/plain;charset=utf-8" }));
+  downloadText(`${fileStem(title)}.${format}`, data ?? "");
+}
+
+/** Hand the browser `text` to save as `name`. */
+export function downloadText(name: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${fileStem(title)}.${format}`;
+  link.download = name;
   link.click();
   // Let the download start before the address goes.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** The recording's marks as Markdown (#67), named after the recording. */
+export async function exportMarksFile(recordingId: number, title: string): Promise<void> {
+  downloadText(`${fileStem(title)}.marks.md`, await exportMarks(recordingId));
 }

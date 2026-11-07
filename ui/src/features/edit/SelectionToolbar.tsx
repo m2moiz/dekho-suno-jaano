@@ -2,6 +2,9 @@ import { type CSSProperties, type RefObject, useEffect, useLayoutEffect, useRef,
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { MARK_KINDS, type MarkKind } from "@/registries/markKinds";
+import { textOf } from "./correct";
 import type { PlayerControls } from "@/features/player/Player";
 import { PLAYER_HEIGHT } from "@/features/player/playhead";
 import { BAR_HEIGHT } from "@/features/shell/AppBar";
@@ -166,6 +169,8 @@ type Props = {
   onCorrect: (picked: Picked) => void;
   /** Open the timing strip for one word (#85). */
   onTiming: (word: number) => void;
+  /** Mark the selected words (#67): their stretch in seconds, the kind, and their text. */
+  onMark?: (mark: { start_s: number; end_s: number; kind: MarkKind; text: string }) => void;
 };
 
 /**
@@ -174,7 +179,7 @@ type Props = {
  * On a touch screen it sits just above the player rail, in thumb reach, with
  * 44 px targets. The Correct and Timing logic is #83's and #85's, unchanged.
  */
-export function SelectionToolbar({ editor, content, edit, selected, controls, onCorrect, onTiming }: Props) {
+export function SelectionToolbar({ editor, content, edit, selected, controls, onCorrect, onTiming, onMark }: Props) {
   const touch = useMediaQuery(TOUCH);
   const [box, setBox] = useState<Box | null>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -312,6 +317,25 @@ export function SelectionToolbar({ editor, content, edit, selected, controls, on
       >
         {allMuted ? "Unmute" : words > 1 ? `Mute ${words} words` : "Mute"}
       </Button>
+      {onMark !== undefined && (
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="ghost" className={tool} onMouseDown={keepSelection} />}>
+            Mark
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-44">
+            {MARK_KINDS.map((kind) => (
+              <DropdownMenuItem
+                key={kind.id}
+                className="min-h-11 sm:min-h-8"
+                onClick={() => onMark({ start_s: from, end_s: to, kind: kind.id, text: textOf(content, range.start, range.stop).trim() })}
+              >
+                <span aria-hidden className="inline-block size-3 rounded-sm" style={{ background: kind.swatch }} />
+                {kind.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {!oneTurn && <span className="px-2 text-xs text-muted-foreground">Correct works inside one turn</span>}
     </div>,
     document.body,
