@@ -31,6 +31,7 @@ import segno
 from fastapi.testclient import TestClient
 
 import dsj.ui.server
+from dsj.atomic import atomic_write_text
 from dsj.cli import main
 from dsj.ui.server import IDLE_S, create_app
 from dsj.ui.tailnet import TAILNET_IDLE_S, TAILNET_PORTS
@@ -45,6 +46,15 @@ FAKE = """\
 #!{python}
 import json, os, sys, time
 path = os.environ["FAKE_TAILSCALE_STATE"]
+def save(state):
+    # Whole or absent, never empty: the test process reads this file while
+    # this executable rewrites it (#333).
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, path)
+
+
 with open(path) as f:
     state = json.load(f)
 argv = sys.argv[1:]
@@ -62,8 +72,7 @@ elif len(argv) == 4 and argv[:2] == ["serve", "--bg"] and argv[2].startswith("--
     serve.setdefault("TCP", {{}})[port] = {{"HTTPS": True}}
     serve.setdefault("Web", {{}})[web_key] = {{"Handlers": {{"/": {{"Proxy": argv[3]}}}}}}
     state["serve"] = serve
-    with open(path, "w") as f:
-        json.dump(state, f)
+    save(state)
     # What tailscale prints while it waits, such as the URL to turn HTTPS on,
     # on whichever stream the state names (the real one's is unobserved).
     print(state["bg_says"], end="", flush=True,
@@ -81,8 +90,7 @@ elif len(argv) == 3 and argv[0] == "serve" and argv[1].startswith("--https=") an
 else:
     print("fake tailscale: unexpected command", argv, file=sys.stderr)
     code = 2
-with open(path, "w") as f:
-    json.dump(state, f)
+save(state)
 if out is not None or argv[-1:] == ["--json"]:
     print(json.dumps(out))
 sys.exit(code)
@@ -110,7 +118,9 @@ class FakeTailscale:
     def write(self, **changes: object) -> None:
         state = self.read() if self.state.exists() else {}
         state.update(changes)
-        self.state.write_text(json.dumps(state))
+        # Whole or absent, never empty: the fake executable reads this file
+        # while the test rewrites it, and the test reads while it does (#333).
+        atomic_write_text(self.state, json.dumps(state))
 
     @property
     def calls(self) -> list[list[str]]:
