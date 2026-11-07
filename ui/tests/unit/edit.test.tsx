@@ -17,6 +17,7 @@ import { type Content, Editor, type Entry, type Item, muteRange } from "../../sr
 import { listReply, saves, savedList } from "./editsServer";
 import { installHighlights, painted } from "./highlights";
 import { stubMatchMedia } from "./media";
+import { choose } from "./menus";
 
 function item(sourceStart: number, length: number, text: string, extra: Partial<Item> = {}): Item {
   return { kind: "item", source: "0", sourceStart, length, text, muted: false, confidence: 0.9, ...extra };
@@ -182,6 +183,8 @@ describe("TranscriptPage, editing", () => {
   };
   let saved: unknown[] = [];
   let registry: ReturnType<typeof installHighlights>;
+  let marks: Record<string, unknown>[] = [];
+  let removed: number[] = [];
 
   beforeEach(() => {
     registry = installHighlights();
@@ -195,6 +198,8 @@ describe("TranscriptPage, editing", () => {
     window.history.replaceState(null, "", "/?recording=2&transcript=7#t=a-token");
     takeToken();
     saved = [];
+    marks = [];
+    removed = [];
     fetchMock.mockReset();
     fetchMock.mockImplementation(async (request: Request) => {
       const path = new URL(request.url).pathname;
@@ -212,6 +217,25 @@ describe("TranscriptPage, editing", () => {
         return Response.json({ matches: [], words_searched: 3, lists: ["en", "ur", "hi", "pa"], recall: "recall: unmeasured" });
       }
       if (path === "/api/recording/2/waveform") return new Response(new Int8Array([-3, 3]));
+      // The recording's marks (#67): what the test put there, plus what the page makes.
+      if (path === "/api/recordings/2/highlights" && request.method === "GET") return Response.json(marks);
+      if (path === "/api/recordings/2/highlights" && request.method === "POST") {
+        const body = (await request.json()) as Record<string, unknown>;
+        const made = { id: marks.length + 1, recording_id: 2, note: "", made_at: "2026-11-07T00:00:00+00:00", ...body };
+        marks.push(made);
+        return Response.json(made, { status: 201 });
+      }
+      const mark = /^\/api\/highlights\/(\d+)$/.exec(path);
+      if (mark !== null && request.method === "DELETE") {
+        removed.push(Number(mark[1]));
+        marks = marks.filter((m) => m.id !== Number(mark[1]));
+        return new Response(null, { status: 204 });
+      }
+      if (mark !== null && request.method === "PATCH") {
+        const body = (await request.json()) as Record<string, unknown>;
+        marks = marks.map((m) => (m.id === Number(mark[1]) ? { ...m, ...body } : m));
+        return Response.json(marks.find((m) => m.id === Number(mark[1])));
+      }
       // The reader reads the review for its margin marks (Task 13); none here.
       if (path === "/api/transcripts/7/review") return Response.json({ document: null, transcript_sha: "sha-1" });
       return Response.json({ detail: "Not Found" }, { status: 404 });
@@ -249,6 +273,48 @@ describe("TranscriptPage, editing", () => {
     }
     throw new Error(`no paragraph holds ${word}`);
   }
+
+  it("marks the selected words, paints them, and keeps them on the recording (#67)", async () => {
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    fireEvent.click(await selectReady("there", "Mark"));
+    choose(await screen.findByRole("menuitem", { name: "Question" }));
+    await vi.waitFor(() => expect(marks).toHaveLength(1));
+    // "there." is one word: the full stop's token has no space before it (document.ts), and
+    // a word ends where the next begins (#60 step 6), so the mark runs to 0.88.
+    expect(marks[0]).toMatchObject({ start_s: 0.56, end_s: 0.88, kind: "question", text: "there." });
+    await vi.waitFor(() => expect(painted(registry, "dsj-mark-question")).toEqual(["there."]));
+    expect(painted(registry, "dsj-mark-key")).toEqual([]);
+  });
+
+  it("paints the marks the recording already has when the page opens, by their time (#67)", async () => {
+    marks = [{ id: 4, recording_id: 2, start_s: 0.2, end_s: 0.56, kind: "key", note: "", text: "Hello", made_at: "x" }];
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    await vi.waitFor(() => expect(painted(registry, "dsj-mark-key")).toEqual(["Hello"]));
+  });
+
+  it("lists the marks in a drawer from the menu, plays one, and takes one away (#67)", async () => {
+    marks = [
+      { id: 4, recording_id: 2, start_s: 0.2, end_s: 0.56, kind: "key", note: "the number", text: "Hello", made_at: "x" },
+      { id: 5, recording_id: 2, start_s: 1.2, end_s: 1.5, kind: "todo", note: "", text: "Fine", made_at: "x" },
+    ];
+    render(<TranscriptPage recording={2} transcript={7} />);
+    await screen.findByRole("toolbar", { name: "Edit" });
+    act(() => fireEvent.click(screen.getByRole("button", { name: "More" })));
+    const item = await screen.findByRole("menuitem", { name: /^Marks\d*$/ });
+    expect(item.textContent).toContain("2");
+    choose(item);
+    const list = await screen.findByRole("list", { name: "Marks" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Hello");
+    expect((within(rows[0] as HTMLElement).getByRole("textbox", { name: "Note" }) as HTMLInputElement).value).toBe("the number");
+    expect((within(rows[1] as HTMLElement).getByRole("combobox", { name: "Kind" }) as HTMLSelectElement).value).toBe("todo");
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Remove mark" }));
+    await vi.waitFor(() => expect(removed).toEqual([5]));
+    await vi.waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
+  });
 
   it("mutes the selected word, saves it, and Cmd+Z and Cmd+Shift+Z take it back and forth", async () => {
     render(<TranscriptPage recording={2} transcript={7} />);

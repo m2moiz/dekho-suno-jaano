@@ -457,7 +457,7 @@ def test_a_version_3_library_gains_titles_and_script_shares_and_keeps_its_rows(
         assert found.title is None
         assert library.set_title(rid, "Kept").title == "Kept"
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 8
 
 
 def test_a_version_3_library_is_copied_aside_once_before_it_is_upgraded(
@@ -601,7 +601,7 @@ def test_a_version_4_library_gains_script_shares_and_keeps_every_row_and_title(
     assert after["recordings"] == before["recordings"]
     assert [r[:-1] for r in after["transcripts"]] == [r[:-1] for r in before["transcripts"]]
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 8
 
 
 def test_a_new_transcript_row_carries_its_script_share(tmp_path: Path) -> None:
@@ -657,7 +657,7 @@ def test_a_version_5_library_gains_the_memory_table_and_keeps_its_rows(tmp_path:
         assert library.oom_memory() == []
         library.remember_oom("m", "MemoryError")
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 8
 
 
 def test_a_version_6_library_gains_the_playhead_column_and_keeps_its_rows(tmp_path: Path) -> None:
@@ -674,4 +674,4 @@ def test_a_version_6_library_gains_the_playhead_column_and_keeps_its_rows(tmp_pa
         assert found.playhead_s is None
         assert library.set_playhead(rid, 3.5).playhead_s == 3.5
     with sqlite3.connect(store.library_path()) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 8

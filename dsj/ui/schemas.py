@@ -132,6 +132,47 @@ class Recording(BaseModel):
     transcripts: list[Transcript]
 
 
+# The kinds a mark can be (#67), one list the page's picker, legend and list
+# share (ui/src/registries/markKinds.ts carries the same four with colours).
+type MarkKind = Literal["key", "question", "todo", "quote"]
+
+
+class Highlight(BaseModel):
+    """A mark on a stretch of a recording (#67): seconds, a kind, a note, the words under it."""
+
+    id: int
+    recording_id: int
+    start_s: float
+    end_s: float
+    kind: MarkKind
+    note: str
+    text: str
+    made_at: str
+
+
+class HighlightNew(BaseModel):
+    """A mark to make: the stretch, its kind, and the words under it as the page read them."""
+
+    start_s: float = Field(ge=0)
+    end_s: float = Field(ge=0)
+    kind: MarkKind
+    note: str = Field(default="", max_length=2000)
+    text: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def _ends_after_it_starts(self) -> HighlightNew:
+        if self.end_s < self.start_s:
+            raise ValueError("end_s must not be before start_s")
+        return self
+
+
+class HighlightUpdate(BaseModel):
+    """What a mark's kind or note becomes; a key left out keeps its value."""
+
+    kind: MarkKind | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class TitleUpdate(BaseModel):
     """A recording's title; empty or None takes it away, so the page derives one again."""
 

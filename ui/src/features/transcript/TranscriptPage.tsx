@@ -31,7 +31,10 @@ import { TOUCH, useMediaQuery } from "@/lib/media";
 import { reviewHref } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } from "./document";
-import { type ExportFormat, exportTranscript } from "./exportFile";
+import { type ExportFormat, exportMarksFile, exportTranscript } from "./exportFile";
+import { MarksPanel } from "@/features/marks/MarksPanel";
+import { useMarks } from "@/features/marks/marks";
+import { useMarksPaint } from "@/features/marks/paint";
 import { MoreMenu } from "./MoreMenu";
 import { Nameplate } from "./Nameplate";
 import { type SpeakerChoice, SpeakerMenu } from "./SpeakerMenu";
@@ -350,6 +353,11 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
   useUndoKeys(editor);
   useMutedPaint(edit, content, article);
   useCorrectedPaint(edit.reading, fixed, article);
+  // The recording's marks (#67), painted over the words they cover, by time.
+  const markError = useCallback((thrown: unknown, route: string) => showError(fromThrown(thrown, route)), []);
+  const highlights = useMarks(opened.recording.id);
+  useMarksPaint(edit.reading, highlights.list, article);
+  const [marking, setMarking] = useState(false);
   const review = reviewHref(opened.recording.id, transcriptId);
   const marks = useReviewMarks(transcriptId, editable.sha);
   // Review loads the edit list afresh, so it opens only once the server holds
@@ -415,6 +423,14 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
             onTiming={setTiming}
             extra={
               <>
+                <DropdownMenuItem className={tall} onClick={() => setMarking(true)}>
+                  Marks
+                  {highlights.list.length > 0 && (
+                    <span className="ml-auto rounded-full bg-secondary px-2 text-xs font-semibold text-secondary-foreground tabular-nums">
+                      {highlights.list.length}
+                    </span>
+                  )}
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>Export as edited</DropdownMenuLabel>
@@ -434,6 +450,16 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
                       {label}
                     </DropdownMenuItem>
                   ))}
+                  <DropdownMenuItem
+                    className={tall}
+                    onClick={() =>
+                      exportMarksFile(opened.recording.id, displayTitle(opened.recording)).catch((thrown: unknown) =>
+                        markError(thrown, `/api/recordings/${opened.recording.id}/highlights.md`),
+                      )
+                    }
+                  >
+                    Marks (Markdown)
+                  </DropdownMenuItem>
                 </DropdownMenuGroup>
               </>
             }
@@ -454,6 +480,9 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
         controls={controls}
         onCorrect={setCorrecting}
         onTiming={setTiming}
+        onMark={(mark) => {
+          highlights.add(mark).catch((thrown: unknown) => markError(thrown, `/api/recordings/${opened.recording.id}/highlights`));
+        }}
       />
       {correcting !== null && (
         <InlineCorrect
@@ -495,6 +524,15 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
           />
         </div>
       )}
+      <BleepDrawer
+        open={marking}
+        onOpenChange={setMarking}
+        returnFocus={more}
+        title="Marks"
+        description="The stretches you marked, by time. A mark stays on its words through corrections and a new run of the same recording."
+      >
+        <MarksPanel marks={highlights} controls={controls} onError={markError} />
+      </BleepDrawer>
       <BleepDrawer open={bleeping} onOpenChange={setBleeping} returnFocus={more}>
         <BleepPanel
           transcriptId={transcriptId}
