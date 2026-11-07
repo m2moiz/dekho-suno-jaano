@@ -142,13 +142,14 @@ carries more than you want:
 
 | Extra | Pulls in | For |
 |---|---|---|
-| `dsj[mac]` | `parakeet`, `whisper`, `diarize`, `ui` | The working Mac setup |
+| `dsj[mac]` | `parakeet`, `whisper`, `diarize`, `ui`, `mcp` | The working Mac setup |
 | `dsj[android]` | `sherpa` | The phone |
 | `dsj[parakeet]` | `parakeet-mlx` | The default engine. Apple Silicon and Metal only |
 | `dsj[whisper]` | `mlx-whisper`, `silero-vad` | Urdu, and anything else parakeet cannot read. About 250 MB, because it pulls torch. silero-vad is the speech detector `--roman-urdu` cuts the audio with |
 | `dsj[sherpa]` | `sherpa-onnx`, `sherpa-onnx-core` | The portable ONNX engine |
 | `dsj[diarize]` | `senko` | Speaker labels. CoreML, so macOS only |
 | `dsj[ui]` | `fastapi`, `uvicorn`, `segno` | `dsj ui`, the app in a browser; segno draws the phone QR code |
+| `dsj[mcp]` | `mcp` | `dsj-mcp`, the same three verbs as MCP tools for an agent; its SDK carries a web server, so it is not in a bare install |
 
 **To work on it instead**, clone and sync — but note that `uv sync` installs the
 command at `.venv/bin/dsj` and links it nowhere, so from a clone every
@@ -157,7 +158,7 @@ invocation is prefixed with `uv run`:
 ```bash
 git clone https://github.com/m2moiz/dekho-suno-jaano
 cd dekho-suno-jaano
-uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
+uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui --extra mcp
 uv run dsj suno recording.mov -o transcript.json
 ```
 
@@ -912,6 +913,23 @@ can fail. That cost is the point — see [docs/tooling-gaps.md](docs/tooling-gap
 | [docs/vlm-legibility.md](docs/vlm-legibility.md) | whether a small local VLM can read a screen frame. Two models, five prompts and budgets, one ground truth: 47% → 86%, and the blocker moves from legibility to speed |
 
 ---
+
+### dsj-mcp: the tools for an agent
+
+`dsj-mcp` (the `mcp` extra, which `dsj[mac]` carries) is the same core as MCP
+tools, over stdio, for an agent that would otherwise compose shell commands:
+
+| Tool | Calls | Returns |
+|---|---|---|
+| `suno` | `transcribe()`, the function `dsj suno` calls, with its defaults | where the JSON went, how many sentences, the speakers; progress while it runs |
+| `dekho` | `mark_video()` | where the marked transcript went, how many marks |
+| `dikhao` | `extract_frame()` | the image written |
+
+Register it with a host as a stdio server whose command is `dsj-mcp` (from a
+clone, `uv run dsj-mcp`). It imports `dsj` in process, so a first `suno` run
+downloads its model the way the terminal's does, and one transcription at a
+time holds the machine (the run lock above). The surface is tools only: the
+editing workspace is `dsj ui`.
 
 ## Why it is built this way
 

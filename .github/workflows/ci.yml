@@ -110,7 +110,7 @@ jobs:
       # will never run it.
       # --extra ui joined with `dsj ui` (#111): its tests start the real server,
       # and pyright must resolve fastapi to check dsj/ui/ at all.
-      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui
+      - run: uv sync --dev --extra parakeet --extra diarize --extra whisper --extra sherpa --extra ui --extra mcp
 
       # Node for the frontend checks inside `just check` (#155, #157, #114).
       # Exact tag, checked to resolve on 2026-10-02 (`gh api
