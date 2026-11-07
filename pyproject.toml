@@ -40,6 +40,7 @@ dependencies = [
 # capability nothing can invoke is a capability nobody has.
 [project.scripts]
 dsj = "dsj.cli:main"
+dsj-mcp = "dsj.mcp:main"
 
 # An installed copy has no repository beside it. Without these, `pip show dsj`
 # on someone else's machine points nowhere.
@@ -76,7 +77,7 @@ parakeet = [
 # both engines and the diarizer because that is the working Mac setup; android
 # arrives with the sherpa engine.
 mac = [
-    "dsj[parakeet,whisper,diarize,ui]",
+    "dsj[parakeet,whisper,diarize,ui,mcp]",
 ]
 # The phone bundle. No diarizer: senko is CoreML and there is no Android path,
 # so transcripts there are unlabelled by design rather than by accident.
@@ -104,6 +105,12 @@ ui = [
     # no dependencies on 3.10+, one py3-none-any wheel; pinned exactly.
     "segno==1.6.6",
     "uvicorn>=0.53.0",
+]
+# The MCP server (#76, dsj/mcp.py, the `dsj-mcp` entry point). An extra, not
+# core: the SDK brings starlette and uvicorn, and a bare install carries no web
+# server (tests/test_ui_server.py). It is part of the Mac bundle above.
+mcp = [
+    "mcp>=2.3",
 ]
 
 [dependency-groups]
