@@ -14,7 +14,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from dsj.ui.jobs import Jobs, engine_choices
+from dsj.ui.jobs import AlreadyOver, Jobs, engine_choices
 from dsj.ui.readiness import readiness
 from dsj.ui.routes.marks import entries
 from dsj.ui.schemas import (
@@ -92,6 +92,24 @@ def transcribe(recording_id: str, settings: TranscribeRequest, request: Request)
     if started is None:
         raise HTTPException(404, f"There is no recording {recording_id!r} in the library.")
     return Job.model_validate(started.view())
+
+
+@router.post("/jobs/{job_id}/cancel", status_code=202)
+def cancel_job(job_id: str, request: Request) -> Job:
+    """Ask a running transcription to stop (#72); answered once the stop is asked, not landed.
+
+    The run stops at its next report, which for the chunk engines is after the
+    chunk in flight is banked. A job that is over already is 409, by name.
+    """
+    asked = None
+    if job_id.isascii() and job_id.isdigit():
+        try:
+            asked = _jobs(request).cancel(int(job_id))
+        except AlreadyOver as exc:
+            raise HTTPException(409, str(exc)) from None
+    if asked is None:
+        raise HTTPException(404, f"There is no transcription job {job_id!r}.")
+    return Job.model_validate(asked.view())
 
 
 @router.post("/transcripts/{transcript_id}/render", status_code=202)

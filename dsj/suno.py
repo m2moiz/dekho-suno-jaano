@@ -1056,6 +1056,20 @@ class Terminated(KeyboardInterrupt):
     """
 
 
+class Cancelled(KeyboardInterrupt):
+    """A stop asked for from the app (#72), raised where the run is, at its next report.
+
+    A KeyboardInterrupt for the same reason Terminated is one: everything
+    written to survive Ctrl-C survives a stop. The caller's `on_progress`
+    raises it (dsj/ui/jobs.py Job.stop_point), so it lands at the run's next
+    report: for the chunk engines after the chunk in flight is banked, so the
+    next run resumes from it, and during extraction at ffmpeg's next progress
+    line, which closes its pipe and ends it (dsj/media.py _reap). The report
+    is written before the callback, so the `interrupted` document says where
+    the run had got to.
+    """
+
+
 def roman_urdu(
     engine: str, language: str | None, prompt: str | None
 ) -> tuple[str, str, str, float]:
@@ -1154,6 +1168,9 @@ def transcribe(
     `model_id` defaults to whichever engine's model, so it is usually left
     alone.
 
+    An `on_progress` that raises Cancelled stops the run at that report (#72):
+    the status file then says `interrupted` with `cancel` for its signal.
+
     A run that raises ends its status file on `{"state": "failed", "pid",
     "error"}`, and one stopped by Ctrl-C or `kill` on `{"state":
     "interrupted", "pid", "signal"}` plus where it had got to, then the
@@ -1191,7 +1208,11 @@ def transcribe(
         stopped: dict[str, object] = {
             "state": "interrupted",
             "pid": os.getpid(),
-            "signal": "SIGTERM" if isinstance(exc, Terminated) else "SIGINT",
+            "signal": (
+                "cancel" if isinstance(exc, Cancelled)
+                else "SIGTERM" if isinstance(exc, Terminated)
+                else "SIGINT"
+            ),
         }
         # Where it had got to, with the phase that number belongs to: an
         # extracting frame's audio_done_s counts extraction, not transcript.

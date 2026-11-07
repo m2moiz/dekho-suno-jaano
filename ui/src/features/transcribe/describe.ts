@@ -13,8 +13,10 @@ const PHASES: Record<Job["state"], string> = {
   retrying: "Reading unclear stretches again",
   diarizing: "Labelling speakers",
   saving: "Finishing",
+  stopping: "Stopping",
   done: "Transcribed",
   failed: "Failed",
+  cancelled: "Stopped",
 };
 
 export function phaseLabel(job: Job): string {
@@ -27,6 +29,16 @@ export function hasFraction(job: Job): boolean {
   // ffmpeg reports while extracting and a retry counts its seconds; the model
   // load, the labelling pass (senko has no callback) and the save say nothing.
   return job.state === "extracting" || job.state === "retrying";
+}
+
+/**
+ * What a stop costs, said before it is asked (#72): the chunk engines bank a
+ * checkpoint after every chunk, whisper nothing until its decode is over.
+ */
+export function stopCost(job: Job): string {
+  return job.resumable
+    ? "Stops after the chunk being read; the next run picks up from there."
+    : `Stops when ${job.engine} next reports; a run stopped before its decode is over starts again.`;
 }
 
 /** The line under the bar: how much audio, how fast, how long left. */
