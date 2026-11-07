@@ -23,6 +23,7 @@ import { LibraryPage } from "../../src/features/library/LibraryPage";
 import { displayTitle } from "../../src/features/library/title";
 import type { RecordingRow, TranscriptRow } from "../../src/features/library/types";
 import { takeToken } from "../../src/features/session/session";
+import { forgetJobs } from "../../src/features/transcribe/jobs";
 import { stubMatchMedia } from "./media";
 
 function transcript(overrides: Partial<TranscriptRow>): TranscriptRow {
@@ -81,13 +82,13 @@ const ROWS: RecordingRow[] = [
 // A machine with everything a run needs (#70); a test hands in its shortfalls.
 const READY = { tools: [], engines: [], models: [], ready: true };
 
-function serve(rows: unknown, status = 200, readiness: unknown = READY) {
+function serve(rows: unknown, status = 200, readiness: unknown = READY, jobs: unknown = []) {
   fetchMock.mockReset();
   // Each row asks once for the jobs already running (#113); none are. The
   // page asks once whether the machine is ready for a first run (#70).
   fetchMock.mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
-    if (path === "/api/jobs") return Response.json([]);
+    if (path === "/api/jobs") return Response.json(jobs);
     if (path === "/api/readiness") return Response.json(readiness);
     return Response.json(rows, { status });
   });
@@ -102,6 +103,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  act(() => forgetJobs());
   act(() => dismissError());
 });
 
@@ -535,5 +537,38 @@ describe("the first-run screen (#70)", () => {
     render(<LibraryPage />);
     await screen.findByRole("list", { name: "Recordings" });
     expect(screen.queryByRole("status", { name: "Before the first run" })).toBeNull();
+  });
+});
+
+describe("the batch banner (#90)", () => {
+  const job = (id: number, recording_id: number, state: string, error: string | null = null) => ({
+    id, recording_id, engine: "parakeet", model: "m", language: null, reports_progress: true,
+    started_at: "2026-11-07T01:00:00+00:00", state, fraction: 0.5, audio_done_s: 100, audio_total_s: 200,
+    elapsed_s: 5, speed: 20, eta_s: 5, stalled_s: null, error, transcript_id: null, notes: [], exports: [], resumable: true,
+  });
+
+  it("says how far the batch is and which file is on, then what came of it", async () => {
+    act(() => forgetJobs());
+    serve(ROWS, 200, READY, [job(1, 2, "done"), job(2, 1, "running"), job(3, 2, "queued")]);
+    render(<LibraryPage />);
+    const banner = await screen.findByRole("status", { name: "Batch" });
+    expect(banner.textContent).toContain("Transcribing 2 of 3: standup");
+    expect(banner.textContent).toContain("1 done · 1 waiting");
+    cleanup();
+    act(() => forgetJobs());
+    serve(ROWS, 200, READY, [job(1, 2, "done"), job(2, 1, "failed", "RuntimeError: the model exploded"), job(3, 2, "done")]);
+    render(<LibraryPage />);
+    const summary = await screen.findByRole("status", { name: "Batch finished" });
+    expect(summary.textContent).toContain("2 transcribed, 1 failed");
+    expect(summary.textContent).toContain("standup: RuntimeError: the model exploded");
+    fireEvent.click(within(summary).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status", { name: "Batch finished" })).toBeNull();
+  });
+
+  it("stays away for one job alone, whose row says everything", async () => {
+    serve(ROWS, 200, READY, [job(1, 2, "running")]);
+    render(<LibraryPage />);
+    await screen.findByRole("list", { name: "Recordings" });
+    expect(screen.queryByRole("status", { name: "Batch" })).toBeNull();
   });
 });

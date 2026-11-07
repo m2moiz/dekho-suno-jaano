@@ -322,6 +322,15 @@ describe("a job on its recording's row", () => {
     expect(within(status).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("33");
   });
 
+  it("says a queued job is waiting its turn, with Stop at hand (#90)", async () => {
+    serve({ "GET /api/jobs": () => Response.json([job({ state: "queued", fraction: 0 })]) });
+    render(<TranscribeControl recording={RECORDING} />);
+    const status = await screen.findByRole("status", { name: "Transcription" });
+    expect(status.textContent).toContain("Waiting its turn with parakeet");
+    expect(within(status).getByRole("progressbar").getAttribute("aria-valuenow")).toBeNull();
+    expect(within(status).getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
   it("says so in words when whisper will report nothing until it is done", async () => {
     serve({
       "GET /api/jobs": () => Response.json([job({ engine: "whisper", reports_progress: false, fraction: 0 })]),

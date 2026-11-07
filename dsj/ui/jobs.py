@@ -46,6 +46,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -70,6 +71,10 @@ from dsj.whisper import DEFAULT_WHISPER_MODEL
 # Each engine's own default, which the page's model box starts on. Not what
 # `dsj suno` fills in: it hands sherpa parakeet's id, which sherpa cannot load
 # (#46). The page offers what each engine module itself names.
+# How long a job whose turn has come waits for the machine lock the job before
+# it just released, before it fails with the lock's own refusal (#90).
+TURN_WAIT_S = 30.0
+
 DEFAULT_MODELS = {
     "parakeet": PARAKEET_MODEL,
     "whisper": DEFAULT_WHISPER_MODEL,
@@ -221,6 +226,12 @@ class Job:
     notes: list[str] = field(default_factory=list[str])
     # What became of each auto-export once the run was done (#132).
     exports: list[ExportResult] = field(default_factory=list[ExportResult])
+    # Waiting its turn behind another job of this server (#90): the lock is
+    # taken when the worker reaches it, not when it was asked for.
+    queued: bool = False
+    # The server's hold while the job waits, so a closed tab does not stop
+    # the server with jobs still in the line; the worker closes it.
+    waiting: contextlib.ExitStack | None = None
     # Set by a stop from the page (#72); the run sees it at its next report.
     cancel: threading.Event = field(default_factory=threading.Event)
 
@@ -243,7 +254,7 @@ class Job:
         # Absent until the run's first frame. Written by rename, never torn.
         with contextlib.suppress(FileNotFoundError):
             frame = json.loads(self.status_path.read_text())
-        state = self.outcome or frame.get("state", "starting")
+        state = self.outcome or frame.get("state", "queued" if self.queued else "starting")
         if self.outcome is None and state in ("done", "failed", "interrupted"):
             state = "saving"
         elif self.outcome is None and self.cancel.is_set():
@@ -380,6 +391,10 @@ class Jobs:
         self._queue: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._worker: threading.Thread | None = None
         self._start_lock = threading.Lock()
+        # Jobs asked for and not yet over, running or in line (#90). While one
+        # is, a new job waits behind it instead of being refused; the machine
+        # lock is then taken by the worker when the job's turn comes.
+        self._active = 0
         # Status files only this server reads; nothing in them outlives a run.
         # Made by the first job, not here: an app built and never served (`just
         # api`, a test) has nothing to close it, and 20,434 such folders filled
@@ -439,17 +454,18 @@ class Jobs:
             if self._status_dir is None:
                 self._status_dir = Path(tempfile.mkdtemp(prefix="dsj-ui-jobs-"))
             status_path = self._status_dir / f"{job_id}.status.json"
-            # Taken here, so a refusal is this request's answer; released by the
-            # worker when the run is over.
-            held = runlock.acquire(
-                {
-                    "kind": "transcription",
-                    "pid": os.getpid(),
-                    "out": str(out),
-                    "status": str(status_path),
-                    "media": str(media),
-                }
-            )
+            holder = {
+                "kind": "transcription",
+                "pid": os.getpid(),
+                "out": str(out),
+                "status": str(status_path),
+                "media": str(media),
+            }
+            # With nothing of ours in flight the lock is taken here, so a
+            # refusal (a terminal run holds the machine) is this request's
+            # answer. Behind a job of ours the new one waits its turn (#90)
+            # and the worker takes the lock when it gets there.
+            held = runlock.acquire(holder) if self._active == 0 else None
             job = Job(
                 id=job_id,
                 recording_id=recording_id,
@@ -468,11 +484,16 @@ class Jobs:
                     else None
                 ),
             )
+            if held is None:
+                job.queued = True
+                job.waiting = contextlib.ExitStack()
+                job.waiting.enter_context(self._hold())
             self._jobs[job_id] = job
+            self._active += 1
             run_arguments = arguments | {
                 "out": out, "status_path": status_path, "on_progress": job.stop_point,
             }
-            self._put(lambda: self._run(job, run_arguments, held))
+            self._put(lambda: self._run(job, run_arguments, held, holder))
         return job
 
     def cancel(self, job_id: int) -> Job | None:
@@ -653,7 +674,25 @@ class Jobs:
             print(f"the out-of-memory failure of {model} was not recorded in the library: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr)
 
-    def _run(self, job: Job, arguments: dict[str, Any], held: int) -> None:
+    def _take_turn(self, holder: dict[str, Any]) -> int:
+        """The machine lock for a job whose turn has come (#90).
+
+        The job before it let go a moment ago, so this normally succeeds at
+        once; the retry covers the window in which a terminal run could slip
+        in, and gives up with its refusal after TURN_WAIT_S.
+        """
+        deadline = time.monotonic() + TURN_WAIT_S
+        while True:
+            try:
+                return runlock.acquire(holder)
+            except runlock.AlreadyRunning:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+
+    def _run(
+        self, job: Job, arguments: dict[str, Any], held: int | None, holder: dict[str, Any]
+    ) -> None:
         notes = _Notes(job)
         log = logging.getLogger("dsj.suno")
         log.addHandler(notes)
@@ -663,6 +702,15 @@ class Jobs:
         stopped = False
         try:
             with self._hold(), awake.held("transcription"):
+                job.queued = False
+                if job.waiting is not None:
+                    job.waiting.close()
+                    job.waiting = None
+                # Stopped while it waited (#72, #90): out of the line, never run.
+                if job.cancel.is_set():
+                    raise suno.Cancelled
+                if held is None:
+                    held = self._take_turn(holder)
                 if job.roman_twin is not None:
                     keep_earlier_roman_run(job.out, job.roman_twin)
                 # Looked up at call time, so a test can stand in for it.
@@ -688,7 +736,10 @@ class Jobs:
                 self._remember_oom(job.model, error)
         finally:
             log.removeHandler(notes)
-            os.close(held)
+            if held is not None:
+                os.close(held)
+            with self._start_lock:
+                self._active -= 1
         # Published only after the lock is let go: a page that sees this job
         # finished and starts the next one at once must not be refused by it.
         job.transcript_id = transcript_id

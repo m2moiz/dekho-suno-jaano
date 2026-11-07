@@ -7,6 +7,7 @@ import { durationLabel } from "@/features/library/describe";
 import type { Job } from "./jobs";
 
 const PHASES: Record<Job["state"], string> = {
+  queued: "Waiting its turn",
   starting: "Loading the model",
   extracting: "Reading the audio out of the file",
   running: "Transcribing",

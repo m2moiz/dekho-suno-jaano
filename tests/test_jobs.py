@@ -416,7 +416,7 @@ def test_whisper_without_roman_urdu_says_progress_comes_only_at_the_end(
 # -- what is refused, before anything runs -------------------------------------
 
 
-def test_a_second_job_is_refused_naming_the_first_ones_pid(
+def test_a_second_job_waits_behind_the_first_and_the_terminal_is_refused(
     engine: Callable[..., StubEngine], recording: tuple[Path, int], tmp_path: Path
 ) -> None:
     stub = engine(held=True)
@@ -424,16 +424,16 @@ def test_a_second_job_is_refused_naming_the_first_ones_pid(
     path = f"/api/recordings/{recording[1]}/transcribe"
     assert client.post(path, json={"diarize": False}).status_code == 202
 
+    # A second from the page waits its turn (#90) ...
     again = client.post(path, json={"diarize": False})
-    assert again.status_code == 409, again.text
-    assert again.json()["error"] == "AlreadyRunning"
-    assert f"pid {os.getpid()}" in again.json()["message"]
-    # And the terminal is refused too, before anything loads.
+    assert again.status_code == 202, again.text
+    assert again.json()["state"] == "queued"
+    # ... and the terminal is refused, before anything loads, naming the first's pid.
     assert cli.main(["suno", str(recording[0]), "-o", str(tmp_path / "t.json")]) == 75
 
     stub.release_all()
     assert last_job(client, finished)["state"] == "done"
-    assert len(client.get("/api/jobs").json()) == 1
+    assert [j["state"] for j in client.get("/api/jobs").json()] == ["done", "done"]
 
 
 def test_a_job_is_refused_while_a_terminal_run_holds_the_machine(
