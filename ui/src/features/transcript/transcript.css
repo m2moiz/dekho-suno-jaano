@@ -238,3 +238,23 @@
   text-decoration-thickness: 1.5px;
   text-underline-offset: 0.3em;
 }
+
+/* Marks a person made (#67), one band a kind, flat (::highlight() has no
+ * radius). Pale in light mode and deep in dark mode, so body text keeps its
+ * contrast; the same values as the swatches in ui/src/registries/markKinds.ts. */
+::highlight(dsj-mark-key) {
+  background-color: light-dark(#f6e3a1, #6b5a16);
+  color: var(--foreground);
+}
+::highlight(dsj-mark-question) {
+  background-color: light-dark(#cfe3f7, #1f4062);
+  color: var(--foreground);
+}
+::highlight(dsj-mark-todo) {
+  background-color: light-dark(#d8f0cf, #2a5a28);
+  color: var(--foreground);
+}
+::highlight(dsj-mark-quote) {
+  background-color: light-dark(#ecd9f2, #4d2a5c);
+  color: var(--foreground);
+}

@@ -11,6 +11,9 @@ type Props = {
   /** Where focus goes when the drawer closes: the menu button that opened it. */
   returnFocus: RefObject<HTMLElement | null>;
   children: ReactNode;
+  /** The drawer's heading; Bleep's unless another panel borrows the drawer (the marks, #67). */
+  title?: string;
+  description?: ReactNode;
 };
 
 /**
@@ -24,7 +27,7 @@ type Props = {
  * close it. On the phone it is a modal bottom sheet over a flat dim, with
  * focus held inside it; its header stays put and its list scrolls.
  */
-export function BleepDrawer({ open, onOpenChange, returnFocus, children }: Props) {
+export function BleepDrawer({ open, onOpenChange, returnFocus, children, title = "Bleep", description }: Props) {
   const touch = useMediaQuery(TOUCH);
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={touch} disablePointerDismissal={!touch}>
@@ -37,10 +40,12 @@ export function BleepDrawer({ open, onOpenChange, returnFocus, children }: Props
         className={touch ? "max-h-[60dvh] overflow-hidden" : "overflow-hidden data-[side=right]:sm:max-w-xl"}
       >
         <SheetHeader className="shrink-0 pr-14">
-          <SheetTitle>Bleep</SheetTitle>
+          <SheetTitle>{title}</SheetTitle>
           {/* No Cmd+Z where there is no keyboard to press it (critique 7 Oct, P2-7). */}
           <SheetDescription>
-            Words your lists match. Muting is an edit, so {touch ? "Undo" : "Cmd+Z"} takes it back; the recording is never changed.
+            {description ?? (
+              <>Words your lists match. Muting is an edit, so {touch ? "Undo" : "Cmd+Z"} takes it back; the recording is never changed.</>
+            )}
           </SheetDescription>
         </SheetHeader>
         {/* The sheet's own close button is 28 px; this one is the 44 px a thumb needs (F15). */}
