@@ -9,6 +9,7 @@ import { ApiError, fromBody, fromThrown, showError } from "@/features/errors/app
 import { AppBar } from "@/features/shell/AppBar";
 import { ReadinessNotice } from "@/features/shell/Readiness";
 import { FIELD_EDGE } from "@/features/shell/field";
+import { BatchBanner } from "@/features/transcribe/BatchBanner";
 import { useFinishedCount } from "@/features/transcribe/jobs";
 import { fold } from "@/lib/fold";
 import { fileName } from "./describe";
@@ -158,6 +159,8 @@ export function LibraryPage() {
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-3 px-3 py-6 sm:px-6">
         {/* What a first run still needs, with the fix, before any run is started (#70). */}
         <ReadinessNotice />
+        {/* How far a batch of transcriptions is, and what came of it (#90). */}
+        <BatchBanner rows={loaded.state === "ready" ? loaded.rows : []} />
         {loaded.state === "loading" ? (
           late && (
             <ul

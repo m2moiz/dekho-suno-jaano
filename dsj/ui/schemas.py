@@ -68,8 +68,9 @@ type EngineName = Literal["parakeet", "whisper", "sherpa"]
 # transcribe() ends on), plus the page's own `starting` and `saving`
 # (dsj/ui/jobs.py, Job.view).
 # `stopping` is a stop asked for and not yet landed; `cancelled` one that has (#72).
+# `queued` is a job waiting its turn behind another of this server's (#90).
 type JobState = Literal[
-    "starting", "extracting", "running", "retrying", "diarizing", "saving", "stopping",
+    "queued", "starting", "extracting", "running", "retrying", "diarizing", "saving", "stopping",
     "done", "failed", "cancelled",
 ]
 

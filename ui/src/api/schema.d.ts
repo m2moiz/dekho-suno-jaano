@@ -823,7 +823,7 @@ export interface components {
             resumable: boolean;
         };
         /** @enum {string} */
-        JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "stopping" | "done" | "failed" | "cancelled";
+        JobState: "queued" | "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "stopping" | "done" | "failed" | "cancelled";
         /** @enum {string} */
         LanguageTag: "urdu" | "mixed" | "english";
         /**
