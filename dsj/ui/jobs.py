@@ -76,6 +76,10 @@ DEFAULT_MODELS = {
     "sherpa": SHERPA_MODEL,
 }
 
+class AlreadyOver(RuntimeError):
+    """A stop asked of a job that is over (#72). Nothing has changed."""
+
+
 class NotStarted(RuntimeError):
     """The page asked for a transcription that was refused. Nothing ran and nothing was written."""
 
@@ -217,6 +221,13 @@ class Job:
     notes: list[str] = field(default_factory=list[str])
     # What became of each auto-export once the run was done (#132).
     exports: list[ExportResult] = field(default_factory=list[ExportResult])
+    # Set by a stop from the page (#72); the run sees it at its next report.
+    cancel: threading.Event = field(default_factory=threading.Event)
+
+    def stop_point(self, _progress: object, _state: str) -> None:
+        """The run's `on_progress`: raises Cancelled once a stop was asked for (#72)."""
+        if self.cancel.is_set():
+            raise suno.Cancelled
 
     def view(self) -> dict[str, Any]:
         """This job as the page reads it: the run's own last frame, and the outcome.
@@ -235,6 +246,8 @@ class Job:
         state = self.outcome or frame.get("state", "starting")
         if self.outcome is None and state in ("done", "failed", "interrupted"):
             state = "saving"
+        elif self.outcome is None and self.cancel.is_set():
+            state = "stopping"
         return {
             "id": self.id,
             "recording_id": self.recording_id,
@@ -255,6 +268,10 @@ class Job:
             "transcript_id": self.transcript_id,
             "notes": list(self.notes),
             "exports": [e.view() for e in self.exports],
+            # The chunk engines bank a checkpoint after every chunk, so a stop
+            # costs at most one chunk; whisper banks nothing until its decode is
+            # over, so a stop before that starts over (dsj/suno.py).
+            "resumable": self.engine != "whisper",
         }
 
 
@@ -452,8 +469,24 @@ class Jobs:
                 ),
             )
             self._jobs[job_id] = job
-            run_arguments = arguments | {"out": out, "status_path": status_path}
+            run_arguments = arguments | {
+                "out": out, "status_path": status_path, "on_progress": job.stop_point,
+            }
             self._put(lambda: self._run(job, run_arguments, held))
+        return job
+
+    def cancel(self, job_id: int) -> Job | None:
+        """Ask job `job_id` to stop at its next report (#72); None when there is no such job.
+
+        Raises:
+            AlreadyOver: the job had finished, failed or stopped already.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        if job.outcome is not None:
+            raise AlreadyOver(f"job {job_id} is already {job.outcome}; there is nothing to stop.")
+        job.cancel.set()
         return job
 
     def _put(self, task: Callable[[], None]) -> None:
@@ -627,6 +660,7 @@ class Jobs:
         log.setLevel(logging.INFO)
         transcript_id: int | None = None
         error: str | None = None
+        stopped = False
         try:
             with self._hold(), awake.held("transcription"):
                 if job.roman_twin is not None:
@@ -639,6 +673,11 @@ class Jobs:
                 # asked for. Never raises past the job (#132).
                 job.exports = auto_export(row.id, arguments["media"])
             transcript_id = row.id
+        except suno.Cancelled:
+            # The stop the page asked for (#72). The run wrote `interrupted`
+            # with the stop named, and left its checkpoint where the next run
+            # finds it; nothing failed.
+            stopped = True
         except Exception as exc:
             # The run has already written `failed` to its status file (#103);
             # this also covers a failure after it, writing the library row.
@@ -654,4 +693,4 @@ class Jobs:
         # finished and starts the next one at once must not be refused by it.
         job.transcript_id = transcript_id
         job.error = error
-        job.outcome = "done" if error is None else "failed"
+        job.outcome = "cancelled" if stopped else "done" if error is None else "failed"

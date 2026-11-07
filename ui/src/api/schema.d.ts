@@ -293,6 +293,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Job
+         * @description Ask a running transcription to stop (#72); answered once the stop is asked, not landed.
+         *
+         *     The run stops at its next report, which for the chunk engines is after the
+         *     chunk in flight is banked. A job that is over already is 409, by name.
+         */
+        post: operations["cancel_job_api_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/transcripts/{transcript_id}/render": {
         parameters: {
             query?: never;
@@ -796,9 +819,11 @@ export interface components {
             notes: string[];
             /** Exports */
             exports: components["schemas"]["ExportResult"][];
+            /** Resumable */
+            resumable: boolean;
         };
         /** @enum {string} */
-        JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "done" | "failed";
+        JobState: "starting" | "extracting" | "running" | "retrying" | "diarizing" | "saving" | "stopping" | "done" | "failed" | "cancelled";
         /** @enum {string} */
         LanguageTag: "urdu" | "mixed" | "english";
         /**
@@ -1604,6 +1629,37 @@ export interface operations {
                 "application/json": components["schemas"]["TranscribeRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_job_api_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             202: {

@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { readContent, speakerLabels } from "../../src/features/edit/readContent";
-import { governingParagraph, newSpeakerLabel, speakerAt, speakerChange } from "../../src/features/edit/speaker";
+import { governingParagraph, mergeSpeakers, newSpeakerLabel, speakerAt, speakerChange } from "../../src/features/edit/speaker";
 import { type Content, Editor, type Entry, type Item } from "../../src/lib/editOps";
 import { lint } from "../../src/lib/linter";
 
@@ -121,5 +121,42 @@ describe("who speaks where", () => {
     const after = apply(CONTENT, 6, 12, "SPEAKER_02");
     expect(speakerLabels(after, LEGEND)).toEqual(["SPEAKER_00", "SPEAKER_01", "SPEAKER_02"]);
     expect(speakerLabels([para(null), item(0, 1, " hi")], undefined)).toBeUndefined();
+  });
+});
+
+describe("mergeSpeakers (#71)", () => {
+  // SPEAKER_01 speaks twice, around SPEAKER_00's second turn: a merge moves both.
+  const SPLIT: Content = [
+    para("SPEAKER_00"),
+    item(0, 0.2, ""),
+    item(0.2, 0.3, " alpha"),
+    para("SPEAKER_01"),
+    item(0.5, 0.1, ""),
+    item(0.6, 0.3, " bravo"),
+    para("SPEAKER_00"),
+    item(0.9, 0.1, ""),
+    item(1.0, 0.3, " charlie"),
+    para("SPEAKER_01"),
+    item(1.3, 0.7, ""),
+    item(2.0, 0.4, " delta"),
+  ];
+
+  it("gives every turn of one speaker to another, as one undo step", () => {
+    const editor = new Editor(SPLIT, { check: (c) => lint(c, SOURCES) });
+    expect(mergeSpeakers(editor, "SPEAKER_01", "SPEAKER_00")).toBe(2);
+    expect(turns(editor.content)).toEqual([["SPEAKER_00", " alpha bravo charlie delta"]]);
+    expect(editor.content.filter((e) => e.kind === "paragraph" && e.speaker === "SPEAKER_01")).toHaveLength(0);
+    expect(editor.undoLabel()).not.toBeNull();
+    expect(editor.undo()).toBe(true);
+    expect(editor.content).toEqual(SPLIT);
+    expect(editor.canUndo()).toBe(false);
+  });
+
+  it("moves nothing, and leaves no undo step, when the speaker says nothing", () => {
+    const editor = new Editor(SPLIT, { check: (c) => lint(c, SOURCES) });
+    expect(mergeSpeakers(editor, "SPEAKER_07", "SPEAKER_00")).toBe(0);
+    expect(editor.canUndo()).toBe(false);
+    expect(mergeSpeakers(editor, "SPEAKER_00", "SPEAKER_00")).toBe(0);
+    expect(editor.canUndo()).toBe(false);
   });
 });
