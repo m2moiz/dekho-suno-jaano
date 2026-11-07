@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { readTheme, saveTheme, THEMES, type Theme } from "@/features/theme/theme";
+import { ExportSettings } from "./ExportSettings";
 import { FIELD_BUTTON } from "./field";
 
 const LABELS: Record<Theme, string> = { light: "Light", dark: "Dark", system: "Same as the Mac" };
@@ -56,6 +57,7 @@ export function SettingsMenu({ extra }: { extra?: ReactNode }) {
             ))}
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
+        <ExportSettings />
         {extra}
       </DropdownMenuContent>
     </DropdownMenu>

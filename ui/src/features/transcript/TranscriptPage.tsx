@@ -34,8 +34,10 @@ import { parseTranscript, read, type Reading, TIME_EPS_S, type TranscriptDoc } f
 import { type ExportFormat, exportTranscript } from "./exportFile";
 import { MoreMenu } from "./MoreMenu";
 import { Nameplate } from "./Nameplate";
+import { type SpeakerChoice, SpeakerMenu } from "./SpeakerMenu";
+import { mergeSpeakers, newSpeakerLabel, speakerChange } from "@/features/edit/speaker";
 import { useReaderKeys } from "./readerKeys";
-import type { Names } from "./speakers";
+import { displayName, type Names } from "./speakers";
 import { type ReviewMarks, type ReviewState, TranscriptView } from "./TranscriptView";
 import { UnsureNav } from "./UnsureNav";
 import { VersionPicker } from "./VersionPicker";
@@ -272,10 +274,41 @@ function EditablePage({ opened, editable, transcriptId, navigate }: { opened: Op
     },
     [editable.names, transcriptId, saveNames],
   );
-  // Stable between renames, so the memoised TranscriptView redraws only when a name changes.
+  // The menu beside the nameplate (#71): every speaker with a turn, named as
+  // the page names them. Read from the edit list as it stands, so a speaker
+  // added or merged away a moment ago is offered, or not, at once.
+  const latest = useRef(edit);
+  latest.current = edit;
+  const choices = useMemo<SpeakerChoice[]>(() => {
+    const { speakers, turns } = edit.reading;
+    const used = new Set(turns.map((t) => t.speaker));
+    return speakers.flatMap((label, i) => (used.has(i) ? [{ label, name: displayName(speakers, names, i) ?? label }] : []));
+  }, [edit, names]);
+  // Give one turn to a speaker, or to someone new: one edit, one undo step.
+  const say = useCallback(
+    (turn: number, to: string | "new") => {
+      const { reading, first, stop } = latest.current;
+      const t = reading.turns[turn];
+      if (t === undefined || t.count === 0) return;
+      const label = to === "new" ? newSpeakerLabel(reading.speakers) : to;
+      const start = first[t.first];
+      const end = stop[t.first + t.count - 1];
+      if (start === undefined || end === undefined) return;
+      const op = speakerChange(editor.content, start, end, label);
+      if (op !== null) editor.applyEdit(op);
+    },
+    [editor],
+  );
+  const merge = useCallback((from: string, into: string) => mergeSpeakers(editor, from, into), [editor]);
+  // Stable between renames, so the memoised TranscriptView redraws only when a name or a choice changes.
   const nameplate = useCallback(
-    (_speaker: number, label: string, name: string) => <Nameplate label={label} name={name} onRename={rename} />,
-    [rename],
+    (_speaker: number, label: string, name: string, turn: number) => (
+      <span className="flex max-w-full items-center gap-0.5">
+        <Nameplate label={label} name={name} onRename={rename} />
+        <SpeakerMenu label={label} name={name} speakers={choices} onSay={(to) => say(turn, to)} onMerge={(into) => merge(label, into)} />
+      </span>
+    ),
+    [rename, choices, say, merge],
   );
   const controls = useRef<PlayerControls | null>(null);
   // The word whose edges are being dragged (#85), while the strip is open.
@@ -491,7 +524,7 @@ type PageProps = {
   controls?: RefObject<PlayerControls | null>;
   corrections?: readonly Correction[];
   names?: Names;
-  nameplate?: (speaker: number, label: string, name: string) => ReactNode;
+  nameplate?: (speaker: number, label: string, name: string, turn: number) => ReactNode;
   /** Review's marks for the margin (Task 13). */
   review?: ReviewMarks;
   selectOnTap?: boolean;

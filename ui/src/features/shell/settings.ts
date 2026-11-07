@@ -12,7 +12,7 @@ export type Settings = components["schemas"]["Settings"];
 export type SettingsUpdate = components["schemas"]["SettingsUpdate"];
 
 /** What a fresh install starts from, and what the page uses when the server cannot be asked. */
-export const DEFAULTS: Settings = { version: 1, transcribe_answer: "mixed", transcribe_diarize: true };
+export const DEFAULTS: Settings = { version: 1, transcribe_answer: "mixed", transcribe_diarize: true, export_formats: [], export_overwrite: false };
 
 /** The settings as the server keeps them; the defaults when it could not be asked. */
 export async function loadSettings(): Promise<Settings> {

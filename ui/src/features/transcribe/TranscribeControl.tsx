@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import type { RecordingRow } from "@/features/library/types";
 import { fromThrown, showError } from "@/features/errors/appError";
-import { hasFraction, phaseLabel, progressLine, stopCost } from "./describe";
+import { exportLine, hasFraction, phaseLabel, progressLine, stopCost } from "./describe";
 import { cancelJob, isFinished, type Job, useJobFor } from "./jobs";
 import { TranscribeDialog } from "./TranscribeDialog";
 
@@ -49,6 +49,12 @@ export function TranscribeControl({ recording, label = "Transcribe" }: { recordi
         job.notes.map((note) => (
           <p key={note} className="text-sm text-muted-foreground">
             {note}
+          </p>
+        ))}
+      {job?.state === "done" &&
+        job.exports.map((result) => (
+          <p key={result.path} className={`text-sm ${result.outcome === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+            {exportLine(result)}
           </p>
         ))}
       {open && <TranscribeDialog recording={recording} onClose={close} />}
