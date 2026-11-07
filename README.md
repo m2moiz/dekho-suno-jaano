@@ -600,6 +600,26 @@ imported token has a confidence. Speakers come back from VTT voice tags and,
 in SRT, from the `SPEAKER_01: ` prefix `likho` writes or a `Speaker 2: ` one;
 any other capitals and a colon (`NOTE: `) stay in the text as words.
 
+### Daalo and Nikalo: one file with the transcript inside
+
+To hand someone the recording with its transcript riding along, `daalo` (put in)
+writes a copy carrying a hidden subtitle track that holds the transcript JSON,
+gzip-compressed and base64-encoded, and `nikalo` (take out) reads it back:
+
+```bash
+dsj daalo talk.mov -t talk.json -o talk-with-transcript.mov
+dsj nikalo talk-with-transcript.mov -o talk.json
+```
+
+The source recording is never written. #117 measured six in-file routes and
+this `mov_text` track is the one that survives a QuickTime re-save
+(`avconvert --preset PresetPassthrough`, which `tests/test_embed.py` runs);
+a plain `ffmpeg -c copy` drops subtitle tracks from a `.mov` unless given
+`-map 0 -c:s copy`, and dsj's own bleep render does not carry it. The track
+is in no language (`und`) and named `dsj-transcript`; whether a player shows
+it as subtitles is the player's choice, since ffmpeg's `.mov` muxer marks the
+only subtitle track enabled whatever it is told.
+
 ### ui: the app
 
 `dsj ui` opens the app in your browser: a page served from this machine, on

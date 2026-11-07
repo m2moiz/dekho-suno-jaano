@@ -602,6 +602,49 @@ def likho(
     return 0
 
 
+@app.command("daalo")
+def daalo(
+    media: Annotated[Path, typer.Argument(help="the recording; it is read, never written")],
+    transcript: Annotated[
+        Path, typer.Option("--transcript", "-t", help="the transcript JSON to ride inside the copy")
+    ],
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="the copy to write, with the transcript inside")
+    ],
+) -> int:
+    """Put in: write a copy of a recording with its transcript riding inside, invisibly."""
+    from dsj.embed import embed_transcript
+
+    written = embed_transcript(media, transcript, out)
+    print(written)
+    return 0
+
+
+@app.command("nikalo")
+def nikalo(
+    media: Annotated[Path, typer.Argument(help="a recording daalo wrote")],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", "-o", help="where the transcript JSON goes; stdout if omitted"),
+    ] = None,
+) -> int:
+    """Take out: the transcript riding inside a recording, as the JSON it was."""
+    from dsj.atomic import atomic_write_text
+    from dsj.embed import NoTranscriptInside, extract_transcript
+
+    try:
+        found = extract_transcript(media)
+    except NoTranscriptInside as exc:
+        print(str(exc), file=sys.stderr)
+        raise typer.Exit(1) from None
+    text = json.dumps(found, ensure_ascii=False)
+    if out is None:
+        print(text)
+    else:
+        atomic_write_text(out, text)
+    return 0
+
+
 @app.command("parho")
 def parho(
     media: Annotated[Path, typer.Argument(help="the recording the transcript indexes")],
