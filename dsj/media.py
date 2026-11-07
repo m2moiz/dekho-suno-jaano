@@ -112,6 +112,11 @@ class AudioStream:
     container: str
 
 
+def tool(name: str) -> str:
+    """The path of ffmpeg or ffprobe, for a module that shells out as this one (dsj/embed.py)."""
+    return _tool(name)
+
+
 def _tool(name: str) -> str:
     path = shutil.which(name)
     if path is None:

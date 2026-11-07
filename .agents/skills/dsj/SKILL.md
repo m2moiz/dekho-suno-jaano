@@ -273,6 +273,40 @@ recording and back with 0 of 480 cues changed, where 22 moved before.
 Writes nothing to stdout. Transcripts from older builds, with no speakers, no token
 ends or sentences out of order, export too.
 
+### daalo
+
+Put in: write a copy of a recording with its transcript riding inside it, invisibly, so one
+file can be handed over (#122). The source recording is never written; the copy carries
+every stream it had plus one hidden `mov_text` track holding the transcript JSON, gzip
+and base64. It survives a copy and a QuickTime passthrough re-save, and nothing else:
+a plain `ffmpeg -c copy` drops it unless given `-map 0 -c:s copy`.
+
+```bash
+dsj daalo recording.mov -t transcript.json -o recording-with-transcript.mov
+```
+
+| Flag | |
+|---|---|
+| `-t, --transcript PATH` | **required.** The transcript JSON to carry |
+| `-o, --out PATH` | **required.** The copy to write; refused when it is the source |
+
+Prints the path written. Exit 1 with ffmpeg's words when the copy could not be written.
+
+### nikalo
+
+Take out: the transcript riding inside a recording `daalo` wrote, as the JSON it was.
+
+```bash
+dsj nikalo recording-with-transcript.mov -o transcript.json
+dsj nikalo recording-with-transcript.mov | jq '.sentences | length'
+```
+
+| Flag | |
+|---|---|
+| `-o, --out PATH` | where the JSON goes; stdout when omitted |
+
+Exit 1, with a sentence on stderr, when the recording carries no transcript of ours.
+
 ### parho
 
 Import a transcript instead of running ASR: a YouTube VTT, a subtitle track, a file
