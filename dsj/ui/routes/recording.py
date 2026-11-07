@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Response
 from dsj.ui import pick
 from dsj.ui import store as store_mod
 from dsj.ui.review import progress
-from dsj.ui.schemas import LanguageTag, Recording, TitleUpdate, Transcript
+from dsj.ui.schemas import LanguageTag, PlayheadUpdate, Recording, TitleUpdate, Transcript
 from dsj.ui.store import MIXED_SHARE, URDU_SHARE, Library
 
 router = APIRouter(prefix="/api")
@@ -75,6 +75,7 @@ def _row(library: Library, rec: store_mod.Recording) -> Recording:
         missing=rec.missing,
         unreadable=rec.unreadable,
         title=rec.title,
+        playhead_s=rec.playhead_s,
         transcripts=[_transcript_row(t) for t in library.transcripts(rec.id)],
     )
 
@@ -114,6 +115,17 @@ def retitle(recording_id: str, update: TitleUpdate) -> Recording:
         if library.recording(int(recording_id)) is None:
             raise HTTPException(404, f"There is no recording {recording_id} in the library.")
         return _row(library, library.set_title(int(recording_id), title))
+
+
+@router.put("/recordings/{recording_id}/playhead")
+def leave_playhead(recording_id: str, update: PlayheadUpdate) -> Recording:
+    """Keep where the recording was left playing, so reopening it picks up there (#69)."""
+    if not (recording_id.isascii() and recording_id.isdigit()):
+        raise HTTPException(404, f"There is no recording {recording_id!r} in the library.")
+    with Library.open() as library:
+        if library.recording(int(recording_id)) is None:
+            raise HTTPException(404, f"There is no recording {recording_id} in the library.")
+        return _row(library, library.set_playhead(int(recording_id), update.seconds))
 
 
 @router.post("/recordings/{recording_id}/relink")

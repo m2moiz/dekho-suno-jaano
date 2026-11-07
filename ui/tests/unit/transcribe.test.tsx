@@ -32,6 +32,7 @@ const RECORDING: RecordingRow = {
   audio_codec: "aac",
   missing: false,
   unreadable: null,
+  playhead_s: null,
   title: null,
   duration_s: 315,
   video_codec: null,
@@ -115,12 +116,19 @@ afterEach(() => {
 });
 
 describe("the Transcribe dialog", () => {
-  async function open(engines: Engine[] = ENGINES, memory: object[] = []): Promise<Request[]> {
+  const SETTINGS = { version: 1, transcribe_answer: "mixed", transcribe_diarize: true };
+
+  async function open(engines: Engine[] = ENGINES, memory: object[] = [], settings: object = SETTINGS, kept: Request[] = []): Promise<Request[]> {
     const posted: Request[] = [];
     serve({
       "GET /api/jobs": () => Response.json([]),
       "GET /api/engines": () => Response.json(engines),
       "GET /api/models/memory": () => Response.json(memory),
+      "GET /api/settings": () => Response.json(settings),
+      "PUT /api/settings": async (request) => {
+        kept.push(request.clone());
+        return Response.json({ ...settings, ...(await request.json()) });
+      },
       "POST /api/recordings/4/transcribe": (request) => {
         posted.push(request.clone());
         return Response.json(job({ engine: "whisper" }), { status: 202 });
@@ -131,6 +139,19 @@ describe("the Transcribe dialog", () => {
     await screen.findByRole("radiogroup", { name: "What's spoken?" });
     return posted;
   }
+
+  it("opens on the last answer and speaker choice, and keeps the ones it starts with (#69)", async () => {
+    const kept: Request[] = [];
+    const posted = await open(ENGINES, [], { version: 1, transcribe_answer: "urdu", transcribe_diarize: false }, kept);
+    const urdu = screen.getByRole("radio", { name: "Mostly Urdu" });
+    expect(urdu.getAttribute("aria-checked") ?? String((urdu as HTMLInputElement).checked)).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "English or European languages" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await vi.waitFor(() => expect(kept).toHaveLength(1));
+    expect(await kept[0]?.json()).toEqual({ transcribe_answer: "english", transcribe_diarize: false });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(((await posted[0]?.json()) as { diarize: boolean }).diarize).toBe(false);
+  });
 
   it("warns when the model it would load ran out of memory here before (#133)", async () => {
     await open(ENGINES, [

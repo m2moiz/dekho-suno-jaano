@@ -70,6 +70,26 @@ export interface paths {
         patch: operations["retitle_api_recordings__recording_id__patch"];
         trace?: never;
     };
+    "/api/recordings/{recording_id}/playhead": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Leave Playhead
+         * @description Keep where the recording was left playing, so reopening it picks up there (#69).
+         */
+        put: operations["leave_playhead_api_recordings__recording_id__playhead_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/recordings/{recording_id}/relink": {
         parameters: {
             query?: never;
@@ -521,6 +541,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Settings
+         * @description Every setting as it stands, the defaults for anything never changed.
+         */
+        get: operations["read_settings_api_settings_get"];
+        /**
+         * Change Settings
+         * @description Change the keys given, keep the rest, and answer with all of them.
+         */
+        put: operations["change_settings_api_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/heartbeat": {
         parameters: {
             query?: never;
@@ -833,6 +877,14 @@ export interface components {
             language: string | null;
         };
         /**
+         * PlayheadUpdate
+         * @description Where a recording was left playing, in seconds from its start (#69).
+         */
+        PlayheadUpdate: {
+            /** Seconds */
+            seconds: number;
+        };
+        /**
          * Readiness
          * @description Everything a first run needs, asked before it starts (#70).
          */
@@ -873,6 +925,8 @@ export interface components {
             unreadable: string | null;
             /** Title */
             title: string | null;
+            /** Playhead S */
+            playhead_s: number | null;
             /** Transcripts */
             transcripts: components["schemas"]["Transcript"][];
         };
@@ -1038,6 +1092,26 @@ export interface components {
         /** @enum {string} */
         SegmentState: "unchecked" | "checked";
         /**
+         * Settings
+         * @description The app's own settings, every key with its value, as dsj/ui/settings.py keeps them (#69).
+         */
+        Settings: {
+            /** Version */
+            version: number;
+            transcribe_answer: components["schemas"]["TranscribeAnswer"];
+            /** Transcribe Diarize */
+            transcribe_diarize: boolean;
+        };
+        /**
+         * SettingsUpdate
+         * @description The keys to change; a key left out keeps its value.
+         */
+        SettingsUpdate: {
+            transcribe_answer?: components["schemas"]["TranscribeAnswer"] | null;
+            /** Transcribe Diarize */
+            transcribe_diarize?: boolean | null;
+        };
+        /**
          * TitleUpdate
          * @description A recording's title; empty or None takes it away, so the page derives one again.
          */
@@ -1059,6 +1133,8 @@ export interface components {
             /** Reason */
             reason: string | null;
         };
+        /** @enum {string} */
+        TranscribeAnswer: "mixed" | "urdu" | "english" | "unsure";
         /**
          * TranscribeRequest
          * @description What the page sends to start a transcription: the flags of `dsj suno`, as values.
@@ -1214,6 +1290,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TitleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recording"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leave_playhead_api_recordings__recording_id__playhead_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlayheadUpdate"];
             };
         };
         responses: {
@@ -1942,6 +2053,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReferenceWritten"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_settings_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    change_settings_api_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
                 };
             };
             /** @description Validation Error */

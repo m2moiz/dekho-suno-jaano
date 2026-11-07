@@ -371,13 +371,14 @@ def test_a_version_1_library_gains_the_unreadable_column_and_keeps_its_rows(
         con.execute("ALTER TABLE transcripts DROP COLUMN last_edited_at")
         con.execute("ALTER TABLE recordings DROP COLUMN title")
         con.execute("ALTER TABLE transcripts DROP COLUMN urdu_share")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 1")
     with Library.open() as library:
         found = library.recording(rid)
     assert found is not None
     assert (found.path, found.unreadable) == (media.resolve(), None)
     with sqlite3.connect(db) as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == store_mod.SCHEMA_VERSION == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == store_mod.SCHEMA_VERSION == 7
 
 
 def test_a_reader_waiting_on_a_migration_finds_it_done(tmp_path: Path) -> None:
@@ -389,6 +390,7 @@ def test_a_reader_waiting_on_a_migration_finds_it_done(tmp_path: Path) -> None:
 
     with sqlite3.connect(db) as con:
         con.execute("ALTER TABLE recordings DROP COLUMN unreadable")
+        con.execute("ALTER TABLE recordings DROP COLUMN playhead_s")
         con.execute("PRAGMA user_version = 1")
     first = sqlite3.connect(db)
     second = sqlite3.connect(db)

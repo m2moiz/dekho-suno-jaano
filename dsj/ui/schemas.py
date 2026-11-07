@@ -125,6 +125,8 @@ class Recording(BaseModel):
     unreadable: str | None
     # A title a person gave it, else None: the page derives one from the file's name.
     title: str | None
+    # Where the app last left it playing, in seconds (#69), else None.
+    playhead_s: float | None
     transcripts: list[Transcript]
 
 
@@ -134,6 +136,30 @@ class TitleUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
+class PlayheadUpdate(BaseModel):
+    """Where a recording was left playing, in seconds from its start (#69)."""
+
+    seconds: float = Field(ge=0)
+
+
+type TranscribeAnswer = Literal["mixed", "urdu", "english", "unsure"]
+
+
+class Settings(BaseModel):
+    """The app's own settings, every key with its value, as dsj/ui/settings.py keeps them (#69)."""
+
+    version: int
+    # The Transcribe dialog's last answer to "What's spoken?", so it opens on it.
+    transcribe_answer: TranscribeAnswer
+    # Whether the last run labelled speakers.
+    transcribe_diarize: bool
+
+
+class SettingsUpdate(BaseModel):
+    """The keys to change; a key left out keeps its value."""
+
+    transcribe_answer: TranscribeAnswer | None = None
+    transcribe_diarize: bool | None = None
 class ToolCheck(BaseModel):
     """A command a run shells out to, as the machine has it now (#70)."""
 

@@ -14,6 +14,7 @@ import { FIELD_BUTTON } from "@/features/shell/field";
 import { type Reading, wordAtOffset } from "@/features/transcript/document";
 import { offsetAtPoint } from "@/lib/offsetAtPoint";
 import { PLAYER_HEIGHT, Playhead } from "./playhead";
+import { keepPlayhead, resumeAt } from "./resume";
 import { applySpeed, readSpeed, saveSpeed, type Speed } from "./speed";
 import { SpeedControl } from "./SpeedControl";
 import { readVideoShown, saveVideoShown } from "./video";
@@ -119,6 +120,8 @@ export function Player({ recording, reading, article, muteSpans = null, controls
   const [frames] = useState(() => new Set<(seconds: number) => void>());
   // Where an audition stops, in seconds, while one plays (#84).
   const stopAt = useRef<number | null>(null);
+  // Whether the recording has been opened where it was left (#69), once per mount.
+  const resumed = useRef(false);
 
   const changeSpeed = useCallback((next: Speed) => {
     setSpeedState(next);
@@ -244,7 +247,19 @@ export function Player({ recording, reading, article, muteSpans = null, controls
     // #59) plays its sound over a blank box and raises no error, so say so.
     const loaded = () => {
       if (element instanceof HTMLVideoElement) setNoPicture(element.videoWidth === 0);
+      // Open where it was left (#69), once per mount. A file the browser
+      // refuses fires no loadedmetadata, so the sound-only copy that follows
+      // it is the first to open, and opens there.
+      if (!resumed.current) {
+        resumed.current = true;
+        const at = resumeAt(recording.playhead_s, element.duration);
+        if (at !== null) {
+          element.currentTime = at;
+          head.paint();
+        }
+      }
     };
+    const forget = keepPlayhead(recording.id, element);
     const seeked = () => {
       mute.update(element.currentTime);
       if (element.paused) head.paint();
@@ -315,8 +330,9 @@ export function Player({ recording, reading, article, muteSpans = null, controls
       playhead.current = null;
       mute.dispose();
       gate.current = null;
+      forget();
     };
-  }, [reading, article, recording.id, frames, soundOnly, selectOnTap]);
+  }, [reading, article, recording.id, recording.playhead_s, frames, soundOnly, selectOnTap]);
 
   // The time, written by the playhead's own frame.
   useEffect(() => {
