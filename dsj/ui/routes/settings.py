@@ -22,6 +22,8 @@ def _wire(found: store.Settings) -> Settings:
         version=store.SETTINGS_VERSION,
         transcribe_answer=found.transcribe_answer,  # pyright: ignore[reportArgumentType]
         transcribe_diarize=found.transcribe_diarize,
+        export_formats=list(found.export_formats),  # pyright: ignore[reportArgumentType]
+        export_overwrite=found.export_overwrite,
     )
 
 

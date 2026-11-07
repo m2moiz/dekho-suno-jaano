@@ -143,6 +143,8 @@ class PlayheadUpdate(BaseModel):
 
 
 type TranscribeAnswer = Literal["mixed", "urdu", "english", "unsure"]
+# The formats dsj likho writes (dsj/likho.py EXPORTERS), as the auto-export keeps them (#132).
+type ExportFormat = Literal["srt", "vtt", "txt"]
 
 
 class Settings(BaseModel):
@@ -153,6 +155,10 @@ class Settings(BaseModel):
     transcribe_answer: TranscribeAnswer
     # Whether the last run labelled speakers.
     transcribe_diarize: bool
+    # What a finished transcription is also written as, beside its recording (#132).
+    export_formats: list[ExportFormat]
+    # Whether such an export writes over a file already there.
+    export_overwrite: bool
 
 
 class SettingsUpdate(BaseModel):
@@ -160,6 +166,17 @@ class SettingsUpdate(BaseModel):
 
     transcribe_answer: TranscribeAnswer | None = None
     transcribe_diarize: bool | None = None
+    export_formats: list[ExportFormat] | None = None
+    export_overwrite: bool | None = None
+
+
+class ExportResult(BaseModel):
+    """What became of one auto-export of a finished job (#132, dsj/ui/autoexport.py)."""
+
+    format: ExportFormat
+    path: str
+    outcome: Literal["exported", "skipped", "failed"]
+    reason: str | None
 class ToolCheck(BaseModel):
     """A command a run shells out to, as the machine has it now (#70)."""
 
@@ -252,6 +269,9 @@ class Job(BaseModel):
     transcript_id: int | None
     # Warnings the run logged: what it could not do, though it finished.
     notes: list[str]
+    # What became of each auto-export once the run was done (#132); empty
+    # until then, and when none is turned on.
+    exports: list[ExportResult]
 
 
 class ParagraphEntry(BaseModel):

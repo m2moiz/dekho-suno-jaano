@@ -61,6 +61,7 @@ from dsj.filetag import source_sidecar_for
 from dsj.parakeet import DEFAULT_MODEL as PARAKEET_MODEL
 from dsj.sherpa import DEFAULT_MODEL as SHERPA_MODEL
 from dsj.ui import edits
+from dsj.ui.autoexport import ExportResult, auto_export
 from dsj.ui.review import review_path
 from dsj.ui.schemas import TranscribeRequest
 from dsj.ui.store import URDU_SHARE, Library, NotATranscript, library_path, urdu_share_of
@@ -214,6 +215,8 @@ class Job:
     # The warnings the run logged: labelling that degraded, a checkpoint not
     # used. The run still finished; these say what it could not do.
     notes: list[str] = field(default_factory=list[str])
+    # What became of each auto-export once the run was done (#132).
+    exports: list[ExportResult] = field(default_factory=list[ExportResult])
 
     def view(self) -> dict[str, Any]:
         """This job as the page reads it: the run's own last frame, and the outcome.
@@ -251,6 +254,7 @@ class Job:
             "error": self.error or frame.get("error"),
             "transcript_id": self.transcript_id,
             "notes": list(self.notes),
+            "exports": [e.view() for e in self.exports],
         }
 
 
@@ -631,6 +635,9 @@ class Jobs:
                 suno.transcribe(**arguments)
                 with Library.open() as library:
                     row = library.record_run(job.out, engine=job.engine, language=job.language)
+                # Inside the hold: the copies are part of the run the person
+                # asked for. Never raises past the job (#132).
+                job.exports = auto_export(row.id, arguments["media"])
             transcript_id = row.id
         except Exception as exc:
             # The run has already written `failed` to its status file (#103);

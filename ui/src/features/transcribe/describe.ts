@@ -43,3 +43,11 @@ export function progressLine(job: Job): string {
   if (job.stalled_s !== null) parts.push(`not moved for ${Math.round(job.stalled_s)} s`);
   return parts.join(" · ");
 }
+
+/** One line for what became of an auto-export (#132), by the file's name. */
+export function exportLine(result: Job["exports"][number]): string {
+  const name = result.path.split("/").pop() ?? result.path;
+  if (result.outcome === "exported") return `Also written: ${name}`;
+  if (result.outcome === "skipped") return `Not written: ${name} (${result.reason ?? "skipped"})`;
+  return `Could not write ${name}: ${result.reason ?? "failed"}`;
+}

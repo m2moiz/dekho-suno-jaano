@@ -78,6 +78,7 @@ function job(overrides: Partial<Job>): Job {
     error: null,
     transcript_id: null,
     notes: [],
+    exports: [],
     ...overrides,
   };
 }
@@ -338,6 +339,28 @@ describe("a job on its recording's row", () => {
     render(<TranscribeControl recording={RECORDING} />);
     expect((await screen.findByRole("alert")).textContent).toContain("RuntimeError: model exploded");
     expect(screen.queryByRole("status", { name: "Transcription" })).toBeNull();
+  });
+
+  it("says what a finished job also wrote beside the recording, and what it could not (#132)", async () => {
+    serve({
+      "GET /api/jobs": () =>
+        Response.json([
+          job({
+            state: "done",
+            fraction: 1,
+            transcript_id: 9,
+            exports: [
+              { format: "srt", path: "/Users/me/Recordings/standup.srt", outcome: "exported", reason: null },
+              { format: "txt", path: "/Users/me/Recordings/standup.txt", outcome: "skipped", reason: "standup.txt is already there and overwriting is off in the settings" },
+              { format: "vtt", path: "/Users/me/Recordings/standup.vtt", outcome: "failed", reason: "PermissionError: read-only folder" },
+            ],
+          }),
+        ]),
+    });
+    render(<TranscribeControl recording={RECORDING} />);
+    expect(await screen.findByText("Also written: standup.srt")).toBeTruthy();
+    expect(screen.getByText("Not written: standup.txt (standup.txt is already there and overwriting is off in the settings)")).toBeTruthy();
+    expect(screen.getByText("Could not write standup.vtt: PermissionError: read-only folder").className).toContain("text-destructive");
   });
 
   it("polls while a job runs, and stops once it is done", async () => {
