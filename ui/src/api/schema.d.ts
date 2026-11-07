@@ -729,6 +729,24 @@ export interface components {
         };
         /** @enum {string} */
         EngineName: "parakeet" | "whisper" | "sherpa";
+        /** @enum {string} */
+        ExportFormat: "srt" | "vtt" | "txt";
+        /**
+         * ExportResult
+         * @description What became of one auto-export of a finished job (#132, dsj/ui/autoexport.py).
+         */
+        ExportResult: {
+            format: components["schemas"]["ExportFormat"];
+            /** Path */
+            path: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "exported" | "skipped" | "failed";
+            /** Reason */
+            reason: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -799,6 +817,8 @@ export interface components {
             transcript_id: number | null;
             /** Notes */
             notes: string[];
+            /** Exports */
+            exports: components["schemas"]["ExportResult"][];
             /** Resumable */
             resumable: boolean;
         };
@@ -1126,6 +1146,10 @@ export interface components {
             transcribe_answer: components["schemas"]["TranscribeAnswer"];
             /** Transcribe Diarize */
             transcribe_diarize: boolean;
+            /** Export Formats */
+            export_formats: components["schemas"]["ExportFormat"][];
+            /** Export Overwrite */
+            export_overwrite: boolean;
         };
         /**
          * SettingsUpdate
@@ -1135,6 +1159,10 @@ export interface components {
             transcribe_answer?: components["schemas"]["TranscribeAnswer"] | null;
             /** Transcribe Diarize */
             transcribe_diarize?: boolean | null;
+            /** Export Formats */
+            export_formats?: components["schemas"]["ExportFormat"][] | null;
+            /** Export Overwrite */
+            export_overwrite?: boolean | null;
         };
         /**
          * TitleUpdate

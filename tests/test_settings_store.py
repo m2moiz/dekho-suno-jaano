@@ -178,7 +178,10 @@ def test_the_route_reads_the_defaults_and_keeps_a_change_across_launches() -> No
     client = page()
     reply = client.get("/api/settings")
     assert reply.status_code == 200, reply.text
-    assert reply.json() == {"version": 1, "transcribe_answer": "mixed", "transcribe_diarize": True}
+    assert reply.json() == {
+        "version": 1, "transcribe_answer": "mixed", "transcribe_diarize": True,
+        "export_formats": [], "export_overwrite": False,
+    }
     reply = client.put("/api/settings", json={"transcribe_answer": "english"})
     assert reply.status_code == 200, reply.text
     assert reply.json()["transcribe_answer"] == "english"

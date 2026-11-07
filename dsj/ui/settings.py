@@ -47,6 +47,10 @@ SETTINGS_VERSION = 1
 # The Transcribe dialog's answers to "What's spoken?" (ui/src/features/transcribe/choices.ts).
 ANSWERS = ("mixed", "urdu", "english", "unsure")
 
+# What a finished transcription is also written as, beside its recording
+# (#132): the formats dsj likho writes (dsj/likho.py EXPORTERS).
+FORMATS = ("srt", "vtt", "txt")
+
 
 class SettingsError(RuntimeError):
     """The settings file cannot be used as it is. Nothing in it has changed."""
@@ -60,6 +64,11 @@ class Settings:
     transcribe_answer: str = "mixed"
     # Whether the last run labelled speakers.
     transcribe_diarize: bool = True
+    # The formats a finished transcription is also written as, beside its
+    # recording (#132); none until turned on.
+    export_formats: tuple[str, ...] = ()
+    # Whether such an export writes over a file already there, or leaves it.
+    export_overwrite: bool = False
 
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
@@ -112,9 +121,18 @@ def _typed(raw: dict[str, Any]) -> Settings:
     """The known keys, each its own type, the default standing in for anything else."""
     answer = raw.get("transcribe_answer")
     diarize = raw.get("transcribe_diarize")
+    formats: object = raw.get("export_formats")
+    overwrite = raw.get("export_overwrite")
+    listed: list[object] = list(formats) if isinstance(formats, list | tuple) else []  # pyright: ignore[reportUnknownArgumentType]
     return Settings(
         transcribe_answer=answer if isinstance(answer, str) and answer in ANSWERS else "mixed",
         transcribe_diarize=diarize if isinstance(diarize, bool) else True,
+        export_formats=(
+            tuple(f for f in listed if isinstance(f, str))
+            if all(isinstance(f, str) and f in FORMATS for f in listed)
+            else ()
+        ),
+        export_overwrite=overwrite if isinstance(overwrite, bool) else False,
     )
 
 
@@ -131,5 +149,6 @@ def write_settings(**changes: Any) -> Settings:
     path = settings_path()
     raw = _load(path)
     now = _typed(raw | changes)
-    _write(path, raw | asdict(now) | {"version": SETTINGS_VERSION})
+    kept = asdict(now) | {"export_formats": list(now.export_formats)}
+    _write(path, raw | kept | {"version": SETTINGS_VERSION})
     return now
