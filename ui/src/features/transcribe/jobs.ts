@@ -154,6 +154,11 @@ function subscribeAndLook(listener: () => void): () => void {
   return subscribe(listener);
 }
 
+/** Every job this launch has started, the first first (#90). */
+export function useJobs(): Job[] {
+  return useSyncExternalStore(subscribeAndLook, () => jobs);
+}
+
 /** The newest job for one recording, if it has one. */
 export function useJobFor(recordingId: number): Job | undefined {
   const all = useSyncExternalStore(subscribeAndLook, () => jobs);
