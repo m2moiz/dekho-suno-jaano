@@ -68,8 +68,8 @@ type Props = {
   /** Corrected stretches, shown struck through in the margin beside their turn. */
   corrections?: readonly Correction[];
   names?: Names;
-  /** Draws a speaker's nameplate; the reader passes a renamable one (Task 5). */
-  nameplate?: (speaker: number, label: string, name: string) => ReactNode;
+  /** Draws a speaker's nameplate for turn `turn`; the reader passes a renamable one (Task 5) with its menu (#71). */
+  nameplate?: (speaker: number, label: string, name: string, turn: number) => ReactNode;
   /** Review's marks, shown in the margin; none in the reader. */
   review?: ReviewMarks;
 };
@@ -123,7 +123,7 @@ export const TranscriptView = memo(function TranscriptView({
                 {name !== null &&
                   label !== undefined &&
                   turn.speaker !== null &&
-                  (nameplate ? nameplate(turn.speaker, label, name) : <span className="nameplate">{name}</span>)}
+                  (nameplate ? nameplate(turn.speaker, label, name, i) : <span className="nameplate">{name}</span>)}
                 <time dateTime={`PT${turn.start.toFixed(2)}S`}>{durationLabel(turn.start)}</time>
                 <span className="tick" aria-hidden />
                 {review !== undefined && <ReviewMark own={review.turns?.get(i)} sentences={marks} />}
