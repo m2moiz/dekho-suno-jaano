@@ -67,8 +67,10 @@ type EngineName = Literal["parakeet", "whisper", "sherpa"]
 # What a run's status file says (dsj/suno.py, `report(` and the two documents
 # transcribe() ends on), plus the page's own `starting` and `saving`
 # (dsj/ui/jobs.py, Job.view).
+# `stopping` is a stop asked for and not yet landed; `cancelled` one that has (#72).
 type JobState = Literal[
-    "starting", "extracting", "running", "retrying", "diarizing", "saving", "done", "failed"
+    "starting", "extracting", "running", "retrying", "diarizing", "saving", "stopping",
+    "done", "failed", "cancelled",
 ]
 
 # A render from the page (#215, dsj/ui/jobs.py Render.view): queued, writing, over.
@@ -197,6 +199,9 @@ class Job(BaseModel):
     transcript_id: int | None
     # Warnings the run logged: what it could not do, though it finished.
     notes: list[str]
+    # Whether a stop costs at most one chunk (the chunk engines bank one after
+    # each) or the whole decode (whisper banks nothing until it is over) (#72).
+    resumable: bool
 
 
 class ParagraphEntry(BaseModel):

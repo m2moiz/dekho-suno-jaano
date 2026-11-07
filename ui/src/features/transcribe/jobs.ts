@@ -26,7 +26,7 @@ const ENGINES = "/api/engines";
 export const POLL_MS = 1000;
 
 export function isFinished(job: Job): boolean {
-  return job.state === "done" || job.state === "failed";
+  return job.state === "done" || job.state === "failed" || job.state === "cancelled";
 }
 
 let jobs: Job[] = [];
@@ -54,8 +54,10 @@ function take(next: Job[]) {
   });
   jobs = next;
   if (ended.length > 0) finishedCount += 1;
-  // Told once per job, here, where every poll lands (#130).
+  // Told once per job, here, where every poll lands (#130). Not a stop the
+  // person asked for themselves (#72).
   for (const job of ended) {
+    if (job.state === "cancelled") continue;
     notifyFinished({ kind: "transcription", name: describeJob(job), outcome: job.state === "done" ? "done" : "failed" });
   }
   emit();
@@ -96,6 +98,19 @@ export async function startJob(recordingId: number, request: TranscribeRequest):
     throw new ApiError(fromBody(error, response, `/api/recordings/${recordingId}/transcribe`));
   }
   take([...jobs.filter((j) => j.id !== data.id), data]);
+  return data;
+}
+
+/**
+ * Ask a running job to stop (#72). The server answers once the stop is asked;
+ * the run stops at its next report, which the polls then show. Throws
+ * ApiError with the server's own words when refused (the job is over already).
+ */
+export async function cancelJob(jobId: number): Promise<Job> {
+  const path = "/api/jobs/{job_id}/cancel";
+  const { data, error, response } = await api.POST(path, { params: { path: { job_id: String(jobId) } } });
+  if (data === undefined) throw new ApiError(fromBody(error, response, `/api/jobs/${jobId}/cancel`));
+  take(jobs.map((j) => (j.id === data.id ? data : j)));
   return data;
 }
 

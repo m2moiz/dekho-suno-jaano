@@ -248,6 +248,8 @@ whitelist.unchecked  # dsj/ui/schemas.py
 whitelist.kept  # dsj/ui/schemas.py
 # A route handler, reached by FastAPI through its decorator.
 whitelist.models_memory  # dsj/ui/routes/jobs.py
+whitelist.cancel_job  # dsj/ui/routes/jobs.py, a FastAPI route (#72)
+whitelist.resumable  # dsj/ui/schemas.py Job, a pydantic field (#72)
 whitelist.mark_edited  # dsj/ui/store.py, called from the marks route
 # Jobs.all is called from dsj/ui/routes/jobs.py; the per-branch gate sees only
 # jobs.py when a change touches it.
