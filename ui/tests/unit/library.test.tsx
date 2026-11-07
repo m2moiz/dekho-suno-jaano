@@ -76,14 +76,19 @@ const ROWS: RecordingRow[] = [
   },
 ];
 
-function serve(rows: unknown, status = 200) {
+// A machine with everything a run needs (#70); a test hands in its shortfalls.
+const READY = { tools: [], engines: [], models: [], ready: true };
+
+function serve(rows: unknown, status = 200, readiness: unknown = READY) {
   fetchMock.mockReset();
-  // Each row asks once for the jobs already running (#113); none are.
-  fetchMock.mockImplementation(async (request: Request) =>
-    new URL(request.url).pathname === "/api/jobs"
-      ? Response.json([])
-      : Response.json(rows, { status }),
-  );
+  // Each row asks once for the jobs already running (#113); none are. The
+  // page asks once whether the machine is ready for a first run (#70).
+  fetchMock.mockImplementation(async (request: Request) => {
+    const path = new URL(request.url).pathname;
+    if (path === "/api/jobs") return Response.json([]);
+    if (path === "/api/readiness") return Response.json(readiness);
+    return Response.json(rows, { status });
+  });
   return fetchMock;
 }
 
@@ -104,7 +109,8 @@ describe("the library page", () => {
     render(<LibraryPage />);
     const items = await screen.findAllByRole("listitem", { name: /^(review|standup)$/ });
     expect(items.map((li) => li.getAttribute("aria-label"))).toEqual(["review", "standup"]);
-    const request = seen.mock.calls[0]?.[0];
+    // By path, not by order: the first-run check (#70) asks its own question first.
+    const request = seen.mock.calls.map((c) => c[0]).find((r) => new URL(r.url).pathname === "/api/recordings");
     expect(new URL(request?.url ?? "").pathname).toBe("/api/recordings");
     expect(request?.headers.get("Authorization")).toBe("Bearer a-token");
   });
@@ -360,6 +366,7 @@ describe("bringing a recording in (#110)", () => {
     fetchMock.mockImplementation(async (request: Request) => {
       const path = new URL(request.url).pathname;
       if (path === "/api/jobs") return Response.json([]);
+      if (path === "/api/readiness") return Response.json(READY);
       if (path === "/api/recordings") return Response.json(rows);
       return picked(path);
     });
@@ -498,5 +505,32 @@ describe("the words for each value", () => {
     expect(durationLabel(249)).toBe("4:09");
     expect(durationLabel(3725)).toBe("1:02:05");
     expect(durationLabel(null)).toBeNull();
+  });
+});
+
+
+describe("the first-run screen (#70)", () => {
+  it("says what the machine still needs, with the fix, and nothing once it is ready", async () => {
+    serve(ROWS, 200, {
+      tools: [
+        { name: "ffmpeg", ok: false, path: null, reason: "ffmpeg is not on PATH. dsj reads video through ffmpeg; install it with `brew install ffmpeg`." },
+        { name: "ffprobe", ok: true, path: "/opt/homebrew/bin/ffprobe", reason: null },
+      ],
+      engines: [{ name: "parakeet", reason: null, default_model: "mlx-community/parakeet-tdt-0.6b-v3", cloud: false, usd_per_hour: null }],
+      models: [{ engine: "parakeet", model: "mlx-community/parakeet-tdt-0.6b-v3", state: "partial", reason: "a download of mlx-community/parakeet-tdt-0.6b-v3 did not finish; the next run resumes it before transcribing" }],
+      ready: false,
+    });
+    render(<LibraryPage />);
+    const notice = await screen.findByRole("status", { name: "Before the first run" });
+    const said = within(notice).getAllByRole("listitem").map((li) => li.textContent);
+    expect(said).toEqual([
+      "ffmpeg is not on PATH. dsj reads video through ffmpeg; install it with `brew install ffmpeg`.",
+      "a download of mlx-community/parakeet-tdt-0.6b-v3 did not finish; the next run resumes it before transcribing",
+    ]);
+    cleanup();
+    serve(ROWS);
+    render(<LibraryPage />);
+    await screen.findByRole("list", { name: "Recordings" });
+    expect(screen.queryByRole("status", { name: "Before the first run" })).toBeNull();
   });
 });
